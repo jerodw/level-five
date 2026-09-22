@@ -1,0 +1,152 @@
+story:
+  id: story-199
+  title: The suite-turn key's description says what the bound now measures, the changed-hands question is asked in one place, and an undecodable stamp takes the could-not-open path
+  description: |
+    When two runs of this repository want to run the whole test suite at the
+    same time, they queue: one holds a turn and the other waits, up to a
+    configured bound, and if the holder is still there when that bound runs
+    out the waiter takes the turn away from it. Earlier work changed what
+    that bound is measured against — it is now how long the *current holder*
+    has held the turn, restarted whenever the turn moves to someone new,
+    rather than how long this run has been in the queue. The document a
+    person reads when configuring that number was left saying the old thing,
+    so someone setting it today is told it limits how long they will queue,
+    which it does not: behind a queue of healthy runs a waiter can wait as
+    long as the queue takes.
+
+    This story repairs that description, and fixes two other things found in
+    the same code and never landed. The question "has the turn changed
+    hands?" is currently written out twice, in two places that must always
+    agree; it becomes one small function both places call, with a test
+    covering the half of it that nothing tests today. And reading the lock
+    file assumes its contents are text: a file left holding bytes that are
+    not valid text makes the read fail in a way the surrounding code does not
+    expect, so the error escapes and stops the run, when everything else
+    about this code is built so that anything it cannot work out about the
+    lock leaves the suite running without a turn instead of stopping
+    anything. Nothing the harness itself writes can reach that state; another
+    process or a filesystem can.
+
+    It deliberately leaves alone how the bound is derived and what the stamp
+    on the lock file looks like — both settled by story-196 and unchanged
+    here — and the takeover itself, including its second lock.
+
+    Planned from brief 317, which carries three findings the inspection of
+    story-196's first attempt made and which were lost when that run
+    escalated and the inspection after the resume could not reach the
+    tracker.
+
+    Concretely: schemas/harness-config.schema.json's description of
+    suite_turn_wait_suite_runs ends "This bounds the queueing", which
+    story-196 made false; it is reworded to say the bound is measured against
+    the current holder's tenure, restarting whenever the turn changes hands,
+    and that a run behind a queue of healthy holders therefore waits as long
+    as the queue takes — in the wording .harness/docs/ARCHITECTURE.md:1874
+    settled on. In orchestration/story_coordinator.py the pair
+    `_inode_at(lock_path) != waited_on or _stamp_at(lock_path) != last_stamp`
+    is spelled at the poll site (:4447-4448) and again after a takeover
+    attempt that did not win (:4495-4496); both call one private predicate
+    instead. `_stamp_at` (:4223-4233) reads with
+    `read_text(encoding="utf-8")` and its docstring says a read that fails is
+    an OSError the caller treats as the could-not-open path; a
+    UnicodeDecodeError is not an OSError, so `suite_turn`'s
+    `except OSError as error:` does not catch it. The fix follows the
+    precedent at :2860, where the module already catches
+    `(json.JSONDecodeError, UnicodeDecodeError, OSError)` together: the wait's
+    except clause catches UnicodeDecodeError beside OSError, and `_stamp_at`'s
+    docstring names both.
+
+    Consolidating the predicate moves the `_stamp_at` call out of
+    `suite_turn`'s body, which the source scan in
+    tests/test_suite_turns.py::test_the_stamp_is_never_read_for_anything_but_equality
+    asserts is there. That scan is adapted in the same change, by the stage
+    that makes it necessary, because reverting the adaptation while keeping
+    the consolidation leaves the suite red.
+  workflow: story-workflow
+
+tasks:
+  - Reword the suite_turn_wait_suite_runs description in schemas/harness-config.schema.json so it says the bound is measured against the current holder's tenure and what a deep queue of healthy holders means for a waiter, and no longer claims to bound the queueing.
+  - Add one private predicate in orchestration/story_coordinator.py answering whether the turn at the lock path has changed hands, and call it from both the poll site and the site after a takeover attempt that did not win.
+  - Adapt the source scan in tests/test_suite_turns.py that asserts where the stamp reader is called, so it follows the reader into the new predicate and still holds that the takeover does not call it.
+  - Catch UnicodeDecodeError beside OSError where suite_turn handles a lock it cannot work with, and reword `_stamp_at`'s docstring so it names what actually reaches the caller.
+  - Write the assertions: the shipped schema's wording, the after-takeover site's stamp half, and a lock file of non-UTF-8 bytes.
+  - Record the consolidation and the undecodable read in the suite-turn section of .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - The description of suite_turn_wait_suite_runs in schemas/harness-config.schema.json no longer contains the sentence "This bounds the queueing", and says instead that the bound is measured against the current holder's tenure and restarts whenever the turn changes hands, so a run behind a queue of healthy holders waits as long as that queue takes.
+  - A test asserts that property against the shipped schema file rather than a fixture copy of it.
+  - orchestration/story_coordinator.py contains exactly one expression comparing the inode at the lock path and the stamp at the lock path against the values a waiter is waiting on, in a private predicate, and both the poll site and the site reached after a losing takeover attempt call it.
+  - A test drives a waiter whose takeover attempt does not win and which then sees a new stamp on the same inode, and asserts the waiter restarts its wait — announcing the change of hands and measuring the bound from that moment — rather than continuing on the old one.
+  - A lock file whose bytes are not valid UTF-8 leaves the run taking the could-not-open path: suite_turn runs its body, writes the event saying no turn was taken and why, and raises nothing out of the wait.
+  - A test beside test_a_stamp_that_is_no_pid_and_no_time_is_waited_behind_like_any_other demonstrates that, by planting non-UTF-8 bytes in the lock file.
+  - `_stamp_at`'s docstring describes what a failing or undecodable read does in terms that match what suite_turn actually catches.
+  - The suite-turn section of .harness/docs/ARCHITECTURE.md says the changed-hands question is asked in one predicate both sites call, and that a lock file the coordinator cannot decode takes the same path as one it cannot open.
+
+technical_plan:
+  implementation_steps:
+    - Rewrite the "This bounds the queueing" sentence in the suite_turn_wait_suite_runs entry of schemas/harness-config.schema.json, keeping the rest of the entry as it stands.
+    - Add a private predicate beside `_stamp_at` in orchestration/story_coordinator.py taking the lock path and the inode and stamp being waited on, returning whether either differs, with a docstring saying it is the one spelling of that question.
+    - Replace both spellings in `suite_turn` with calls to it.
+    - Widen `suite_turn`'s `except OSError as error:` to catch UnicodeDecodeError beside OSError, following the precedent at orchestration/story_coordinator.py:2860, and reword `_stamp_at`'s closing docstring sentence to name both.
+    - Adapt test_the_stamp_is_never_read_for_anything_but_equality in tests/test_suite_turns.py so its assertion about where the stamp reader is called names the new predicate, keeping the assertion that the takeover does not call it and keeping the AST scan for reads beyond equality unchanged.
+    - Add the three new tests to tests/test_suite_turns.py, using the module's existing fixtures for a held lock, a stepping waiter and a takeover.
+    - Extend the suite-turn section of .harness/docs/ARCHITECTURE.md with the predicate and the undecodable read.
+  likely_file_changes:
+    - file: schemas/harness-config.schema.json
+      stage: implementer
+      reason: The key's description is the one text still describing the pre-story-196 behaviour.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The two spellings of the changed-hands question, the except clause that misses UnicodeDecodeError, and `_stamp_at`'s docstring all live here.
+    - file: tests/test_suite_turns.py
+      stage: implementer
+      reason: test_the_stamp_is_never_read_for_anything_but_equality asserts `_stamp_at(` appears in `suite_turn`'s body; consolidating the read into a private predicate moves it out, so that one assertion has to follow the reader into the predicate.
+      reverting_breaks_the_suite: Reverting this adaptation while keeping the consolidation leaves the scan asserting the stamp reader is called in a function that no longer calls it, so the suite goes red. The adaptation is forced by the consolidation and is confined to the assertion naming where the reader is called; the scan for reads beyond equality is untouched.
+    - file: tests/test_suite_turns.py
+      stage: tester
+      reason: The three new assertions — the shipped schema's wording, the after-takeover site's stamp half, and a lock file of non-UTF-8 bytes — belong beside the module that already drives every other suite-turn case.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: Only if reading schemas/harness-config.schema.json live counts as a new live resolution for test_suite_turns.py, its existing justification paragraph names the shipped files that module resolves and would gain the schema.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The suite-turn section describes the changed-hands comparison and the lock the coordinator cannot use; both statements change.
+
+scope:
+  modify:
+    - schemas/harness-config.schema.json
+    - orchestration/story_coordinator.py
+    - tests/test_suite_turns.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The derivation of the bound in orchestration/story_coordinator.py — suite_turn_wait_seconds, suite_turn_wait_cost, suite_turn_wait_problems and the constants they read (story-196 settled how the bound is computed and announced; this story changes only what the configuration document says the bound measures)
+    - _take_over_suite_turn, _confirm_suite_turn, _takeover_lock_path and the takeover lock beside the suite lock in orchestration/story_coordinator.py (story-190's takeover is unchanged here; the story touches only the question a waiter asks around it)
+    - _stamp_suite_turn and the shape of the stamp it writes in orchestration/story_coordinator.py (story-196 settled the stamp as identity compared for equality and nothing else; changing its shape would change what every waiter compares)
+    - .harness/config.yaml (its comment on suite_turn_wait_suite_runs already says the number bounds how long a hung run elsewhere can delay this one, which is what the bound now does, so there is nothing to repair)
+    - templates/config.yaml (the same comment, already correct for the same reason; and changing what l5-init installs is a separate decision)
+    - tests/test_config_keys_are_obeyed.py (its coverage of this key proves the configured value is obeyed, which this story does not change)
+
+verification_requirements:
+  - Confirm the shipped schemas/harness-config.schema.json no longer claims the bound limits queueing and states what it now measures, and that a test holds that against the shipped file.
+  - Confirm the changed-hands comparison is written once in orchestration/story_coordinator.py and that both former sites call it.
+  - Confirm a test covers the stamp half of the site reached after a losing takeover attempt, which had none before.
+  - Confirm a lock file of non-UTF-8 bytes leaves the run running without a turn and with the could-not-open event, raising nothing, and that a test demonstrates it.
+  - Confirm the adaptation to test_the_stamp_is_never_read_for_anything_but_equality removes no assertion: the scan for reads beyond equality, the absence of signals and parsing, and the assertion that the takeover does not read the stamp all still hold.
+  - Confirm the whole suite passes.
+
+constraints:
+  - The stamp is compared for equality and read for nothing else; no code added here parses a stamp, reads its time against a clock, or signals its pid.
+  - A waiter's bound continues to measure the current holder's tenure and to restart whenever the turn changes hands; the new predicate answers the same question the two spellings answered, with no change in behaviour at either site.
+  - Nothing in the turn refuses or stops a run: every failure it cannot work out still runs the body and says why.
+  - New tests use the module's existing stepping harness and fake clock and take no real suite turn; none of them bounds how slow the machine is allowed to be.
+  - Python 3.10+, standard library only.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-22 08:32:53
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 317
