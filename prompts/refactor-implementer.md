@@ -141,9 +141,10 @@ the suite must pass unchanged. No retry was spent and the verdict still stands:
 {{correction_pass_result}}
 
 Repair pass — present only when you are running because a passing
-verification, on a tree whose suite also passed where the code ships, recorded
-findings it judges correct, too small to fail the run, and fixable by one stage
-in the file each names. The coordinator wrote it, not an agent. Each finding
+verification recorded findings it judges correct, too small to fail the run,
+and fixable by one stage in the file each names. The coordinator wrote it, not
+an agent; its statement says whether the suite was also run in a fresh clone
+on that verdict, and says it passed there only where it was run. Each finding
 names the stage its category resolved to; make the correction each of your
 findings names, in the file it names, and nothing else — those files are yours
 to change for this pass, and an edit to any other governed file is undone

@@ -13,13 +13,19 @@ again. It has the correction pass's cost and the retry routing's reach: no
 `retry_count`, no `attempts/attempt-N/` archive, no `retry-history.json` entry,
 and the passing verdict that routed it still stands. Each stage entered is
 granted the paths of the findings whose category resolved to it, for that
-attempt alone.
+pass alone: the record carries both pass counts at the moment it was written,
+and the grant ends when a retry moves the attempt or a pass of the other kind
+routes, which `tests/test_pass_grants_expire_with_the_pass.py` drives.
 
 Because a repair may change behaviour, it is built on a verified tree: it
-routes only after the clean-clone check on the routing verdict has passed, and
-the verification it returns to runs the check again. That is the opposite
-ordering from the correction pass, which routes before the check, and both
-orderings are driven here as runs rather than argued from source.
+routes only after the clean-clone check on the routing verdict has passed
+where the workflow declares one, and the verification it returns to runs the
+check again. That is the opposite ordering from the correction pass, which
+routes before the check, and both orderings are driven here as runs rather
+than argued from source. A malformed verdict — a category the table does not
+define, a path ending in a slash — is refused above both, before the check
+spends a suite run; the record says whether a check ran, and the statement
+the entered stage reads says the check passed only where it did.
 
 Every claim below is read off what a real run wrote: the stages the fake
 runner was invoked for, the event stream, `state.json`, the run directory and
@@ -52,6 +58,8 @@ Every absence asserted here carries a demonstration that it can fail:
   * "an undeclared category escalates" sits beside a declared one that routes;
   * "the clean-clone check ran before the pass" sits beside a run whose check
     fails, which takes the retry route and writes no pass record;
+  * "no clean-clone event precedes the escalation" sits beside the routed run
+    above, whose check ran and passed before the pass;
   * "a granted edit is neither reverted nor an ownership violation" sits beside
     the same edit with nothing granted, which is reverted or escalates, and
     beside the same stage re-entered on a later attempt, which inherits nothing;
@@ -660,7 +668,10 @@ def test_the_run_records_the_pass_in_its_own_event_stream(repaired_run):
 
 def test_the_record_the_coordinator_wrote_is_in_the_run_directory(repaired_run):
     """The numbered record: the pass, the attempt, the entry stage, each
-    finding with the stage its category resolved to, and the statement."""
+    finding with the stage its category resolved to, both pass counts at the
+    moment it was written, whether a clean-clone check ran on the routing
+    verdict — it did, under this fixture — and the statement that flag
+    selects."""
     _, _, run_dir = repaired_run
     record = record_of(run_dir)
 
@@ -669,8 +680,11 @@ def test_the_record_the_coordinator_wrote_is_in_the_run_directory(repaired_run):
     assert record["stage"] == destination_of(BEHAVIOUR_CATEGORY)
     assert record["findings"] == [
         {**BEHAVIOUR_FINDING, "stage": destination_of(BEHAVIOUR_CATEGORY)}]
+    assert record["correction_pass_count"] == 0
+    assert record["repair_pass_count"] == 1
+    assert record[story_coordinator.CLEAN_CLONE_CHECKED] is True
     assert record["statement"] == story_coordinator.repair_pass_statement(
-        record["stage"])
+        record["stage"], clean_clone_checked=True)
 
 
 def test_the_finding_reaches_the_entered_stage_in_its_rendered_prompt(
@@ -706,15 +720,26 @@ def test_every_stage_the_pass_runs_forward_through_is_told_of_it(repaired_run):
 def test_the_statement_says_what_the_pass_is_and_is_not():
     """What a stage most needs to know, read off the coordinator's own
     statement: that no retry was spent, that only the named files are its to
-    change, that it is not a licence to revisit the work, and that the
-    clean-clone check runs again."""
-    statement = story_coordinator.repair_pass_statement(WRITING)
-    assert WRITING in statement
-    assert "not a retry" in statement
-    assert "no retry budget was spent" in statement
-    assert "not a licence to revisit the work" in statement
-    assert "clean-clone check" in statement
-    assert "nothing else" in statement
+    change, that it is not a licence to revisit the work, and — where a
+    clean-clone check ran on the routing verdict, which the flag says — that
+    it passed and runs again. Since story-193 the opening is conditional on
+    that flag, so the statement for a workflow declaring no check names no
+    check as passed; what the two openings share is asserted of both."""
+    checked = story_coordinator.repair_pass_statement(
+        WRITING, clean_clone_checked=True)
+    unchecked = story_coordinator.repair_pass_statement(
+        WRITING, clean_clone_checked=False)
+    for statement in (checked, unchecked):
+        assert WRITING in statement
+        assert "not a retry" in statement
+        assert "no retry budget was spent" in statement
+        assert "not a licence to revisit the work" in statement
+        assert "nothing else" in statement
+    assert "clean-clone check on that verdict passed" in checked
+    assert "runs the clean-clone check again" in checked
+    assert "clean-clone check on that verdict passed" not in unchecked
+    assert "runs the clean-clone check again" not in unchecked
+    assert "No clean-clone check ran" in unchecked
 
 
 # --------------------------------------------------------------------------
@@ -985,7 +1010,12 @@ def test_a_correction_pass_and_a_repair_pass_spend_their_own_budgets(
 ):
     """One run that takes both: a correction pass on the first verdict, a
     repair pass on the verification it returned to. Each count is one, the
-    retry count is zero, and both records are in the run directory."""
+    retry count is zero, and both records are in the run directory. And the
+    grants are each pass's own: the correction pass's grant to its entry
+    stage is applied at that stage's run inside the correction pass and not
+    at its run inside the repair pass that followed — the record's counts no
+    longer match the state's by then — while the repair pass's grant is
+    applied at the stage it entered."""
     code, runner, run_dir = drive(
         target_root, harness_root,
         [correcting(CORRECTABLE_FINDING), repairing(BEHAVIOUR_FINDING), PASS])
@@ -1000,22 +1030,76 @@ def test_a_correction_pass_and_a_repair_pass_spend_their_own_budgets(
     assert record_path(run_dir).is_file()
     events = events_of(run_dir)
     assert events.index(CORRECTION_ROUTED) < events.index(ROUTED)
+    repaired = destination_of(BEHAVIOUR_CATEGORY)
     assert runner.calls == [*STAGE_NAMES,
                             *STAGE_NAMES[STAGE_NAMES.index(CORRECTION_ENTRY):],
-                            *STAGE_NAMES[STAGE_NAMES.index(
-                                destination_of(BEHAVIOUR_CATEGORY)):]]
+                            *STAGE_NAMES[STAGE_NAMES.index(repaired):]]
+    assert STAGE_NAMES.index(repaired) < STAGE_NAMES.index(CORRECTION_ENTRY), \
+        "the premise: the repair pass runs forward through the correction entry"
+
+    # Which paths were exempt at each run of the correction entry stage,
+    # read off the grant events grouped by that stage's invocations: none
+    # at its first run, the correctable finding's path at its run inside
+    # the correction pass, and none again at its run inside the repair pass.
+    correction_grants = grants_per_invocation(
+        run_dir, CORRECTION_ENTRY, CORRECTION_GRANT_EVENT)
+    assert correction_grants == [[], [CORRECTABLE_FINDING["path"]], []]
+    assert grants_per_invocation(run_dir, CORRECTION_ENTRY, GRANT_EVENT) \
+        == [[], [], []]
+    assert grants_per_invocation(run_dir, repaired, GRANT_EVENT) \
+        == [[], [BEHAVIOUR_FINDING["path"]]]
+    # The same answer from the reader the checks call, for the state the
+    # correction entry's third run ran under, and — the control — for the
+    # state its second run ran under.
+    stages = WORKFLOW["stages"]
+    assert story_coordinator.correction_pass_grants(
+        run_dir, stages, story_coordinator.load_state(run_dir),
+        CORRECTION_ENTRY, 1) == []
+    within_the_pass = story_coordinator.load_state(run_dir)
+    within_the_pass.repair_pass_count = 0
+    assert story_coordinator.correction_pass_grants(
+        run_dir, stages, within_the_pass, CORRECTION_ENTRY, 1) \
+        == [CORRECTABLE_FINDING["path"]]
+
+
+#: The event the correction pass's grant appends, as the execution-history
+#: schema enumerates it, beside the repair pass's own above.
+CORRECTION_GRANT_EVENT = "correction-pass-grant-applied"
+
+
+def grants_per_invocation(run_dir: Path, stage: str, kind: str) -> list[list[str]]:
+    """The path each `kind` grant event names at `stage`, grouped by the
+    invocation of that stage it was appended in — split at the stage's own
+    started events — so an assertion can say what was exempt at the stage's
+    second run as distinct from its first. The path is read off the wording
+    the coordinator writes: `<stage> may change <path>`."""
+    grouped: list[list[str]] = []
+    for entry in history_of(run_dir):
+        if entry.get("stage") != stage:
+            continue
+        if entry["event"] == "stage-started":
+            grouped.append([])
+        elif entry["event"] == kind and grouped:
+            grouped[-1].append(entry["message"].split(" may change ", 1)[1])
+    return grouped
 
 
 def test_the_correction_pass_is_still_bounded_to_the_words_and_its_own_stage():
     """The correction pass's statement and declaration are as they were: it
     still says never behaviour, still names the clean-clone check as running
     after it, and its declaration still carries its own stage. The repair
-    statement says the opposite about ordering, which is the difference."""
+    statement says the opposite about ordering where a check ran, which is
+    the difference; where none ran it says so rather than claiming a check."""
     correction = story_coordinator.correction_pass_statement(CORRECTION_ENTRY)
-    repair = story_coordinator.repair_pass_statement(WRITING)
+    repair = story_coordinator.repair_pass_statement(
+        WRITING, clean_clone_checked=True)
+    unchecked = story_coordinator.repair_pass_statement(
+        WRITING, clean_clone_checked=False)
     assert "never behaviour" in correction
     assert "never behaviour" not in repair
+    assert "never behaviour" not in unchecked
     assert "clean-clone check on that verdict passed" in repair
+    assert "clean-clone check on that verdict passed" not in unchecked
     assert CORRECTION["stage"] == CORRECTION_ENTRY
 
 
@@ -1194,16 +1278,16 @@ def test_that_escalation_spends_no_retry_budget_and_archives_nothing(
     assert not record_path(run_dir).exists()
 
 
-def test_the_escalation_comes_after_the_clean_clone_check_passed(
+def test_the_escalation_comes_before_any_clean_clone_check(
     unknown_category_run,
 ):
-    """The block sits below the check, so even the refusal is made on a
-    verified tree: the check ran and passed before the category was looked
-    up."""
+    """The category is validated above the clean-clone check since story-193,
+    so a malformed verdict stops before the expensive part: no clean-clone
+    event of any kind precedes the escalation, and the check never ran."""
     _, _, run_dir = unknown_category_run
     events = events_of(run_dir)
-    assert clean_clone_events(run_dir) == [CLEAN_CLONE_PASSED]
-    assert events.index(CLEAN_CLONE_PASSED) < events.index("escalated")
+    assert clean_clone_events(run_dir) == []
+    assert "escalated" in events
 
 
 def test_a_finding_naming_a_declared_category_routes_instead(repaired_run):
@@ -1324,6 +1408,9 @@ def test_each_entered_stage_is_granted_only_its_own_findings_paths(tmp_path):
     write_json(record_path(run_dir), {
         "pass": 1, "attempt": 1, "stage": routing.stage,
         "findings": routing.resolved,
+        # The counts a record carries since story-193, which the grant reader
+        # compares against the state to decide whether the record is live.
+        "correction_pass_count": 0, "repair_pass_count": 1,
         "statement": story_coordinator.repair_pass_statement(routing.stage),
     })
     state = story_coordinator.RunState(story_id="story-001",

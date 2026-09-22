@@ -2556,6 +2556,21 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "queue under tmp_path, a fake transport and a fake runner, because "
         "what the outbox does with a transport's answer is a mechanism and the "
         "entries are inputs to it",
+    "test_pass_grants_expire_with_the_pass.py":
+        "every run it drives goes through the workflow tests/test_repair_pass.py "
+        "builds, against a target under tmp_path, because the entry stage, the "
+        "categories and the record names are inputs to the pass mechanism. "
+        "What it resolves live is its subject and nothing else could be: the "
+        "correctable and repairable sections of prompts/story-verifier.md and "
+        "prompts/refactor-verifier.md, because the claim is that this "
+        "repository tells both its verifiers the deferral rule, the "
+        "blocked-path bound and the one-file-never-a-directory rule, and the "
+        "repair-pass slot paragraph in each shipped writing-stage prompt, "
+        "because the claim is that no stage this repository ships is told the "
+        "suite passed where the code ships. A fixture prompt would say nothing "
+        "about what either verifier or any writing stage is told, and the "
+        "absence it asserts of the slot paragraphs is controlled against the "
+        "paragraph as it read before this story, carried as a literal",
     "test_plan_assignment_refusal.py":
         "the refusal is decided against this repository's own declarations: "
         "which stage may create what, here, in this deployment",

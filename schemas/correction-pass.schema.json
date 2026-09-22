@@ -17,6 +17,25 @@
       "type": "string",
       "description": "The stage the workflow re-entered at: the one the workflow's correction_pass declaration names. It is a property of the definition rather than something a finding's category selects, so every pass under a given workflow enters at the same stage whatever categories the findings carry, and a pass costs the stages after that entry point and no more."
     },
+    "correction_pass_count": {
+      "type": "integer",
+      "description": "The run's count of correction passes at the moment this record was written, the pass it records included. With repair_pass_count beside it, and the attempt above, it is what decides whether the record is still live: the grant a record makes, and the injection of the record into a stage's prompt, apply only while the attempt is the one now running and both recorded counts equal the state's, so a pass's permission ends when a pass of the other kind routes rather than lingering into that pass's re-entry of the same stage. Written on every correction record and every repair record since story-193; a record carrying neither count is not live."
+    },
+    "repair_pass_count": {
+      "type": "integer",
+      "description": "The run's count of repair passes at the moment this record was written, the pass it records included where it is a repair record. See correction_pass_count for what the pair decides."
+    },
+    "deferred_repairable_findings": {
+      "type": "array",
+      "description": "Optional, on a correction record alone: the repairable findings the same passing verdict carried, copied verbatim, which the correction pass leaves for the verification it returns to rather than forgets. A verdict carrying both kinds routes the correction pass — the cheaper one, bounded to words — and the returning verifier reads this key to raise the deferred findings again; the returning verification is the one the clean-clone check runs on, and a repair pass routed from it is built on the tree that check verified. Absent where the routing verdict carried no repairable findings and on every repair record; the item shape is the repairable finding's as verification-result.schema.json declares it, and is not restated here because this record copies rather than judges it.",
+      "items": {
+        "type": "object"
+      }
+    },
+    "clean_clone_checked": {
+      "type": "boolean",
+      "description": "On a repair record alone: whether a clean-clone check ran on the verdict that routed the pass. True where the verifier stage declares clean_clone, so the pass was built on a tree whose suite passed where the code ships and the statement below says so; false where the workflow declares a repair pass and no clean-clone check, so the tree was verified where the verifier stood and nowhere else, and the statement says that instead of asserting a check nobody made. Absent on a correction record."
+    },
     "findings": {
       "type": "array",
       "description": "The correctable findings the verdict carried, copied verbatim. The item shape is declared inline rather than referenced, because this validator subset has no cross-file reference and a finding recorded here must validate identically to one in verification-result.schema.json's correctable_findings — the duplication is stated here so the two are edited together rather than drifting.",
@@ -49,7 +68,7 @@
     },
     "statement": {
       "type": "string",
-      "description": "What the coordinator tells the stage the pass routes to: that the verification passed, that this is not a retry and no retry budget was spent, and that a correction pass corrects words and never behaviour. This is the coordinator's own statement and says so — a passing verdict writes no retry guidance, so there is no agent-authored guidance behind the pass."
+      "description": "What the coordinator tells the stage the pass routes to: that the verification passed, that this is not a retry and no retry budget was spent, and — on a correction record — that a correction pass corrects words and never behaviour. On a repair record it says the clean-clone check passed only where clean_clone_checked is true. This is the coordinator's own statement and says so — a passing verdict writes no retry guidance, so there is no agent-authored guidance behind the pass."
     }
   }
 }

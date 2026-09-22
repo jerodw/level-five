@@ -438,12 +438,13 @@ CONFINEMENT = "may_only_change"
 
 
 def _inside(prefix: str, path: str) -> bool:
-    """Whether `path` is at or beneath a confinement prefix.
+    """Whether `path` is at or beneath a confinement prefix or a granted value.
 
-    A prefix ending in a slash is a directory and covers everything beneath it;
-    any other prefix is exactly one file and covers only the identical path.
-    The same slash convention `grant_covers` gives a granted value, so a
-    confinement and a grant agree about what a slash-less value means.
+    A value ending in a slash is a directory and covers everything beneath it;
+    any other value is exactly one file and covers only the identical path.
+    This is the one reading of what a value covers: `grant_covers` is defined
+    in terms of it rather than beside it, so a confinement and a grant cannot
+    come to disagree about what a slash-less value means.
     """
     if prefix.endswith("/"):
         return path.startswith(prefix)
@@ -1081,15 +1082,11 @@ def grant_covers(granted: list[str], path: str) -> bool:
     beneath it, which is what a whole-prefix grant has always meant. Any other
     granted value names one path and covers exactly and only that path — it is
     not a prefix match, so granting one file beneath a prefix leaves every
-    other file beneath it governed.
+    other file beneath it governed. That reading is `_inside`'s, and this
+    function delegates to it rather than restating it, so a grant and a
+    confinement give one answer for every value.
     """
-    for value in granted:
-        if value.endswith("/"):
-            if path.startswith(value):
-                return True
-        elif path == value:
-            return True
-    return False
+    return any(_inside(value, path) for value in granted)
 
 
 def _state_path(run_dir: Path) -> Path:
@@ -7326,10 +7323,91 @@ def correction_pass_result_file(artifact: str, number: int) -> str:
     return f"{stem}-{number}{dot}{extension}"
 
 
+#: The key a correction record carries the repairable findings it deferred
+#: under, when the routing verdict carried both kinds.
+DEFERRED_REPAIRABLE_FINDINGS = "deferred_repairable_findings"
+
+#: The key a repair record carries saying whether a clean-clone check ran on
+#: the verdict that routed it.
+CLEAN_CLONE_CHECKED = "clean_clone_checked"
+
+
+@dataclass(frozen=True)
+class PassRecord:
+    """One pass record read back off the run directory: its parsed content
+    and the text it was read from, so a reader that injects it renders what
+    the file holds rather than a re-serialisation of it.
+    """
+
+    parsed: dict
+    text: str
+
+
+def _pass_record(run_dir: Path, artifact: str, number: int) -> PassRecord:
+    """Read pass record `number` of the declared artifact, or raise.
+
+    Called only where the state says that pass was taken, so a record that
+    is absent or unreadable then is a run whose evidence and whose state
+    disagree, and the harness fails loudly on that rather than silently
+    granting nothing and rendering nothing.
+    """
+    record = run_dir / correction_pass_result_file(artifact, number)
+    try:
+        text = record.read_text(encoding="utf-8")
+        parsed = json.loads(text)
+    except (OSError, ValueError) as error:
+        raise RuntimeError(
+            f"the state records pass {number} of {artifact}, but its record "
+            f"{record.name} could not be read: {error}"
+        ) from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError(
+            f"the state records pass {number} of {artifact}, but its record "
+            f"{record.name} is not a JSON object"
+        )
+    return PassRecord(parsed, text)
+
+
+def pass_record_is_live(record: dict, state: RunState, attempt: int) -> bool:
+    """Whether a pass record still applies to the stage now running.
+
+    One predicate decides it for both kinds of record, for the grants and for
+    the prompt injection alike: the record's attempt is the attempt now
+    running, and the correction and repair pass counts it recorded equal the
+    state's. A pass's permission therefore ends when another pass routes — a
+    correction grant does not linger into a repair pass's re-entry of the
+    same stage, and the reverse — and when a retry moves the attempt. A
+    record carrying no counts, which no coordinator since this predicate
+    existed writes, is not live.
+    """
+    return (
+        record.get("attempt") == attempt
+        and record.get("correction_pass_count") == state.correction_pass_count
+        and record.get("repair_pass_count") == state.repair_pass_count
+    )
+
+
+def _live_pass_record(
+    run_dir: Path, declared: str | None, number: int, state: RunState, attempt: int
+) -> PassRecord | None:
+    """The pass record read through `_pass_record` when it is live, else None.
+
+    None when the run has taken no pass of this kind or the workflow declares
+    none — nothing is owed then — and when the record exists but no longer
+    applies. A record the state says exists and that cannot be read raises.
+    """
+    if not number or not declared:
+        return None
+    record = _pass_record(run_dir, declared, number)
+    if not pass_record_is_live(record.parsed, state, attempt):
+        return None
+    return record
+
+
 def correction_pass_grants(
     run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
 ) -> list[str]:
-    """The files this pass's findings grant one stage to change for one attempt.
+    """The files this pass's findings grant one stage to change for one pass.
 
     A correctable finding names a `path`, and naming it is the grant: at the
     stage the pass enters, the exempt list the ownership and revert checks read
@@ -7338,33 +7416,24 @@ def correction_pass_grants(
     memory, exactly as the prompt injection of the same record is, so what the
     checks exempt and what the prompt reports are one thing.
 
-    The grant is bounded to the stage and the attempt the record names: a
-    documenter re-entered by a later retry in the same run runs at a later
-    attempt, so the attempt no longer matches and the grant is not inherited.
-    A record for another stage grants nothing here either. A run that has taken
-    no pass, a workflow that declares none, and a record that is absent or
-    unreadable each grant nothing.
+    The grant is bounded to the stage and to the record being live, decided
+    by `pass_record_is_live`: a documenter re-entered by a later retry runs at
+    a later attempt, and one re-entered by a repair pass runs under a moved
+    repair count, so the grant is inherited by neither. A record for another
+    stage grants nothing here either. A run that has taken no pass and a
+    workflow that declares none grant nothing; a record the state says exists
+    and that is absent or unreadable raises.
     """
-    if not state.correction_pass_count:
-        return []
     declared = correction_pass_declaration(stages).get("result")
-    if not declared:
-        return []
-    record = run_dir / correction_pass_result_file(
-        declared, state.correction_pass_count
+    record = _live_pass_record(
+        run_dir, declared, state.correction_pass_count, state, attempt
     )
-    if not record.is_file():
-        return []
-    try:
-        parsed = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    if parsed.get("stage") != stage_name or parsed.get("attempt") != attempt:
+    if record is None or record.parsed.get("stage") != stage_name:
         return []
     return [
         finding["path"]
-        for finding in parsed.get("findings", [])
-        if finding.get("path")
+        for finding in record.parsed.get("findings", [])
+        if isinstance(finding, dict) and finding.get("path")
     ]
 
 
@@ -7459,6 +7528,64 @@ def correction_destination(
     return CorrectionRouting(declaration.get("stage"), [])
 
 
+def _unknown_categories(findings: list[dict], routes: dict) -> list[str]:
+    """The categories the findings name that the table does not define, in
+    the order named and without repeats.
+    """
+    unknown: list = []
+    for finding in findings:
+        category = finding.get("category") if isinstance(finding, dict) else None
+        if category not in routes and category not in unknown:
+            unknown.append(category)
+    return unknown
+
+
+def _directory_shaped(findings: list[dict]) -> list[str]:
+    """The paths the findings name that end in a slash, in order."""
+    return [
+        finding.get("path")
+        for finding in findings
+        if isinstance(finding, dict)
+        and isinstance(finding.get("path"), str)
+        and finding["path"].endswith("/")
+    ]
+
+
+def _malformed_findings(
+    correctable: list[dict], repairable: list[dict], routes: dict
+) -> str | None:
+    """Why a passing verdict's findings cannot be routed, or None.
+
+    Asked above the correction block and above the clean-clone check, so a
+    verdict the routing would refuse stops before any pass record is written
+    and before a suite run is spent on it. Two defects, for either kind of
+    finding: a category the routing table does not define, and a path ending
+    in a slash — a directory, where the rule grants one file and never a
+    directory. The wording names the categories or the paths so the
+    escalation is actionable without opening the verdict. Each caller hands
+    over only the findings whose pass the workflow declares, so a workflow
+    declaring neither is asked nothing.
+    """
+    for kind, findings in (("correctable", correctable), ("repairable", repairable)):
+        unknown = _unknown_categories(findings, routes)
+        if unknown:
+            named = ", ".join(f"'{one}'" for one in unknown)
+            return (
+                f"a {kind} finding named {named}, which is not a retry "
+                f"category this workflow defines"
+            )
+    for kind, findings in (("correctable", correctable), ("repairable", repairable)):
+        paths = _directory_shaped(findings)
+        if paths:
+            named = ", ".join(f"'{one}'" for one in paths)
+            return (
+                f"a {kind} finding named the directory-shaped path {named}; "
+                f"a finding's path is one file and never a directory, so a "
+                f"trailing slash stops the run"
+            )
+    return None
+
+
 def _correction_pass_routed(
     run_dir: Path,
     stage_name: str,
@@ -7467,6 +7594,7 @@ def _correction_pass_routed(
     number: int,
     budget: int,
     routed_slugs=(),
+    deferred: list[dict] | None = None,
 ) -> None:
     """Record a correction pass, and where its findings came from.
 
@@ -7477,12 +7605,25 @@ def _correction_pass_routed(
     re-entry spent on the Inspector's reading from one spent on the verifier's
     own. A workflow declaring no inspection routes none and writes the line
     exactly as before.
+
+    `deferred` is the repairable findings the same verdict carried, which the
+    correction pass leaves for the verification it returns to. When any were,
+    the line names each by its location, so a reader can see the pass forgot
+    nothing; a verdict carrying none writes the line exactly as before.
     """
+    deferred_clause = ""
+    if deferred:
+        named = "; ".join(str(one.get("location")) for one in deferred)
+        deferred_clause = (
+            f"; deferring {len(deferred)} repairable finding(s) to the "
+            f"verification the pass returns to: {named}"
+        )
     append_event(
         run_dir,
         f"correction pass {number} of {budget}: verification passed carrying "
         f"{len(findings)} correctable finding(s); re-entering at {destination}"
-        + routed_among(findings, routed_slugs),
+        + routed_among(findings, routed_slugs)
+        + deferred_clause,
         kind="correction-pass-routed",
         stage=stage_name,
         retry_stage=destination,
@@ -7605,13 +7746,14 @@ def repair_pass_grants(
     reports are one thing. The difference is that a repair pass enters more
     than one stage: the record carries each finding with the stage its
     category resolved to, and a stage is granted only the paths of the
-    findings that resolved to it. Bounded to the attempt the record names, so
-    a stage re-entered by a later retry in the same run inherits nothing. A
-    run that has taken no pass, a workflow that declares none, and a record
-    that is absent or unreadable each grant nothing. A finding carrying a
-    scope_extension is granted here exactly as any other: the extension was
-    decided when the pass was routed, and a finding the bounds refused is not
-    in the record.
+    findings that resolved to it. Bounded to the record being live, decided
+    by `pass_record_is_live`, so a stage re-entered by a later retry, or by a
+    correction pass that routed after this one, inherits nothing. A run that
+    has taken no pass and a workflow that declares none grant nothing; a
+    record the state says exists and that is absent or unreadable raises. A
+    finding carrying a scope_extension is granted here exactly as any other:
+    the extension was decided when the pass was routed, and a finding the
+    bounds refused is not in the record.
     """
     return [
         finding["path"]
@@ -7622,34 +7764,27 @@ def repair_pass_grants(
 def _repair_pass_findings(
     run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
 ) -> list[dict]:
-    """The current pass record's findings that resolved to `stage_name` on
-    `attempt`, each naming a path — the one reading behind the grants and
-    the extension announcements.
+    """The live pass record's findings that resolved to `stage_name`, each
+    naming a path — the one reading behind the grants and the extension
+    announcements. Nothing when the record is not live; a raise when the
+    state says a pass was taken and its record cannot be read.
     """
-    if not state.repair_pass_count:
-        return []
     declared = repair_pass_declaration(stages).get("result")
-    if not declared:
-        return []
-    record = run_dir / repair_pass_result_file(declared, state.repair_pass_count)
-    if not record.is_file():
-        return []
-    try:
-        parsed = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-    if parsed.get("attempt") != attempt:
+    record = _live_pass_record(
+        run_dir, declared, state.repair_pass_count, state, attempt
+    )
+    if record is None:
         return []
     return [
         finding
-        for finding in parsed.get("findings", [])
+        for finding in record.parsed.get("findings", [])
         if isinstance(finding, dict)
         and finding.get("stage") == stage_name
         and finding.get("path")
     ]
 
 
-def repair_pass_statement(entry_stage: str) -> str:
+def repair_pass_statement(entry_stage: str, *, clean_clone_checked: bool = True) -> str:
     """What the coordinator tells the stages a repair pass re-enters.
 
     A passing verdict writes no retry guidance, so there is no agent-authored
@@ -7658,10 +7793,32 @@ def repair_pass_statement(entry_stage: str) -> str:
     findings and the corrections and nothing else, that only the files those
     findings name are its to change on this pass, and that this is not a
     licence to revisit the work.
+
+    `clean_clone_checked` selects the opening: the statement says the
+    clean-clone check passed only where one ran on the routing verdict. Under
+    a workflow declaring a repair pass and no clean-clone check the tree the
+    pass is built on was verified where the verifier stood and nowhere else,
+    and the statement says that rather than asserting a check nobody made.
     """
+    if clean_clone_checked:
+        opening = (
+            "The verification passed, and the clean-clone check on that "
+            "verdict passed too."
+        )
+        closing = (
+            " The verification it returns to runs the clean-clone check "
+            "again on the repaired tree."
+        )
+    else:
+        opening = (
+            "The verification passed. No clean-clone check ran on that "
+            "verdict, because this workflow declares none, so the tree this "
+            "pass is built on was verified where the verifier stood and "
+            "nowhere else."
+        )
+        closing = ""
     return (
-        f"The verification passed, and the clean-clone check on that verdict "
-        f"passed too. It also recorded findings it judges correct, too small "
+        f"{opening} It also recorded findings it judges correct, too small "
         f"to fail the run, and fixable by one stage in the file each names, "
         f"and the coordinator has re-entered the workflow at {entry_stage} so "
         f"they are fixed by the stage that owns them rather than filed for a "
@@ -7680,8 +7837,7 @@ def repair_pass_statement(entry_stage: str) -> str:
         f"the story's declared scope; the coordinator has granted it for this "
         f"pass, and the reason recorded on the finding is why — the rule the "
         f"story changed and the line in that file that states it. A repair "
-        f"pass is not a licence to revisit the work. The verification it "
-        f"returns to runs the clean-clone check again on the repaired tree."
+        f"pass is not a licence to revisit the work.{closing}"
     )
 
 
@@ -7739,18 +7895,24 @@ def _repair_pass_routed(
     number: int,
     budget: int,
     routed_slugs=(),
+    clean_clone_checked: bool = True,
 ) -> None:
     """Record a repair pass, and where its findings came from.
 
     Worded with `routed_among` as the correction-pass event is, so a reader of
     events.log can tell a re-entry spent on the Inspector's reading from one
-    spent on the verifier's own.
+    spent on the verifier's own. The line says the clean-clone check passed
+    only where one ran on the routing verdict.
     """
+    checked = (
+        "verification passed and the clean-clone check passed"
+        if clean_clone_checked
+        else "verification passed, with no clean-clone check declared"
+    )
     append_event(
         run_dir,
-        f"repair pass {number} of {budget}: verification passed and the "
-        f"clean-clone check passed, carrying {len(findings)} repairable "
-        f"finding(s); re-entering at {destination}"
+        f"repair pass {number} of {budget}: {checked}, carrying "
+        f"{len(findings)} repairable finding(s); re-entering at {destination}"
         + routed_among(findings, routed_slugs),
         kind="repair-pass-routed",
         stage=stage_name,
@@ -7794,8 +7956,10 @@ def _repair_pass_recorded(
 # finding from the pass and never stops the run: the verdict the accounting
 # is handed records it as declined with the bound as its reason, so it is
 # filed as a brief at completion rather than lost. A finding carrying no
-# scope_extension is untouched by all of this. Nothing below writes a stage
-# name, a category or an artifact name; no model is called.
+# scope_extension is put to the blocked-path bound alone, because a grant can
+# reach no blocked path whatever the finding says; the other two bounds are
+# an extension's. Nothing below writes a stage name, a category or an
+# artifact name; no model is called.
 
 
 #: The field a repairable finding carries to ask for an extension.
@@ -7937,30 +8101,34 @@ def scope_extension_check(
     story: dict | None,
     rules: dict,
 ) -> ScopeExtensionCheck:
-    """Decide each finding carrying scope_extension against the three bounds.
+    """Decide each repairable finding against the bounds that apply to it.
 
-    Pure over its inputs. A finding is refused when its path is under a
-    repository-wide blocked path from the execution rules; when the stage its
-    category resolves to declares a restriction that governs the path, so a
-    tester's extension cannot reach the implementation — unlike an in-scope
-    repairable finding, whose grant lifts the stage's confinement for that
-    file; or when a reasoned scope.do_not_modify entry names the path or a
-    directory it is under. The bounds are asked in that order and the first
-    that applies is the one named. A finding whose category the routing table
-    does not define is left in `accepted` before any bound is asked, whatever
-    its path, because the routing that follows escalates naming the unknown
-    category and the bounds have no stage to ask about — a refusal there
-    would name an empty stage and hide the category behind it.
+    Pure over its inputs. The blocked-path bound is asked of every finding,
+    with or without a scope_extension: a path under a repository-wide blocked
+    path from the execution rules can be reached by no grant, so a finding
+    naming one is refused here, before the pass is routed, rather than
+    routed, granted, edited and only then stopping the run at the blocked-path
+    check. The other two bounds are asked of a finding carrying an extension
+    alone: the stage its category resolves to declares a restriction that
+    governs the path, so a tester's extension cannot reach the implementation
+    — unlike an in-scope repairable finding, whose grant lifts the stage's
+    confinement for that file; or a reasoned scope.do_not_modify entry names
+    the path or a directory it is under. The bounds are asked in that order
+    and the first that applies is the one named. A finding whose category the
+    routing table does not define is left in `accepted` before any bound is
+    asked, whatever its path, because the routing that follows escalates
+    naming the unknown category and the bounds have no stage to ask about — a
+    refusal there would name an empty stage and hide the category behind it.
     """
     by_name = {stage["name"]: stage for stage in stages}
     blocked = list(rules.get("blocked_paths") or [])
     accepted: list[dict] = []
     refused: list[RefusedExtension] = []
     for finding in findings:
-        extension = finding.get(SCOPE_EXTENSION) if isinstance(finding, dict) else None
-        if not extension:
+        if not isinstance(finding, dict):
             accepted.append(finding)
             continue
+        extension = finding.get(SCOPE_EXTENSION)
         route = routes.get(finding.get("category"))
         stage_name = route.get("stage") if isinstance(route, dict) else None
         if stage_name not in by_name:
@@ -7971,6 +8139,9 @@ def scope_extension_check(
         if is_blocked(path, blocked):
             prefix = next(one for one in blocked if path.startswith(one))
             bound = f"{path} is under {prefix}, a path the execution rules block for every stage"
+        elif not extension:
+            accepted.append(finding)
+            continue
         else:
             governing = next(
                 (one for one in restrictions_on(by_name[stage_name]) if one.governs(path)),
@@ -10642,30 +10813,36 @@ def run_story(
         # comes off the workflow's declaration wherever a stage carries it, so
         # no stage name and no artifact name is written here. It renders as
         # None for every stage of a run that took no pass, including the
-        # stages that ran before one.
-        correction_pass_result = None
-        if state.correction_pass_count:
-            declared = correction_pass_declaration(stages).get("result")
-            if declared:
-                record = run_dir / correction_pass_result_file(
-                    declared, state.correction_pass_count
-                )
-                if record.is_file():
-                    correction_pass_result = record.read_text(encoding="utf-8")
+        # stages that ran before one, and — through the same liveness
+        # predicate the grants are decided by — for every stage running after
+        # the record stopped applying: a retry that moved the attempt, or a
+        # pass of the other kind that routed since.
+        correction_record = _live_pass_record(
+            run_dir,
+            correction_pass_declaration(stages).get("result"),
+            state.correction_pass_count,
+            state,
+            attempt,
+        )
+        correction_pass_result = (
+            correction_record.text if correction_record is not None else None
+        )
 
         # The same for a repair pass: the current pass record, read back off
         # the artifact the coordinator wrote, into every stage prompt, so the
         # stage a pass entered is told the findings and the corrections and
-        # nothing else. None for every stage of a run that took none.
-        repair_pass_result = None
-        if state.repair_pass_count:
-            declared = repair_pass_declaration(stages).get("result")
-            if declared:
-                record = run_dir / repair_pass_result_file(
-                    declared, state.repair_pass_count
-                )
-                if record.is_file():
-                    repair_pass_result = record.read_text(encoding="utf-8")
+        # nothing else. None for every stage of a run that took none, and for
+        # every stage the record is no longer live for.
+        repair_record = _live_pass_record(
+            run_dir,
+            repair_pass_declaration(stages).get("result"),
+            state.repair_pass_count,
+            state,
+            attempt,
+        )
+        repair_pass_result = (
+            repair_record.text if repair_record is not None else None
+        )
 
         # The coordinator's record of the suite it ran after some stage's turn
         # ended. Read back off the artifact rather than passed along in memory,
@@ -11559,8 +11736,25 @@ def run_story(
             # reason. The archived verdict above is what the verifier wrote;
             # this is what the run decided about it. Nothing here escalates.
             declared_inspection = (stage.get("inspection") or {}).get("result")
+            # The repairable findings as the verifier wrote them, read once
+            # here and handed to the malformed-verdict check below. The
+            # bounds refuse a finding and drop it from the verdict, and a
+            # slash-terminated path is a prefix every bound reads as under
+            # it, so asked of the verdict after refusals the directory-shaped
+            # question never sees the path the prompts say stops the run. A
+            # passing verdict whose repair pass is declared and whose
+            # findings carry such a path is not put to the bounds at all: it
+            # escalates below naming the path, and a refusal event about a
+            # verdict the run refuses would be a decision made about nothing.
+            repairable_as_written = verdict.get("repairable_findings") or []
+            repair_declared = bool((stage.get("repair_pass") or {}).get("result"))
+            stops_on_a_directory = (
+                verdict.get("status") == "passed"
+                and repair_declared
+                and bool(_directory_shaped(repairable_as_written))
+            )
             extensions = scope_extension_check(
-                verdict.get("repairable_findings") or [],
+                [] if stops_on_a_directory else repairable_as_written,
                 routes, stage_names, stages, reading.parsed, rules,
             )
             for refused in extensions.refused:
@@ -11644,17 +11838,52 @@ def run_story(
                 correction = stage.get("correction_pass") or {}
                 correction_artifact = correction.get("result")
                 findings = verdict.get("correctable_findings") or []
+                repair = stage.get("repair_pass") or {}
+                repair_artifact = repair.get("result")
+                repairable = verdict.get("repairable_findings") or []
+
+                # A malformed verdict stops here, before the correction pass
+                # routes and before the clean-clone check spends a suite run
+                # on it: the categories of both kinds of finding are held to
+                # the routing table, and a path of either kind that ends in a
+                # slash — a directory where the rule grants one file — is
+                # refused naming the path. Each escalates through _escalate,
+                # so retry_count is untouched and nothing is archived, for the
+                # reason the unroutable-retry escalations sit above the
+                # ceiling: a defect in what the verifier produced is the
+                # reason a developer should read, not the budget. Each kind is
+                # validated only where its pass is declared, so a workflow
+                # declaring neither routes the verdict exactly as it did
+                # before this existed. The routing and budget decisions for
+                # each kind stay in the two blocks below. The repairable
+                # findings are asked about as the verifier wrote them, not
+                # as the bounds above left them — see where they were read.
+                malformed = _malformed_findings(
+                    correction_artifact and findings or [],
+                    repair_artifact and repairable_as_written or [],
+                    routes,
+                )
+                if malformed is not None:
+                    return _escalate(
+                        run_dir,
+                        state,
+                        f"{malformed}; {workflow['name']} defines: {declared}",
+                        target_root=target_root,
+                        harness_root=harness_root,
+                        duration_seconds=elapsed(),
+                        verifier_outcome=verdict.get("status"),
+                        retry_decision="escalate",
+                        retry_reason=malformed,
+                    )
+
                 if correction_artifact and findings:
                     routing = correction_destination(correction, findings, routes)
                     if routing.unknown:
-                        # Above the budget comparison for the reason the two
-                        # unroutable-retry escalations sit above the ceiling: a
-                        # finding naming a category the workflow does not
-                        # define is a bug in what the verifier produced, and
-                        # that is the reason a developer should read rather
-                        # than the budget. Through _escalate, so retry_count is
-                        # untouched, and above archive_attempt, so no
-                        # attempts/attempt-N/ is written.
+                        # Unreachable since the validation above, and kept as
+                        # the routing's own strictness: a category the table
+                        # does not define is a bug in what the verifier
+                        # produced, and this block would refuse it even if
+                        # nothing above had.
                         named = ", ".join(f"'{one}'" for one in routing.unknown)
                         return _escalate(
                             run_dir,
@@ -11677,13 +11906,26 @@ def run_story(
                         _correction_pass_recorded(run_dir, name, findings, budget)
                     else:
                         state.correction_pass_count += 1
+                        # The verdict's repairable findings, if any, are
+                        # deferred to the verification the pass returns to
+                        # rather than forgotten: carried verbatim on the
+                        # record under their own key, so the returning
+                        # verifier is handed them, and named in the event.
+                        # The two pass counts recorded here, beside the
+                        # attempt, are what pass_record_is_live compares
+                        # against the state, so the grant this record makes
+                        # ends when another pass routes.
                         record = {
                             "pass": state.correction_pass_count,
                             "attempt": attempt,
                             "stage": routing.stage,
                             "findings": findings,
+                            "correction_pass_count": state.correction_pass_count,
+                            "repair_pass_count": state.repair_pass_count,
                             "statement": correction_pass_statement(routing.stage),
                         }
+                        if repair_artifact and repairable:
+                            record[DEFERRED_REPAIRABLE_FINDINGS] = repairable
                         (
                             run_dir
                             / correction_pass_result_file(
@@ -11709,6 +11951,7 @@ def run_story(
                             state.correction_pass_count,
                             budget,
                             routed_slugs,
+                            deferred=record.get(DEFERRED_REPAIRABLE_FINDINGS),
                         )
                         # Nothing a retry spends is spent: retry_count is
                         # untouched, archive_attempt is not reached, and no
@@ -11865,10 +12108,13 @@ def run_story(
                 # repaired one. A verdict whose clean-clone check failed has
                 # already taken the retry route above and never reaches here.
                 # Both names come off the declaration, so removing the key
-                # disables the whole mechanism with no change here.
-                repair = stage.get("repair_pass") or {}
-                repair_artifact = repair.get("result")
-                repairable = verdict.get("repairable_findings") or []
+                # disables the whole mechanism with no change here. Whether a
+                # clean-clone check ran on this verdict is read off the
+                # clean_clone declaration above and recorded on the pass
+                # record, so the statement the entered stage reads says the
+                # check passed only where it did; the block does not gate on
+                # that declaration, because a workflow declaring no check has
+                # no check to wait for.
                 if repair_artifact and repairable:
                     routing = repair_destination(repairable, routes, stage_names)
                     if routing.unknown:
@@ -11902,12 +12148,19 @@ def run_story(
                         )
                     else:
                         state.repair_pass_count += 1
+                        clean_clone_checked = bool(artifact)
                         record = {
                             "pass": state.repair_pass_count,
                             "attempt": attempt,
                             "stage": routing.stage,
                             "findings": routing.resolved,
-                            "statement": repair_pass_statement(routing.stage),
+                            "correction_pass_count": state.correction_pass_count,
+                            "repair_pass_count": state.repair_pass_count,
+                            CLEAN_CLONE_CHECKED: clean_clone_checked,
+                            "statement": repair_pass_statement(
+                                routing.stage,
+                                clean_clone_checked=clean_clone_checked,
+                            ),
                         }
                         (
                             run_dir
@@ -11931,6 +12184,7 @@ def run_story(
                             state.repair_pass_count,
                             repair_budget,
                             routed_slugs,
+                            clean_clone_checked=clean_clone_checked,
                         )
                         # Nothing a retry spends is spent: retry_count is
                         # untouched, archive_attempt is not reached, and no

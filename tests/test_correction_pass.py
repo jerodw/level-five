@@ -1603,6 +1603,9 @@ def test_the_stage_the_pass_enters_at_is_confined_and_the_pass_grants_the_edit(
         declared["result"], 1), {
             "pass": 1, "attempt": 1, "stage": stage["name"],
             "findings": [story_063_finding()],
+            # The counts a record carries since story-193, which the grant
+            # reader compares against the state to decide it is live.
+            "correction_pass_count": 1, "repair_pass_count": 0,
             "statement": story_coordinator.correction_pass_statement(
                 stage["name"]),
         })

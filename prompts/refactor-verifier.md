@@ -137,7 +137,8 @@ what lets the stage the pass enters at change that one file for that pass: the
 coordinator grants that stage the files the findings name, and an edit to any
 other file is put to the revert check after the turn. A finding that names no
 path is refused by the schema, because the pass would have no scope to change
-the words in.
+the words in, and a path is one file, never a directory: a trailing slash in
+path stops the run before any pass is routed.
 
 What stays in unverified is what you could not check: evidence that was
 missing, a claim you had no way to settle, a question the artifacts available
@@ -172,7 +173,14 @@ goes, because the coordinator resolves it through the routing table above to
 the stage that owns the file and re-enters there, running forward to
 verification again. A category this workflow does not define escalates the
 run. Naming the `path` grants the owning stage that one file for that pass,
-and an edit to any other governed file stays governed. The file may lie
+and an edit to any other governed file stays governed. The path is one file,
+never a directory: a trailing slash in `path` stops the run before any pass
+is routed, and the grant is bounded to the pass that made it. A repairable
+finding may not name any path the execution rules block for every stage,
+because a grant cannot reach one: such a
+finding is refused before the pass is routed, dropped from the pass and
+accounted as declined with that bound as its reason, whether or not it
+carries an extension. The file may lie
 outside the story's declared scope when it states or consumes the rule the
 story changed — the test is that the file already says something the story
 made false, not that the fix would be convenient there; a routed finding
@@ -186,9 +194,17 @@ file, so a tester's extension cannot reach the implementation; or the
 story's scope.do_not_modify names the file, or a directory it is under, with
 a reason beside it. A refused finding is dropped from the pass and accounted
 as declined with the bound as its reason, the rest of the pass is routed, and
-the run continues. A repair pass is routed only after the clean-clone check
-on your verdict has passed, because a repair may change behaviour and is
-built on a verified tree, and the verification it returns to runs the check
+the run continues. A verdict carrying both kinds — correctable findings and
+repairable findings together — is routed as a correction pass, the cheaper
+one, and the repairable findings are deferred rather than lost: they are
+named in the record the returning verification reads, under
+deferred_repairable_findings, so raise them again there: the returning
+verification is the one the clean-clone check runs on, and a repair pass
+routed from it is built on the tree that check verified. A repair pass is
+routed only after
+the clean-clone check on your verdict has passed where the workflow declares
+one, because a repair may change behaviour and is built on a verified tree,
+and the verification it returns to runs the check
 again. A repair pass is not a licence to revisit the work: it carries the
 findings and the corrections and nothing else. Do not record one against the
 approved story artifact either: nothing rewrites that mid-run, and the stage

@@ -918,7 +918,9 @@ def test_the_retired_prefix_reader_is_gone_and_nothing_calls_it():
 def test_the_matcher_names_no_stage():
     """It takes granted values and a path; a stage cannot reach it."""
     body = executable_source(inspect.getsource(story_coordinator.grant_covers))
-    assert "endswith" in body                       # stripping kept the code
+    # Stripping kept the code: since story-193 grant_covers delegates to
+    # _inside rather than testing the slash itself, so the call is the code.
+    assert "_inside" in body
     for name in STAGE_NAMES:
         assert name not in body, name
 
