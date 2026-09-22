@@ -1,0 +1,197 @@
+story:
+  id: story-198
+  title: An inspection that produced no report is told apart from one that reported nothing, runs again in place, and no earlier entry's findings are lost
+  description: |
+    After a story's work is done, the harness asks an independent reviewer to
+    read the change and say what it found. Sometimes that reviewer's process
+    dies before it writes anything — a network outage, a killed process. Today
+    the run reads that silence as "looked, found nothing": it says so in the
+    run's log, hands the verifier a record claiming the inspection ran and was
+    clean, and moves on. On 2026-09-22 that happened to story-196 and three
+    real findings were lost; they were recovered by hand two hours later from
+    an archived file. Every other agent the harness runs is already treated
+    differently — when a stage's process dies it is simply run again, and if
+    that fails too the run says so loudly. The inspection is the one place with
+    no equivalent.
+
+    There is a second, related loss. When a run is interrupted and later
+    resumed, everything the interrupted attempt wrote is moved aside into an
+    archive folder, and the filing that happens at the end of a run only looks
+    at the current attempt. So findings the reviewer raised before the
+    interruption — including ones a verifier looked at and reasonably decided
+    not to act on, which are supposed to become backlog items — never reach the
+    backlog. That is why a dead inspection cost findings rather than merely a
+    report: the earlier entry's copy was sitting in the archive with nothing to
+    go and get it.
+
+    This story makes an inspection whose reviewer produced no report run once
+    more, in place, announced in the run's log the way a stage being re-run is.
+    If the second attempt also produces nothing, the run says plainly that the
+    inspection could not be made — in the run's log, in the record the verifier
+    reads, and in the cross-run inspection log — instead of reporting zero
+    findings. And the filing at the end of a run also reads the archived
+    earlier attempts of the same run, so findings held or declined before an
+    interruption are filed rather than stranded, with duplicates collapsed so a
+    defect found twice is filed once.
+
+    What it deliberately leaves alone: an inspection that produced a report is
+    untouched, whatever the report says — an empty report is a real answer and
+    goes on behaving exactly as it does today, with story-179's and story-182's
+    records the ones to hold unchanged. The trigger is the missing file and
+    nothing else, never the number of findings and never what the invocation
+    cost; the cost stays corroboration in the record rather than something the
+    routing reads. It does not touch what the Inspector looks for, does not
+    touch the natural variance between two inspections of one change, and does
+    not touch the deduplication query, whose own failure is already reported
+    and already files anyway. Planned from the brief filed under 319.
+
+    The mechanics. orchestration/inspection.py's inspect_scope is the one place
+    an Inspector invocation is made, for the broad l5-inspect mode and for both
+    narrow per-story modes. Where _read_findings returns no document it invokes
+    once more and uses the second result; only a second failure records the
+    NO_ARTIFACT drop, and its detail names both attempts. The two costs sum
+    into the scope result, and the result carries its own invocation count so
+    the record's invocations and cost_usd corroborate that a retry happened.
+    The per-invocation ceiling inspection.bounds resolves is already per
+    invocation, so the second invocation is handed its own allowance rather
+    than a remainder — the budget shape self_route already has. Exactly one
+    retry, fixed in code.
+
+    Saying it could not be made. In orchestration/story_inspection.py:
+    _summary says the inspection could not be made and why, in place of a
+    findings/filed/dropped tally that reads as an empty report;
+    _inspect_before_stage writes the findings record with ran false and a
+    reason instead of ran true with an empty list, which is the shape its own
+    exception path already writes and which prompts/story-verifier.md already
+    tells the verifier how to read; _inspect_after_story says it on its own
+    line. _say carries a new boolean through append_event in
+    orchestration/story_coordinator.py onto the inspection-log.jsonl line,
+    declared in schemas/cross-run-history.schema.json and written on every
+    inspection record on dedupe_ran's precedent, so a false is distinguishable
+    from a line written before the field existed. The announcement made before
+    the second invocation goes through the coordinator's existing announcer,
+    beside inspection_started.
+
+    The earlier entries. file_at_completion today takes the highest attempt at
+    the run root and files its held findings and the remainder the verdict
+    left. It additionally walks the entry directories story_coordinator's
+    entry_dir names, most recent first, taking each entry's own final attempt
+    through the same readers pointed at that directory — so no new spelling of
+    the archive path appears in story_inspection.py. Findings are deduped by
+    the outbox identity key with the first occurrence winning, so the current
+    entry's wording is what is filed and a defect re-found after a resume is
+    filed once. The completion line says how many came from earlier entries, so
+    the recovery is visible rather than silent. With no earlier entries
+    present, the behaviour is what it is today.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/inspection.py, make inspect_scope invoke the Inspector a second time when the first invocation produced no findings artifact, recording the NO_ARTIFACT drop only after the second also produced none, and carry the summed cost and the number of invocations actually made on the scope result.
+  - Give inspect_scope a seam by which a caller can announce the second invocation, and have the narrow modes announce it in the run's events.log through the coordinator's existing announcer, beside inspection_started.
+  - Update the callers of inspect_scope so the invocation count they report is the count the result carries rather than a hard-coded one, in both orchestration/inspection.py's broad mode and orchestration/story_inspection.py's two narrow modes.
+  - In orchestration/story_inspection.py, make _summary say the inspection could not be made, and why, where the invocation produced no findings artifact, instead of reporting a findings/filed/dropped tally.
+  - In orchestration/story_inspection.py, make _inspect_before_stage write the stage's findings record with ran false and a reason where no findings artifact was produced, rather than ran true with an empty findings list.
+  - Carry a new boolean through _say and orchestration/story_coordinator.py's append_event onto the inspection-log.jsonl record saying whether the inspection was made, written on every inspection record.
+  - Declare that field in schemas/cross-run-history.schema.json's inspection-log.jsonl items, with a description saying what a false records and why it is written on every record.
+  - In orchestration/story_inspection.py, make file_at_completion also file the held findings and verdict remainder of each earlier entry's final attempt, reaching the entry directories through story_coordinator's entry_dir, deduping by the outbox identity key with the first occurrence winning, and saying on the completion line how many came from earlier entries.
+  - Write the standing test module that holds the new rules, and adapt the existing inspection test modules whose fake runners the retry changes the call count of.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - An inspection whose first invocation produces no findings artifact and whose second produces a well-formed one files what the second found, records no NO_ARTIFACT drop, and reports two invocations on its inspection-log.jsonl record.
+  - An inspection whose first and second invocations both produce no findings artifact records exactly one NO_ARTIFACT drop, whose detail names both invocations.
+  - An inspection that produces a findings artifact is invoked exactly once, whether that artifact carries findings or an empty findings array; no retry is made on a report that reported nothing.
+  - No retry is triggered by an invocation's reported cost or by how many findings it produced; the only trigger is the absence of the findings artifact.
+  - At most one retry is made per invocation: a scope whose every invocation produces no artifact results in exactly two invocations and no more.
+  - The events.log line written by a narrow-mode inspection whose invocations produced no findings artifact says the inspection could not be made and why, and does not report it as a count of findings found.
+  - The events.log carries a line announcing the second invocation, written before it is made, for both narrow modes.
+  - The pre-stage inspection whose invocations produced no findings artifact writes the stage's findings record with ran false and a non-empty reason, and with no findings.
+  - The inspection-log.jsonl record of every inspection carries the new boolean, true where a findings artifact was read and false where none was after the retry.
+  - An inspection that produced a report continues to write the record it writes today: the cost, the counts, the drop reasons and the events.log wording of an inspection that found nothing are unchanged.
+  - file_at_completion files the held findings and the verdict remainder of each earlier entry's final attempt in addition to the current entry's, and its events.log line says how many findings came from earlier entries.
+  - A finding present in both an earlier entry and the current entry is filed once, under the current entry's wording, and is not counted twice on the completion line.
+  - With no earlier entry directory present, file_at_completion files exactly what it files today and its events.log line is what it is today.
+  - Neither the retry nor the earlier-entry filing can stop, delay past its own invocation, fail or change the status of a run: every entry point in orchestration/story_inspection.py remains total and returns nothing on every path.
+  - The whole test suite passes under the configured test command, and the suite census does not fall.
+
+technical_plan:
+  implementation_steps:
+    - In orchestration/inspection.py, factor the single invocation inside inspect_scope — the runner call, the cost read and the _read_findings call, with the artifact removed before and after — into a helper that returns the document, the problem and the reported cost, so the retry is a second call to one thing rather than a second copy of the sequence.
+    - Call that helper a second time where the first returned no document, announcing the second call through an optional callable the caller supplies. Record the NO_ARTIFACT drop only after the second returned no document, with a detail naming both invocations and the problem each reported.
+    - Sum both invocations' reported costs onto the scope result on the terms the existing figure is carried — a cost reported by neither stays None rather than becoming zero — and add an invocation count to the scope result.
+    - Read that count in inspection.inspect's loop, in place of the +1 it adds per scope, and in orchestration/story_inspection.py's _report, in place of the invocations=1 it passes.
+    - In orchestration/story_inspection.py, add one predicate over a scope result saying the invocation produced no findings artifact, named for what it means, and read it in _summary, in _inspect_before_stage and wherever the record's new boolean is set, so the three cannot disagree about the same inspection.
+    - Extend _say and story_coordinator.append_event with the new boolean, and declare it in schemas/cross-run-history.schema.json beside dedupe_ran, whose absence/false distinction it follows.
+    - In orchestration/story_inspection.py, generalise the held/accounting readers' discovery so _attempts_holding and the three readers can be pointed at an entry directory as well as the run root, and have file_at_completion walk story_coordinator.entry_dir's directories from the most recent backwards, appending each entry's final attempt's held findings and remainder after the current entry's.
+    - Dedupe the assembled list by outbox.identity_key over inspection.identity, keeping the first occurrence, and extend the completion line with the count that came from earlier entries.
+  likely_file_changes:
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: inspect_scope is where the single Inspector invocation is made, where NO_ARTIFACT is recorded and where the retry, the summed cost and the invocation count belong; inspect's own loop reads the new count.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: the two narrow modes' summary line, the stage's findings record, the new record field and the completion filing's walk of earlier entries all live here.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: append_event carries the inspection record's named fields, so the new boolean is threaded through it; the announcement of the second invocation uses the announcer beside inspection_started.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: the inspection-log.jsonl line's fields are declared there, and the new boolean is a field a record carries.
+    - file: tests/test_an_inspection_that_was_not_made.py
+      stage: tester
+      reason: the standing module holding the new rules — the retry, its bound of one, the trigger being the missing artifact alone, the wording of a run that could not make an inspection, and the earlier-entry filing.
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: its fake runners drive the NO_ARTIFACT paths and are now called twice per scope, so the call counts and the drop expectations are adapted to the retry.
+    - file: tests/test_a_brief_names_its_area.py
+      stage: tester
+      reason: its NO_ARTIFACT cases and the summary text they read are adapted to a retried invocation and to the new wording of an inspection that could not be made.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: the inspection sections record what a drop reason means and what a record carries, and both change here.
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - schemas/cross-run-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-verifier.md (it already tells the verifier that ran false means no inspection was made and that ran true with an empty findings list means the Inspector looked and found nothing; the defect was that nothing ever wrote ran false, so the text is correct as it stands)
+    - prompts/inspector.md (what the Inspector looks for is unchanged, and the request leaves it alone by name)
+    - schemas/inspection-findings.schema.json (the envelope the Inspector writes is unchanged: the trigger is the file's absence, never anything about its contents)
+    - schemas/story-brief.schema.json (no field of a filed brief changes; what is recovered is filed exactly as it would have been filed before)
+    - orchestration/outbox.py (the queue is reached through inspection.file_findings as every producer reaches it, and the dedupe across entries is done by the identity key the queue already defines)
+    - the filed-query and dedupe path, including .harness/scripts/github.sh (the request leaves the dedupe query's own failure alone: it is already reported and already files anyway)
+    - workflows/story-workflow.json and workflows/refactor-workflow.json (the retry is not a declared budget: broad-mode inspections are made with no workflow loaded, so a workflow key could not govern both modes, and the bound of one is fixed in code)
+
+verification_requirements:
+  - Confirm that an inspection producing a findings artifact is invoked exactly once, including when that artifact's findings array is empty, and that its record and events.log line are unchanged from today.
+  - Confirm that a first invocation producing no artifact is followed by exactly one more, that the second's findings are filed when it produces an artifact, and that no NO_ARTIFACT drop is recorded in that case.
+  - Confirm that two failed invocations produce exactly one NO_ARTIFACT drop, a findings record with ran false and a reason, an events.log line saying the inspection could not be made, and an inspection-log.jsonl line whose new boolean is false.
+  - Confirm that nothing in the retry decision reads the findings count or the reported cost.
+  - Confirm that file_at_completion files an earlier entry's held findings and verdict remainder, that a finding present in two entries is filed once, and that a run with no earlier entry directory files exactly what it files today.
+  - Confirm that every entry point in orchestration/story_inspection.py still returns nothing on every path, raises on none, and that no coordinator branch reads an inspection result.
+  - Confirm the full test suite passes under the configured test command and that the census does not fall.
+
+constraints:
+  - The inspection must remain a total function that cannot block, delay past its own invocations, refuse or fail a run; every guard that exists today stays.
+  - No coordinator routing decision may read anything the inspection produces.
+  - The retry is triggered by the absence of the findings artifact alone: not by the findings count, not by the reported cost, not by anything the invocation printed.
+  - At most one retry per invocation, and the bound is fixed rather than configured.
+  - An inspection that produced a report keeps its present behaviour exactly, whatever the report says.
+  - The dedupe query, its failure reporting and the filing that follows it are unchanged.
+  - The archive directory's path is named in orchestration/story_coordinator.py's entry_dir and nowhere else; story_inspection.py reaches it through that function.
+  - Nothing already filed is refiled twice by the earlier-entry filing: dedupe is by the outbox identity key the queue already defines.
+  - Existing assertions are not weakened or skipped; an adapted test keeps what it asserted.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-22 08:34:11
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 319
