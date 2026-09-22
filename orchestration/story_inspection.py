@@ -487,8 +487,17 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
          kind: str = INSPECTION_EVENT,
          routed: int | None = None,
          acted_on: int | None = None,
-         duration_seconds: float | None = None) -> None:
+         duration_seconds: float | None = None) -> str:
     """Append the inspection's record through the coordinator's shared append.
+
+    Returns "" where the append returned, and the exception's text where the
+    guard below swallowed one. The append writes events.log and the run's
+    history before the cross-run projection, so a history directory that
+    cannot be written raises out of it with the line already in events.log
+    and no segment file behind it; the text is what `commit_record` is handed
+    as the cause when it finds no record to stage, so a record that was never
+    written is reported as not written with the reason, rather than as
+    written and untracked.
 
     Every value goes through that one call, so events.log, the run's structured
     history and the cross-run log stay one write path and not three. The cost,
@@ -534,8 +543,9 @@ def _say(run_dir: Path, message: str, *, findings: int | None = None,
             routed=routed, acted_on=acted_on,
             **timing,
         )
-    except Exception:  # noqa: BLE001 - reporting may not become the failure
-        pass
+    except Exception as error:  # noqa: BLE001 - reporting may not become the failure
+        return str(error) or error.__class__.__name__
+    return ""
 
 
 def _announce(run_dir: Path, story_id: str, scope_files: int) -> None:
@@ -684,64 +694,121 @@ def record_paths(target_root: Path, config: dict,
     derivations of which logs that kind reaches are two answers that can
     disagree. The story is named because since story-165 a run's record goes
     to that story's own segment of the history, and what is staged is what
-    was written. The story is required rather than defaulted: the guard
-    below turns every refusal into no paths, so a defaulted story would let
-    a caller that omitted it stage nothing and say nothing, which is a record
-    written and never committed. An omission fails at the call site instead.
-    The guard stays here, because this producer may not raise.
+    was written. The story is required rather than defaulted, so an omission
+    fails at the call site rather than staging nothing and saying nothing.
+
+    It raises where the derivation raises: `commit_record` guards its whole
+    body, and the exception's text then reaches the detail it notes, where a
+    guard here would have turned the raise into no paths and no cause.
+    """
+    return inspection.record_paths(target_root, config, story_id=story_id)
+
+
+def _segment_holds_record(target_root: Path, config: dict,
+                          story_id: str) -> bool:
+    """Whether a history segment file holds this inspection's record.
+
+    The question `commit_record` decides by before it stages, asked by the
+    pre-stage inspection before it notes a record as not written. Guarded,
+    because `record_paths` raises and a raise here would fall to the entry
+    point's guard, which overwrites the held artifact with an empty one: a
+    raise counts as no path held, so the note is still written with the
+    swallowed text as its cause.
     """
     try:
-        return inspection.record_paths(target_root, config, story_id=story_id)
-    except Exception:  # noqa: BLE001 - the totality is the guarantee
-        return ()
+        return bool(record_paths(target_root, config, story_id))
+    except Exception:  # noqa: BLE001 - a raise is no path held
+        return False
+
+
+#: What `commit_record` gives as the cause of a record it found no segment
+#: file for, where the append that should have written it swallowed nothing.
+NO_SEGMENT_DETAIL = "no history segment holds the record"
 
 
 def commit_record(run_dir: Path, target_root: Path, config: dict,
                   story_id: str,
-                  subject: str = COMMIT_SUBJECT) -> inspection.Recorded:
+                  subject: str = COMMIT_SUBJECT, *,
+                  write_problem: str = "") -> inspection.Recorded:
     """Commit the record this inspection wrote, and say when it did not.
 
-    The commit is `inspection.commit_record_paths`, the one commit both modes
-    make: the paths are staged **by name** and never with `git add -A`, so an
-    edit the inspection agent made elsewhere in the repository is left in the
-    working tree rather than folded into this commit; both git return codes
-    are checked; and a commit that fails unstages exactly what it staged, so
-    the tree is left as the commit found it. The commit is skipped where
-    staging left the index empty — a target tracking no record path gains no
-    commit — and the subject carries no completion marker and matches neither
-    the completion, escalation nor pause shape, so nothing that reads a branch
-    for one of those reads this.
+    It establishes first whether there is a record to commit, and only then
+    stages one. Where the history declaration routes the inspection kind to
+    no log, the record was not written, in the words `inspection.record` uses
+    for that. Where the declaration routes it somewhere and no segment file
+    holds it, the record was not written either: the detail begins "the
+    record could not be written" and carries the cause — `write_problem`,
+    which is what `_say` swallowed when the append raised, or a fixed phrase
+    saying no history segment holds the record where nothing was swallowed.
+    The segment files decide and the swallowed text is only the cause they
+    are reported with: the append projects the record before it prints, so
+    a raise out of it after the projection leaves the record on disk, and a
+    record on disk is staged whatever `_say` returned.
 
-    Whenever the record was not committed — a failed add, a failed commit, a
-    raise, or nothing staged — one note goes into the run's events.log
-    through `_note`, naming which and quoting git's stderr where there is any.
-    events.log already carries the record line the inspection wrote, so a
-    commit that landed adds nothing there. This is the whole reason
-    `run_dir` is a parameter: without it a record left uncommitted was
-    reported nowhere, and the next run refused to start on a dirty tree with
-    nothing connecting the refusal to the inspection that caused it.
+    Otherwise the commit is `inspection.commit_record_paths`, the one commit
+    both modes make: the paths are staged **by name** and never with `git add
+    -A`, so an edit the inspection agent made elsewhere in the repository is
+    left in the working tree rather than folded into this commit; both git
+    return codes are checked; and a commit that fails unstages exactly what
+    it staged, so the tree is left as the commit found it. A target whose
+    ignore rules keep the history out of version control is told no record
+    path is tracked, which that function asks of git rather than inferring,
+    and gains no commit. The subject carries no completion marker and matches
+    neither the completion, escalation nor pause shape, so nothing that reads
+    a branch for one of those reads this.
+
+    Whenever the record was not committed, one note goes into the run's
+    events.log through `_note`, in the two shapes `scripts/l5-inspect`
+    prints: "written but NOT committed: <detail>" for a record that exists
+    and did not land, and "NOT committed, because it was not written:
+    <detail>" for one that never existed. events.log already carries the
+    record line the inspection wrote, so a commit that landed adds nothing
+    there.
 
     Guarded whole, because this producer may not raise: a raise anywhere in
-    it becomes a not-committed result carrying the exception, noted the same
-    way. Nothing retries, amends, resets past the staged paths or pushes.
+    it becomes a not-committed result carrying the exception's text, noted
+    the same way — as not written where the record had not yet been
+    established, and as written but not committed where it had. Nothing
+    retries, amends, resets past the staged paths or pushes.
 
     `subject` is the post-story inspection's by default; the completion
     filing passes its own, so the two records a branch can carry are told
     apart by what each commit says about itself.
     """
+    established = False
     try:
-        paths = record_paths(target_root, config, story_id)
-        recorded = inspection.commit_record_paths(
-            target_root, paths, subject.format(story_id=story_id)
-        )
+        if not inspection.routed_logs():
+            recorded = inspection.Recorded(detail=inspection.NO_LOG_DETAIL)
+        else:
+            paths = record_paths(target_root, config, story_id)
+            if not paths:
+                recorded = inspection.Recorded(
+                    detail=f"the record could not be written: "
+                           f"{write_problem or NO_SEGMENT_DETAIL}")
+            else:
+                established = True
+                recorded = inspection.commit_record_paths(
+                    target_root, paths, subject.format(story_id=story_id)
+                )
     except Exception as error:  # noqa: BLE001 - the totality is the guarantee
-        recorded = inspection.Recorded(
-            written=True, committed=False,
-            detail=f"the record could not be committed: {error}",
-        )
-    if not recorded.committed:
-        _note(run_dir, f"inspection record of {story_id} NOT committed: "
-                       f"{recorded.detail}")
+        if established:
+            recorded = inspection.Recorded(
+                written=True, committed=False,
+                detail=f"the record could not be committed: {error}",
+            )
+        else:
+            recorded = inspection.Recorded(
+                detail=f"whether the record was written could not be "
+                       f"established: {error}",
+            )
+    if recorded.committed:
+        return recorded
+    if recorded.written:
+        _note(run_dir, f"inspection record of {story_id} written but NOT "
+                       f"committed: {recorded.detail}")
+    else:
+        _note(run_dir, f"inspection record of {story_id} NOT committed, "
+                       f"because it was not written: {recorded.detail}")
     return recorded
 
 
@@ -800,7 +867,8 @@ def held_artifact_file(artifact: str, attempt: int) -> str:
 
 
 def write_held(run_dir: Path, artifact: str, attempt: int, story_id: str,
-               findings=(), area_suggestions=()) -> None:
+               findings=(), area_suggestions=(),
+               refused_area_suggestions=()) -> None:
     """Write the findings the inspection held for the run's completion.
 
     As the Inspector wrote them, under the findings record's shape, so the
@@ -812,7 +880,12 @@ def write_held(run_dir: Path, artifact: str, attempt: int, story_id: str,
 
     The Inspector's area suggestions travel with the findings, because the
     line saying a filed brief named no area is written where the brief is
-    filed, and that is now the run's completion.
+    filed, and that is now the run's completion. So do the suggestions the
+    reader refused, as the detail of each drop under UNUSABLE_SUGGESTION: a
+    refused suggestion is still evidence that the target declares an area
+    vocabulary, and the filing at completion can say which filed brief named
+    none only if that evidence reaches it. They reach no brief, no payload
+    and no queue entry from here, exactly as they reached none at inspection.
 
     Guarded like everything else here.
     """
@@ -828,6 +901,9 @@ def write_held(run_dir: Path, artifact: str, attempt: int, story_id: str,
                     "area_suggestions": [
                         {"slug": one.slug, "concerns": one.concerns}
                         for one in area_suggestions
+                    ],
+                    "refused_area_suggestions": [
+                        str(one) for one in refused_area_suggestions
                     ],
                 },
                 indent=2,
@@ -924,6 +1000,20 @@ def _counts(report) -> tuple[int, int, int]:
     return findings, len(report.filed), dropped
 
 
+def _drops_by_reason(dropped) -> dict:
+    """Each reason the drops carry mapped to how many carried it, in the
+    order each reason was first seen.
+
+    The one derivation both lines that name drop reasons — the inspection's
+    summary and the completion filing's — count from, so neither holds a
+    list of reasons of its own.
+    """
+    reasons: dict = {}
+    for one in dropped:
+        reasons[one.reason] = reasons.get(one.reason, 0) + 1
+    return reasons
+
+
 def _summary(label: str, report, excluded, trimmed, log: str, *,
              to_the_story: int = 0, held: int = 0) -> str:
     """One line saying what the inspection did, for the run's own events.log.
@@ -958,6 +1048,13 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
     counted as findings, and said in words true when the line is written —
     nothing is filed until the run completes, and what was filed is said then
     by `file_at_completion`.
+
+    The reasons are the ones the drops themselves carry, each named once with
+    its count in the order it was first seen, so the vocabulary of reasons is
+    stated once, in the module that defines it: a reason the inspection
+    module defines and no list here names is counted in the total *and*
+    named, where a hand-written list would have counted it and named it
+    nowhere. Nothing here names a reason constant.
     """
     findings, filed, dropped = _counts(report)
     findings += to_the_story + held
@@ -972,22 +1069,8 @@ def _summary(label: str, report, excluded, trimmed, log: str, *,
         line += f"; routed to this story: {to_the_story}"
     if held:
         line += f"; held for the run's completion: {held}"
-    reasons = [
-        inspection.ALREADY_FILED,
-        inspection.ALREADY_FILED_LOCALLY,
-        inspection.ALREADY_QUEUED,
-        inspection.MALFORMED,
-        inspection.UNUSABLE_SUGGESTION,
-        inspection.UNKNOWN_WORKFLOW,
-        inspection.BENEATH_THE_FLOOR,
-        inspection.PAST_THE_CAP,
-        inspection.LOST_BY_THE_QUEUE,
-        inspection.NO_ARTIFACT,
-    ]
-    for reason in reasons:
-        count = len(report.dropped_for(reason))
-        if count:
-            line += f"; {reason}: {count}"
+    for reason, count in _drops_by_reason(report.dropped).items():
+        line += f"; {reason}: {count}"
     if not report.dedupe_ran:
         line += "; dedupe did not run"
     if trimmed or excluded:
@@ -1105,7 +1188,7 @@ def _invoke(prepared: _Preparation, run_dir: Path, target_root: Path,
 def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
             label: str, prepared: _Preparation, report, result,
             to_the_story: int, held: int = 0,
-            duration_seconds: float | None = None) -> None:
+            duration_seconds: float | None = None) -> str:
     """Say what the inspection found, in the run's own record and the log.
 
     Shared by both modes, so the notes a reader relies on — a dedupe that could
@@ -1116,6 +1199,11 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
     `duration_seconds` is how long the invocation took, as `_invoke` measured
     it, carried onto the completion record so the cross-run duration log holds
     one observation of the inspection per occurrence.
+
+    Returns what its `_say` returned — "" where the record's append returned,
+    and the swallowed exception's text where it did not — so a caller that
+    goes on to commit the record can hand `commit_record` the cause of a
+    record that was never written.
     """
     findings, filed_count, dropped_count = _counts(report)
     # A failed dedupe gets a line of its own, beside the summary rather than
@@ -1168,7 +1256,7 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
         if suggestion:
             line += f"; the Inspector says it concerns: {suggestion}"
         _note(run_dir, line)
-    _say(
+    write_problem = _say(
         run_dir,
         _summary(
             label, report, prepared.excluded, prepared.trimmed,
@@ -1193,6 +1281,7 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
     # to the allowance the ceiling reads. See `record_cost` for why the two are
     # different jobs.
     record_cost(run_dir, result.cost_usd)
+    return write_problem
 
 
 # --------------------------------------------------------------------------
@@ -1245,7 +1334,7 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         # and this one is guarded again: reporting a failure may not become a
         # second one.
         try:
-            _say(
+            write_problem = _say(
                 run_dir,
                 f"{label}: it could not run: {error}",
                 findings=0, filed=0, dropped=0,
@@ -1255,7 +1344,8 @@ def inspect_after_story(run_dir: Path, target_root: Path, config: dict,
                 # scope list would give would say dedupe ran when nothing asked.
                 dedupe_ran=False,
             )
-            commit_record(run_dir, target_root, config, story_id)
+            commit_record(run_dir, target_root, config, story_id,
+                          write_problem=write_problem)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
             pass
 
@@ -1276,10 +1366,11 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         # Named in the record rather than refused. The run completes with the
         # status it would have had with the key unset, which is what a total
         # function's answer to a bad bound has to be.
-        _say(run_dir, f"{label}: {prepared.problem}",
-             findings=0, filed=0, dropped=0,
-             scope_files=0, invocations=0, dedupe_ran=False)
-        commit_record(run_dir, target_root, config, story_id)
+        write_problem = _say(run_dir, f"{label}: {prepared.problem}",
+                             findings=0, filed=0, dropped=0,
+                             scope_files=0, invocations=0, dedupe_ran=False)
+        commit_record(run_dir, target_root, config, story_id,
+                      write_problem=write_problem)
         return
 
     scope, result, took = _invoke(
@@ -1312,9 +1403,11 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
         min_severity=prepared.bound.min_severity,
         area_suggestions=tuple(result.area_suggestions),
     )
-    _report(run_dir, target_root, config, story_id, label, prepared, report,
-            result, 0, duration_seconds=took)
-    commit_record(run_dir, target_root, config, story_id)
+    write_problem = _report(run_dir, target_root, config, story_id, label,
+                            prepared, report, result, 0,
+                            duration_seconds=took)
+    commit_record(run_dir, target_root, config, story_id,
+                  write_problem=write_problem)
 
 
 # The same guarantee, made again for the caller that runs inside the stage
@@ -1430,7 +1523,17 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
     # final attempt.
     write_held(run_dir, artifact, attempt, story_id,
                findings=[one.finding for one in others],
-               area_suggestions=tuple(result.area_suggestions))
+               area_suggestions=tuple(result.area_suggestions),
+               # The suggestions the reader refused travel too, as their drop
+               # details: the completion filing's area gate reads a refusal
+               # as evidence of a vocabulary exactly as this inspection's
+               # own gate does, and without them a run whose every held
+               # brief named no area beside one refused suggestion would be
+               # reported at completion as a target declaring no areas.
+               refused_area_suggestions=[
+                   one.detail for one in result.dropped
+                   if one.reason == inspection.UNUSABLE_SUGGESTION
+               ])
     report = inspection.Report(
         scopes=(scope,),
         invocations=1,
@@ -1442,8 +1545,25 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
         min_severity=prepared.bound.min_severity,
         area_suggestions=tuple(result.area_suggestions),
     )
-    _report(run_dir, target_root, config, story_id, label, prepared, report,
-            result, len(own), len(others), duration_seconds=took)
+    write_problem = _report(run_dir, target_root, config, story_id, label,
+                            prepared, report, result, len(own), len(others),
+                            duration_seconds=took)
+    if write_problem and not _segment_holds_record(target_root, config,
+                                                   story_id):
+        # This inspection commits no record of its own — the completion
+        # commit carries it — so a record that was never written has no
+        # commit to be noted against. It is named here instead, so the line
+        # missing from the corpus is said on the path every real run takes
+        # and not only on the post-story one. The segment files decide, as
+        # they do in `commit_record`, and the swallowed text is only the
+        # cause: the append projects the record before it prints, so a raise
+        # out of it after the projection leaves the record on disk, and a
+        # note saying it was not written would name a record the history
+        # holds. After `_report`, so the holding above is not cost by it,
+        # and before the findings record, which is written last for the same
+        # reason.
+        _note(run_dir, f"inspection record of {story_id} NOT written: "
+                       f"{write_problem}")
     # Last, so a failure to write the record cannot cost the holding above it.
     # The findings are written as the Inspector wrote them: nothing here
     # rewrites, rates or summarises one, because what the stage is being given
@@ -1953,6 +2073,31 @@ def held_area_suggestions(run_dir: Path, artifact: str, attempt: int) -> tuple:
     return tuple(found)
 
 
+def held_refused_area_suggestions(run_dir: Path, artifact: str,
+                                  attempt: int) -> tuple:
+    """The area suggestions the pre-stage inspection refused, as the drops
+    that inspection recorded them under.
+
+    Read back as `Drop(UNUSABLE_SUGGESTION, detail)` so the completion
+    filing's area gate reads them on the terms the inspection's own gate read
+    them: refused is still written, and written is still evidence of a
+    vocabulary. Tolerant of the key's absence — a held artifact written before
+    the key existed carries none — and of an entry that is not a string,
+    which contributes nothing. These are for the gate alone; the filing's own
+    drop count never counts them, because the inspection's line already did.
+    """
+    record = _read_record(Path(run_dir) / held_artifact_file(artifact, attempt))
+    if record is None:
+        return ()
+    entries = record.get("refused_area_suggestions")
+    if not isinstance(entries, list):
+        return ()
+    return tuple(
+        inspection.Drop(inspection.UNUSABLE_SUGGESTION, one)
+        for one in entries if isinstance(one, str)
+    )
+
+
 def remainder_findings(run_dir: Path, artifact: str, attempt: int) -> list:
     """The routed findings one attempt's verdict left unanswered.
 
@@ -2013,8 +2158,8 @@ def file_at_completion(run_dir: Path, target_root: Path, config: dict,
         print(f"the filing at completion could not run: {error}",
               file=sys.stderr)
         try:
-            _say(run_dir, f"{label}: it could not run: {error}",
-                 kind=FILED_EVENT, filed=0, dropped=0)
+            write_problem = _say(run_dir, f"{label}: it could not run: {error}",
+                                 kind=FILED_EVENT, filed=0, dropped=0)
             # The record above went into the tracked cross-run log after the
             # completion commit, so it is committed here on the terms the
             # post-story inspection's failure path commits its own: a commit
@@ -2022,7 +2167,7 @@ def file_at_completion(run_dir: Path, target_root: Path, config: dict,
             # record left uncommitted is what the next run's clean-tree
             # pre-flight refuses on.
             commit_record(run_dir, target_root, config, story_id,
-                          FILED_COMMIT_SUBJECT)
+                          FILED_COMMIT_SUBJECT, write_problem=write_problem)
         except Exception:  # noqa: BLE001 - reporting may not become the failure
             pass
 
@@ -2050,13 +2195,14 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
         # Unreachable while the inspection that held these resolved the same
         # bound, and handled anyway: nothing is filed on a bound the target got
         # wrong, and the record says so rather than obeying a default.
-        _say(run_dir,
-             f"{label}: {len(held)} held and {len(remainder)} left by the "
-             f"verdict on attempt {attempt}; 0 filed, "
-             f"{len(held) + len(remainder)} dropped: {problem}",
-             kind=FILED_EVENT, filed=0, dropped=len(held) + len(remainder))
+        write_problem = _say(
+            run_dir,
+            f"{label}: {len(held)} held and {len(remainder)} left by the "
+            f"verdict on attempt {attempt}; 0 filed, "
+            f"{len(held) + len(remainder)} dropped: {problem}",
+            kind=FILED_EVENT, filed=0, dropped=len(held) + len(remainder))
         commit_record(run_dir, target_root, config, story_id,
-                      FILED_COMMIT_SUBJECT)
+                      FILED_COMMIT_SUBJECT, write_problem=write_problem)
         return
 
     scope = inspection.Scope(
@@ -2073,9 +2219,16 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     )
     # A filed brief that named no area is said here, where the brief reached
     # the queue, on the terms `_report` says it: the suggestions travelled with
-    # the held findings for exactly this line.
+    # the held findings for exactly this line, and so did the suggestions the
+    # pre-stage reader refused — as drops under UNUSABLE_SUGGESTION, which the
+    # area gate reads as evidence of a vocabulary exactly as the inspection's
+    # own gate did. This report serves the gate alone: the line below counts
+    # the filing's own drops, because the refused suggestions were already
+    # counted on the inspection's line and would be counted twice here.
     report = inspection.Report(
-        filed=tuple(filed), dropped=tuple(dropped),
+        filed=tuple(filed),
+        dropped=tuple(dropped)
+        + held_refused_area_suggestions(run_dir, artifact, attempt),
         min_severity=bound.min_severity,
         area_suggestions=held_area_suggestions(run_dir, artifact, attempt),
     )
@@ -2090,17 +2243,14 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
         f"on attempt {attempt}; {len(filed)} filed as briefs, "
         f"{len(dropped)} dropped"
     )
-    reasons: dict = {}
-    for one in dropped:
-        reasons[one.reason] = reasons.get(one.reason, 0) + 1
-    for reason, count in reasons.items():
+    for reason, count in _drops_by_reason(dropped).items():
         line += f"; {reason}: {count}"
-    _say(run_dir, line, kind=FILED_EVENT, filed=len(filed),
-         dropped=len(dropped))
+    write_problem = _say(run_dir, line, kind=FILED_EVENT, filed=len(filed),
+                         dropped=len(dropped))
     # The record reaches the tracked cross-run log after the completion
     # commit, so it is committed the way the post-story inspection commits
     # its own: by name, and under a subject of its own.
     commit_record(run_dir, target_root, config, story_id,
-                  FILED_COMMIT_SUBJECT)
+                  FILED_COMMIT_SUBJECT, write_problem=write_problem)
 
 

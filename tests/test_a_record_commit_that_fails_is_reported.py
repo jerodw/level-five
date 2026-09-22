@@ -17,7 +17,8 @@ What this module holds the two producers to:
     and none on a dry run;
   * in narrow mode, `story_inspection.commit_record` writes one line into the
     run's events.log whenever the record was not committed — a refused
-    commit, a raise, nothing staged — and no line when it was;
+    commit, a raise, a record that was never written — and no line when it
+    was;
   * a commit that fails leaves the tree as the commit found it: the record
     modified in the working tree, nothing of it staged, and anything else
     that was staged left exactly as it was;
@@ -514,7 +515,12 @@ def test_inspect_after_story_returns_none_and_raises_nothing_on_a_refusal(
 def test_a_commit_that_stages_nothing_says_so_in_one_line(target, tmp_path):
     """Nothing written for the story, so nothing to stage: the result says
     the record was not committed, and events.log says so in exactly one line
-    carrying the result's own detail."""
+    carrying the result's own detail.
+
+    Since story-191 the commit establishes whether a record exists before it
+    stages one, so a story with no segment file is reported as a record that
+    was not written — rather than as one written and untracked — and the
+    line says so."""
     run_dir = tmp_path / STORY_ID
     run_dir.mkdir()
     config = harness_config.load_config(target)
@@ -525,7 +531,9 @@ def test_a_commit_that_stages_nothing_says_so_in_one_line(target, tmp_path):
                                               STORY_ID)
 
     assert not recorded.committed
+    assert not recorded.written
     assert recorded.detail, recorded
+    assert "tracked" not in recorded.detail, recorded
     lines = events_log_lines(run_dir)
     assert len(lines) == 1, lines
     assert STORY_ID in lines[0]
@@ -537,10 +545,15 @@ def test_a_commit_that_stages_nothing_says_so_in_one_line(target, tmp_path):
 def test_a_raise_inside_commit_record_becomes_a_noted_result(
         target, tmp_path, monkeypatch):
     """No path in `commit_record` raises to its caller: the exception is in
-    the detail and in the one line events.log gains."""
+    the detail and in the one line events.log gains.
+
+    The raise is planted in `record_paths`, which since story-191 raises
+    rather than answering no paths: it is reached on a run directory holding
+    no record, where the commit itself is not, because `commit_record` now
+    establishes whether there is a record before it stages one."""
     def raises(*_args, **_keywords):
         raise RuntimeError(RAISED)
-    monkeypatch.setattr(inspection, "commit_record_paths", raises)
+    monkeypatch.setattr(inspection, "record_paths", raises)
     run_dir = tmp_path / STORY_ID
     run_dir.mkdir()
     config = harness_config.load_config(target)

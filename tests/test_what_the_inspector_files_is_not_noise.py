@@ -720,9 +720,10 @@ DROP_TYPE_NAME = inspection.Drop.__name__
 def functions_building_the_floors_drop(source: str) -> set[str]:
     """Every function that constructs the floor's drop, by name.
 
-    A function that merely *names* the reason — the post-story summary lists
-    every reason so it can count each one — is not building the drop and is not
-    reported here, which is what makes the answer "where the floor decides".
+    A function that merely *names* the reason — as the post-story summary did
+    before story-191, when it listed every reason by hand so it could count
+    each one — is not building the drop and is not reported here, which is
+    what makes the answer "where the floor decides".
     """
     found: set[str] = set()
     for node in ast.walk(ast.parse(source)):

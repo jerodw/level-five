@@ -580,6 +580,16 @@ class Recorded:
     repaired — and that is what the detail is for: the next run's clean-tree
     pre-flight refuses on exactly that tree, and this is the one line that
     connects the refusal to the inspection that caused it.
+
+    `written` false with `committed` false is a record that never reached the
+    history, and the detail says why in the words `record` uses for that —
+    the history directory could not be written, or the declaration routes an
+    inspection to no log — so a reader is sent to the write and not to the
+    commit. A record written and not committed because the target's ignore
+    rules keep every record path out of version control carries
+    `NOT_TRACKED_DETAIL`, which is an answer git gave to `check-ignore` and
+    not an inference from a file's absence; it exists so that target is not
+    told its record failed.
     """
 
     written: bool = False
@@ -1335,23 +1345,32 @@ def reported_total(costs) -> float | None:
     return sum(reported) if reported else None
 
 
-def record_paths(target_root: Path, config: dict, *, story_id: str = "",
-                 segment: Path | None = None) -> tuple[str, ...]:
-    """The repository-relative record paths an inspection's commit stages.
+#: What a record that reached no log is reported as, by both modes: the
+#: broad mode's `record` says it where the append wrote nothing, and the
+#: narrow mode's commit says it before staging, so the two cannot word the
+#: one outcome two ways.
+NO_LOG_DETAIL = ("the record could not be written: the history declaration "
+                 "routes an inspection to no log")
 
-    Asked of the same projection the append took, the shape
+#: What a commit that had no record path to stage is reported as. It says
+#: nothing about tracking, because nothing about tracking was asked: it is
+#: the answer to a caller that named no path at all.
+NO_PATH_DETAIL = "nothing staged: no record path was named"
+
+#: What a commit whose every record path git ignores is reported as. A
+#: target whose ignore rules keep the history directory out of version
+#: control gets this rather than a git add failure, because it is what that
+#: target asked for and not a failure of anything.
+NOT_TRACKED_DETAIL = "nothing staged: no record path is tracked"
+
+
+def routed_logs() -> tuple[str, ...]:
+    """The declared logs the inspection kind can reach, by filename.
+
+    Asked of the same projection the append takes, the shape
     `plan_mandate._logs_holding` established: a declaration that stops routing
-    this kind stops staging the file, with no edit here and no log filename
+    this kind stops naming the file here, with no edit and no log filename
     written at any call site.
-
-    What is staged is the segment file the record was written to, resolved
-    through the writer-side resolver the append resolved it through. A record
-    a run wrote went to that story's own segment, so the run's producer names
-    its `story_id`. A broad-mode record went to a segment named for the moment
-    it was written, which only the append that wrote it knows, so `record`
-    passes that `segment` in. A caller naming neither is refused rather than
-    answered with a guess, because a path staged by a guess is a path nothing
-    wrote.
 
     The projection is asked with an entry carrying every field each log's
     declaration requires, so the answer is which logs this kind *can* reach
@@ -1359,12 +1378,44 @@ def record_paths(target_root: Path, config: dict, *, story_id: str = "",
     require a field only some occurrences of a kind carry — the duration log
     requires the seconds an inspection that made its invocation took — and a
     probe carrying only what every occurrence carries would leave the file the
-    real record went to unstaged. What is then staged is narrowed to the files
-    the segment holds, because an occurrence that carried less wrote to fewer
-    of them and `git add` of a path that is not there refuses the whole set.
+    real record went to unstaged.
+
+    Exposed on its own so the narrow mode's commit can ask whether the
+    declaration routes the kind anywhere before it looks for a record on disk,
+    through this derivation rather than a copy of it.
     """
     import story_coordinator
 
+    return tuple(
+        log for log, declaration in
+        story_coordinator.history_log_declarations().items()
+        if story_coordinator.history_record(
+            {"event": INSPECTION_EVENT, "timestamp": "",
+             **{field: "" for field in declaration.get("required", [])}},
+            [], "", declaration,
+        ) is not None
+    )
+
+
+def record_paths(target_root: Path, config: dict, *, story_id: str = "",
+                 segment: Path | None = None) -> tuple[str, ...]:
+    """The repository-relative record paths an inspection's commit stages.
+
+    The logs are `routed_logs` above. What is staged is the segment file the
+    record was written to, resolved through the writer-side resolver the
+    append resolved it through. A record a run wrote went to that story's own
+    segment, so the run's producer names its `story_id`. A broad-mode record
+    went to a segment named for the moment it was written, which only the
+    append that wrote it knows, so `record` passes that `segment` in. A caller
+    naming neither is refused rather than answered with a guess, because a
+    path staged by a guess is a path nothing wrote.
+
+    What is staged is narrowed to the files the segment holds, because an
+    occurrence that carried less wrote to fewer of them and `git add` of a
+    path that is not there refuses the whole set. So an empty answer where
+    `routed_logs` names a log means no segment file holds the record — which
+    the narrow mode's commit reads as a record that was not written.
+    """
     if segment is None:
         if not story_id:
             raise ValueError(
@@ -1374,19 +1425,37 @@ def record_paths(target_root: Path, config: dict, *, story_id: str = "",
         segment = harness_config.history_segment(
             harness_config.history_dir(target_root, config), story_id
         )
-    logs = [
-        log for log, declaration in
-        story_coordinator.history_log_declarations().items()
-        if story_coordinator.history_record(
-            {"event": INSPECTION_EVENT, "timestamp": "",
-             **{field: "" for field in declaration.get("required", [])}},
-            [], "", declaration,
-        ) is not None
-    ]
     return tuple(sorted(
-        str((segment / log).relative_to(target_root)) for log in logs
+        str((segment / log).relative_to(target_root)) for log in routed_logs()
         if (segment / log).is_file()
     ))
+
+
+def ignored_paths(target_root: Path, paths) -> frozenset:
+    """Which of the named repository-relative paths git ignores.
+
+    `git check-ignore` reports an untracked path an ignore rule matches and
+    says nothing about a tracked one, so a path in the answer is one `git add`
+    would refuse. The paths go in on stdin NUL-separated and come back the
+    same way, so a path carrying an unusual byte arrives as itself. Asked
+    with a fixed argument list, and a git that cannot be spawned or that
+    errors answers nothing here rather than raising: the question is a
+    courtesy before the add, and the add's own return code is still checked.
+    """
+    paths = tuple(paths)
+    if not paths:
+        return frozenset()
+    try:
+        completed = subprocess.run(  # noqa: S603 - a fixed argument list
+            ["git", "-C", str(target_root), "check-ignore", "--stdin", "-z"],
+            input="".join(f"{one}\0" for one in paths),
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return frozenset()
+    if completed.returncode not in (0, 1):
+        return frozenset()
+    return frozenset(one for one in completed.stdout.split("\0") if one)
 
 
 def _git_said(completed) -> str:
@@ -1411,20 +1480,29 @@ def commit_record_paths(target_root: Path, paths, subject: str) -> Recorded:
     nothing here retries, amends, resets past the staged paths or pushes.
 
     Returns a `Recorded` with `written` already true, since a caller reaches
-    this only once the record is on disk. Nothing staged is reported as not
-    committed too, since a record that reached no commit is not durable
-    whatever the reason — and it is what a target tracking no record path
-    gets, so the detail says so rather than calling it a failure.
+    this only once it has established the record is on disk. Nothing staged
+    is reported as not committed too, since a record that reached no commit
+    is not durable whatever the reason. Two such outcomes are not failures
+    and their details say so rather than calling them one: a caller that
+    named no path at all, and a target whose ignore rules keep every named
+    path out of version control — asked of git with `check-ignore` before
+    the add, so that target gets "no record path is tracked" rather than the
+    words `git add` would have refused it with. A caller that names no path
+    is told that and nothing about tracking, because nothing about tracking
+    was asked.
 
     This raises on nothing but a subprocess that cannot be spawned at all;
     each caller guards for that, because each producer may not raise.
     """
     paths = tuple(paths)
     if not paths:
-        return Recorded(
-            written=True, committed=False,
-            detail="nothing staged: no record path is tracked",
-        )
+        return Recorded(written=True, committed=False, detail=NO_PATH_DETAIL)
+    if ignored_paths(target_root, paths) >= frozenset(paths):
+        # Every record path is one git ignores: the target has kept its
+        # history out of version control, which is a decision and not a
+        # failure, and staging would only have git say so less clearly.
+        return Recorded(written=True, committed=False,
+                        detail=NOT_TRACKED_DETAIL)
     argv = ["git", "-C", str(target_root)]
     added = subprocess.run(  # noqa: S603 - a fixed argument list
         [*argv, "add", "--", *paths], capture_output=True, text=True
@@ -1527,8 +1605,7 @@ def record(target_root: Path, config: dict, report: Report) -> Recorded:
         return Recorded(detail=f"the record could not be written: {error}")
 
     if not written:
-        return Recorded(detail="the record could not be written: the history "
-                               "declaration routes an inspection to no log")
+        return Recorded(detail=NO_LOG_DETAIL)
     try:
         # The segment is the one the append resolved for a record with no
         # story: named for the moment it was written, so it is read off what

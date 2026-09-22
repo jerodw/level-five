@@ -2562,8 +2562,10 @@ def test_the_record_commit_is_skipped_where_it_would_stage_nothing(
     """A target that tracks no record path gains no commit.
 
     The target's own ignore rules keep the history directory out of version
-    control, so staging the record leaves the index empty — and an empty commit
-    about a record nothing tracks is a commit about nothing.
+    control. Since story-191 the commit asks git whether the record paths are
+    ignored before it stages anything, so that target is told no record path
+    is tracked — an answer git gave, not a failure — and nothing is staged: an
+    empty commit about a record nothing tracks would be a commit about nothing.
     """
     target, _journal, code, inspector, _runner = completing_run(
         tmp_path, harness, monkeypatch, name="untracked-record",
@@ -2577,6 +2579,13 @@ def test_the_record_commit_is_skipped_where_it_would_stage_nothing(
     assert head_subject(target).startswith(f"{STORY_ID}: ")
     assert story_inspection.COMMIT_SUBJECT.format(story_id=STORY_ID) not in \
         subjects(target)
+    # Told so in the run's own log as a record written and not committed,
+    # in git's answer rather than in the words a refused add would have used.
+    said = [line for line in messages(target) if "NOT committed" in line]
+    assert len(said) == 1, messages(target)
+    assert "written but NOT committed" in said[0], said
+    assert "no record path is tracked" in said[0], said
+    assert "git add failed" not in said[0], said
 
 
 def test_nothing_reads_the_record_commit_as_a_completion_or_an_escalation(
