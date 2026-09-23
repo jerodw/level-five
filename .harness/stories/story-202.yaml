@@ -1,0 +1,153 @@
+story:
+  id: story-202
+  title: A finding judged correct and too small to fail the run is repaired or dropped, never filed as a story
+  description: |
+    When the reviewer at the end of a run looks at a defect someone found in
+    the work, it can agree the defect is real and still judge it not worth
+    stopping the run for. Today, saying that sends the defect to the backlog,
+    where it becomes a planning conversation, a whole run of its own, a review
+    and a merge. That is the most expensive thing that can happen to it — far
+    more expensive than the small fix it was declined as too small for. It has
+    already happened twice: two of the eight items filed on 2026-09-21 were
+    defects a reviewer called too small to bother with, and each became a
+    tracker item waiting to turn into a story.
+
+    This story makes size a reason to fix, never a reason to file. The
+    reviewer's instructions say that a correct finding it judges small is
+    fixed here — either as wording, or as a one-file repair, both of which
+    cost no retry and no attempt — and that it may decline only for a reason
+    that is not size: the fix is a design decision the plan did not make, the
+    file is one the story was explicitly told to leave alone, or the finding
+    is wrong. Where a correct finding is too small to be worth even those
+    cheap routes, the reviewer says so in a field of its own, and the harness
+    drops it: nothing is filed for it, and the drop is recorded in the run's
+    accounting and in the line the run writes when it completes, so a reader
+    can see what was dropped and why.
+
+    It deliberately leaves the fixing routes themselves alone — the
+    one-stage-one-file bound on a repair, and the bounds on reaching outside
+    the story's declared scope. Those routes exist and work; this story is
+    only about choosing one of them. It also leaves untouched what the
+    Inspector files about code the story did not change: those are backlog
+    items by design. This story was planned from the brief filed under 270.
+
+    In the harness's own terms: the verdict schema's declined_findings items
+    gain an optional not_worth_filing string, presence-as-signal on the terms
+    every sibling field records, carrying the judgement that a correct finding
+    is beneath what this repository files a brief at — in the severity-floor
+    vocabulary prompts/inspector.md already states, reused rather than
+    reinvented. The triage paragraph of prompts/story-verifier.md and
+    prompts/refactor-verifier.md, identical between the two, stops naming
+    smallness as a ground for declining and names it as a ground for
+    correcting or repairing; the inspection-slot paragraph of both, which
+    today promises that declining sends a finding to the backlog, says that a
+    dropped one is not filed. orchestration/story_inspection.py reads the new
+    field, records the drop per finding in the accounting artifact beside the
+    reason it already records, and excludes the dropped slugs from the filing
+    at completion — in the current entry and in the earlier entries of a
+    resumed run, the way repaired slugs are already excluded — reporting them
+    as a named drop so the completion line says how many were dropped and why.
+    The drop reason is one new constant in orchestration/inspection.py beside
+    BENEATH_THE_FLOOR, where the drop vocabulary is spelled once.
+  workflow: story-workflow
+
+tasks:
+  - Add an optional not_worth_filing string to the declined_findings items of schemas/verification-result.schema.json, describing it as presence-as-signal on the terms its siblings record, and rewrite the reason description so that size is no longer offered as a ground for declining.
+  - Rewrite the triage paragraph of prompts/story-verifier.md and prompts/refactor-verifier.md, identically in both, so that a correct finding judged small is recorded as correctable or repairable where a route can take it; the grounds for declining that remain are that the fix is a design decision the plan did not make, that a reasoned do_not_modify entry protects the file, or that the finding is wrong; and a correct finding too small to be worth any route is dropped through not_worth_filing.
+  - Correct the inspection-slot paragraph of both verifier prompts, which today tells the verifier that every finding it leaves is filed at the run's completion, so that it says a finding dropped through not_worth_filing is not filed.
+  - Add a drop-reason constant to orchestration/inspection.py beside BENEATH_THE_FLOOR for a finding the verdict judged not worth filing.
+  - Read the new field in orchestration/story_inspection.py and record, for each declined finding, whether it was dropped and the text the verdict gave, alongside a list of the dropped slugs in the accounting artifact.
+  - Exclude the dropped slugs from the filing at completion, over the current entry and over the earlier entries of a resumed run, on the terms the repaired slugs are already excluded.
+  - Report the dropped findings in the completion event under the new drop reason, so a run whose whole remainder was dropped still writes its line rather than returning silently.
+  - Write a test module holding the new behaviour end to end with the fake runner, and adapt the existing modules that pin the old prompt wording and the old schema description.
+  - Record the change in .harness/docs/ARCHITECTURE.md, where the passage saying a declined finding changes nothing about what is filed now states the distinction.
+
+acceptance_criteria:
+  - The declined_findings items of schemas/verification-result.schema.json declare an optional not_worth_filing string, and the existing required set of slug and reason is unchanged.
+  - The reason description in that schema no longer offers being too small to be worth a pass as a ground, and says that size is not a reason to decline.
+  - The triage paragraph of prompts/story-verifier.md and prompts/refactor-verifier.md is identical between the two and states that a correct finding judged small is corrected or repaired where a route can take it, names the grounds for declining that are not size, and names not_worth_filing for a correct finding too small to be worth any route.
+  - Neither verifier prompt any longer offers smallness as a ground for declining a routed finding; the repairable-findings passage, which describes a finding judged correct and too small to fail the run, is unchanged.
+  - The inspection-slot paragraph of both verifier prompts says that a finding dropped through not_worth_filing is not filed at the run's completion.
+  - A run driven with the fake runner whose verdict declines a routed finding with not_worth_filing files nothing for that finding, and the accounting artifact records it as dropped together with the text the verdict gave.
+  - A run driven with the fake runner whose verdict declines a routed finding for a design decision, carrying no not_worth_filing, files it as a brief exactly as it is filed today.
+  - The completion event names the dropped findings under the new drop reason and counts them, and a run whose entire remainder was dropped still writes that event rather than returning without one.
+  - A finding an entry's verdict dropped is not recovered and filed from an earlier entry of a resumed run.
+  - A verdict carrying no not_worth_filing anywhere is accounted, filed and reported exactly as it is today, and the accounting artifact it writes is unchanged in every field that existed before this story.
+  - The existing accounting assertions in tests/test_inspection_findings_reach_the_story.py stand unweakened.
+
+technical_plan:
+  implementation_steps:
+    - In schemas/verification-result.schema.json, add not_worth_filing to the properties of a declined_findings item and rewrite the reason description; leave required as slug and reason.
+    - In prompts/story-verifier.md and prompts/refactor-verifier.md, rewrite the triage paragraph and the inspection-slot paragraph identically in both files.
+    - In orchestration/inspection.py, add the drop-reason constant beside BENEATH_THE_FLOOR with a comment saying what distinguishes it from the floor and the cap.
+    - In orchestration/story_inspection.py, add a reader for the not_worth_filing text by slug; carry it into declined_accounting so each entry says whether it was dropped; record the dropped slugs in write_accounting; and read them back through the same accessor the acted-on slugs are read through.
+    - In the filing at completion, exclude the dropped slugs from what is assembled, accumulate them over the entries as the repaired slugs are accumulated, and append a Drop under the new reason for each so the line counts and names them; adjust the early return so a run whose whole remainder was dropped still writes its event.
+    - Write the new test module and adapt the pinning modules named below.
+    - Record the behaviour in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: The new optional field on a declined finding, and the reason description that no longer admits size.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The triage paragraph and the inspection-slot paragraph carry the rule.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same two paragraphs, identical to the story verifier's.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: One drop-reason constant beside BENEATH_THE_FLOOR, where the drop vocabulary is spelled once.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Reads the new field, records the drop in the accounting, and drops rather than files at completion.
+    - file: tests/test_a_small_finding_is_repaired_or_dropped_never_filed.py
+      stage: tester
+      reason: The new module holding the rule, the accounting and the filing with the fake runner.
+    - file: tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      stage: tester
+      reason: It counts the phrase "too small" once in each verifier prompt, which the rewritten triage paragraph changes.
+    - file: tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+      stage: tester
+      reason: It asserts the decline paragraph keeps "too small" as a ground and reads the schema's reason description.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The passage saying a declined finding changes nothing about what is filed now states the distinction.
+
+scope:
+  modify:
+    - schemas/verification-result.schema.json
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - orchestration/inspection.py
+    - orchestration/story_inspection.py
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py (the declined_findings entries it writes for a refused scope extension carry no drop signal and must go on being filed exactly as they are today; nothing about refusal changes here)
+    - prompts/inspector.md (its guidance on what is worth filing is the vocabulary this story reuses, so changing it would move the thing being reused)
+    - prompts/story-implementer.md, prompts/story-tester.md, prompts/documenter.md, prompts/refactor-implementer.md (their "too small to fail the run" sentences describe the correction and repair pass records those stages are handed, not the verifier's triage, and are true as they stand)
+    - workflows/ (no stage rule, routing table or inspection declaration changes; the routes this story chooses between already exist)
+
+verification_requirements:
+  - Confirm both verifier prompts state the rule in the same words, and that neither offers smallness as a ground for declining while the repairable passage still describes a finding too small to fail the run.
+  - Confirm the schema change leaves declined_findings optional with slug and reason required, and adds the new field as optional.
+  - Confirm from the new tests that a dropped finding reaches neither the queue nor the completion filing, and that the drop is recorded in the accounting artifact with the verdict's own words.
+  - Confirm from the new tests that a finding declined for a reason that is not size is filed exactly as it is today, so the change is a distinction rather than a suppression.
+  - Confirm that a verdict carrying no not_worth_filing writes the accounting artifact and the events it wrote before this story.
+  - Confirm no existing assertion was weakened or skipped to pass, in particular in the two modules adapted for the prompt and schema wording.
+
+constraints:
+  - Nothing routes on the new field: it is read into the accounting and the filing and decides no stage, no retry and no run status.
+  - The drop must not be inferred from the prose of a decline reason; only the explicit field drops a finding, so the coordinator stays deterministic.
+  - The accounting and filing paths keep their totality: a malformed or unreadable artifact is reported and changes neither the run's status nor its exit code.
+  - A run whose verdict drops nothing leaves events.log and the accounting artifact byte-for-byte what they are today.
+  - The repair pass's one-stage-one-file bound and the scope-extension bounds are unchanged.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-23 09:59:08
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 270
