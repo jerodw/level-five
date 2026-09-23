@@ -1,0 +1,163 @@
+story:
+  id: story-205
+  title: A starting run estimates the whole story, straight through and with a retry, and says how often a retry happens
+  description: |
+    When a run starts it tells you how long each step is expected to take, but
+    it says nothing about the story as a whole. Someone who kicks off a run and
+    wants to know whether to wait for it has to add the step figures up
+    themselves, and doing that gives the wrong answer: those figures cover one
+    pass through the work, and roughly two runs in five go round again.
+
+    This story adds one line at the start of a run: how long a straight-through
+    run takes, how long one that gets sent back for another pass takes, how
+    often that happens, and the fact that the figure is working time rather
+    than clock time — a run can sit for hours waiting its turn at the test
+    machine, and a figure that did not say so would be read as wall-clock and
+    be badly wrong exactly when the machine is busy. The shape is "Estimated:
+    75 minutes, or 210 if it is sent back (about 40% are). Excludes waiting for
+    the machine." All four parts are needed: a single number would be wrong by
+    a factor of two or three, and a bare number would be misread.
+
+    The figures come from measurements the harness already keeps and a history
+    read a run already makes. Nothing about how a run behaves changes: the new
+    figure is a report to a person, and no timeout, check, retry or routing
+    decision consults it. It deliberately leaves the per-step estimates alone —
+    they predict one invocation and do that well — and it does not try to
+    predict the wait for the machine, only to say that the wait is excluded.
+
+    This story was planned from the brief filed under 333.
+
+    The line is composed from duration-log.jsonl, the cross-run log the startup
+    read in run_story already parses: records are grouped by story_id and
+    summed, giving one total per story. A story counts when the execution log
+    records it as completed, so an abandoned run's partial total does not drag
+    a median down. A story is "sent back" when its duration records hold more
+    than one record for the loaded workflow's first stage — the stage name is
+    taken off the workflow rather than written into the coordinator as a
+    literal. The straight-through figure is the median of the totals of the
+    stories that were not sent back, the second figure the median of those that
+    were, and the rate is the share that were, over the most recent stories by
+    record timestamp.
+
+    The window and the minimum are module constants beside
+    DURATION_ESTIMATE_WINDOW and DURATION_ESTIMATE_MINIMUM in
+    orchestration/story_coordinator.py, and deliberately not configuration: the
+    existing suite asserts that the target's configuration schema carries no
+    key naming an estimate, and that stays true. Where either group holds fewer
+    than the minimum the run announces nothing at all, the way a stage with too
+    little history announces nothing invented. The line is appended once, on a
+    fresh run only, under its own event kind — a resumed run would be told
+    about work it has already done — and the kind reaches the run's own event
+    stream and structured history and no cross-run log, the way the other
+    announcement kinds do.
+
+    Two existing texts state something this story makes untrue and change with
+    it. duration-log.jsonl's declaration in schemas/cross-run-history.schema.json
+    says a record is read by exactly one thing, the per-operation startup
+    estimate; there is now a second reader. The architecture document's section
+    on the per-operation estimate says the same in its own words and gains the
+    whole-story figure beside it.
+  workflow: story-workflow
+
+tasks:
+  - Derive one total per story from the duration log's records, as a pure function over those records, and classify each story as straight-through or sent back by how many records it holds for the workflow's first stage.
+  - Restrict the derivation to the stories the execution log records as completed, and to the most recent stories within a module constant's window, ordered by record timestamp rather than by file order.
+  - Render the whole-story line from the two medians and the rate, in the stated shape, with the rate rounded to the nearest five percent and the medians to whole minutes.
+  - Announce the line once at the start of a fresh run, under its own event kind, declared in the execution-history schema's event enum and routed to no cross-run log.
+  - Say nothing where either group holds fewer observations than the minimum constant, so a target with thin history announces nothing invented.
+  - Update duration-log.jsonl's declaration in schemas/cross-run-history.schema.json, which currently states that a record is read by exactly one thing.
+  - Write the standing test module for the new behaviour, and adapt any existing module whose pinned event stream the new line enters.
+  - Record the change in the architecture document beside the per-operation estimate it sits next to.
+
+acceptance_criteria:
+  - A fresh run whose history holds enough completed stories appends exactly one line at its start carrying four things: a straight-through figure in minutes, a sent-back figure in minutes, the share of runs that are sent back as a percentage, and a statement that waiting for the machine is excluded.
+  - The straight-through figure is the median of the per-story totals of the counted stories that hold one record for the workflow's first stage, and the sent-back figure is the median of the totals of those that hold more than one.
+  - A story the execution log does not record as completed contributes to neither median nor to the rate.
+  - Only the most recent stories within the window constant are counted, selected by record timestamp and not by the order the history's files or segments happen to be read in.
+  - A run whose counted history holds fewer than the minimum constant of stories in either group appends no such line at all, and every other line it appends is exactly what it was before this story.
+  - A resumed run appends no such line, whichever status it resumed from.
+  - The rate is rendered to the nearest five percent and the two figures to whole minutes.
+  - The derivation is a pure function over parsed records that the suite drives directly, and a record that is not an observation — a duration that is not a number, a timestamp that cannot be read — contributes nothing and stops nothing.
+  - No check, verdict, timeout, bound, retry or routing decision reads the whole-story figures, and two otherwise identical runs, one over a seeded duration history and one over none, reach the same stage sequence, retry count, exit code and recorded status.
+  - The window and the minimum are module constants, and the target's configuration schema carries no key for either.
+  - duration-log.jsonl's declaration no longer states that its records are read by exactly one thing, and says what the second reader derives.
+
+technical_plan:
+  implementation_steps:
+    - Add module constants for the story window and the per-group minimum beside DURATION_ESTIMATE_WINDOW and DURATION_ESTIMATE_MINIMUM, with a comment saying why each is a constant rather than configuration.
+    - Add a pure function over the duration log's parsed records, and the set of story ids that count, that returns the per-story totals split into the two groups — keyed off the first-stage name it is handed, ordered by each story's latest record timestamp, and bounded by the window.
+    - Add a pure function returning the story ids the execution log records as completed, locating that log through its declaration the way duration_log_name locates the duration log.
+    - Add the renderer for the line, its own spelling, taking the two medians and the rate and producing the stated wording; it is not estimated_run_time and does not disturb it.
+    - Declare the new event kind in schemas/execution-history.schema.json's event enum, spelled as a literal by exactly one emitter, and name it in no cross-run log's enum.
+    - Append the line in run_story where the fresh-run announcements already sit, below the startup history read that establishes the per-operation estimates, guarded by the same fresh-run condition and by both groups meeting the minimum.
+    - Rewrite the paragraph in duration-log.jsonl's declaration that says its records are read by exactly one thing.
+    - Write the standing test module and adapt the existing modules whose whole-stream assertions the new kind enters, dropping it by kind as those modules already drop the announcement kinds.
+    - Record the change in the architecture document beside the per-operation estimate section.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The derivation, the renderer, the constants and the one announcement at run start.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: The new event kind is declared in the closed event enum.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: The duration log's declaration states that its records are read by exactly one thing, which this story makes untrue.
+    - file: tests/test_a_run_estimates_the_whole_story.py
+      stage: tester
+      reason: The standing module for the split, the rate, the wording, the silence where history is thin, the resume case, and the absence of any routing on the figures.
+    - file: tests/test_an_operation_announces_what_it_has_taken_before.py
+      stage: tester
+      reason: Holds the per-operation estimate's assertions and the whole-stream assertions nearest this change; adapted only where the new kind enters a pinned stream.
+    - file: tests/test_a_run_announces_what_it_is_waiting_on.py
+      stage: tester
+      reason: Holds the announcement kinds other modules drop streams by; the new kind joins them if a pinned stream carries it.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The section on the per-operation estimate states the reader count and the estimate's scope, and gains the whole-story figure beside it.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - schemas/execution-history.schema.json
+    - schemas/cross-run-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - estimated_run_time and _with_estimate in orchestration/story_coordinator.py (the per-stage estimate predicts one invocation and does it well; this story adds a figure beside it rather than changing the one spelling of that clause)
+    - suite_turn_wait_seconds and the suite-turn wait in orchestration/story_coordinator.py (the new line says the wait is excluded and does not try to predict it; the wait's own bound is a configured count of suite runs and is not this story's subject)
+    - DURATION_ESTIMATE_WINDOW and DURATION_ESTIMATE_MINIMUM and the per-operation duration_estimates function (the whole-story figure is derived separately and must not shift the per-stage figures a run already announces)
+    - .harness/config.yaml and schemas/harness-config.schema.json (the window and the minimum are judgements about the estimate rather than about any target, and the suite already asserts the configuration schema carries no estimate key)
+    - workflows/ (this story changes what a run says, not what a run does, so no stage rule, restriction or routing table moves)
+    - prompts/ (no stage is being told anything new; the line is written by the coordinator)
+
+verification_requirements:
+  - Confirm that a fresh run over a seeded duration history appends the line once at its start and that the line carries all four parts in the stated shape.
+  - Confirm that a run over no history, or over a history too thin in either group, appends no such line and otherwise announces exactly what it announced before.
+  - Confirm that a resumed run appends no such line.
+  - Confirm that stories the execution log does not record as completed are excluded from both medians and from the rate.
+  - Confirm that the window selects by record timestamp, by driving the derivation over records whose file order disagrees with their timestamp order.
+  - Confirm that two otherwise identical runs, one over a seeded duration history and one over none, reach the same stage sequence, retry count, exit code and recorded status, and that no check, bound, timeout or routing decision reads the whole-story figures.
+  - Confirm that the new event kind is declared in the execution-history event enum, named in no cross-run log's enum, and emitted from exactly one site.
+  - Confirm that the target's configuration schema still carries no key naming an estimate.
+  - Confirm that the duration log's declaration no longer claims a single reader.
+  - Confirm the whole suite passes, including the existing module for the per-operation estimate.
+
+constraints:
+  - The figure is a report to a person and never a bound: nothing routes, stops, retries, waits or compares on it.
+  - The per-stage estimates, their renderer and their constants keep the behaviour and the wording they have.
+  - The derivation reads the history the run already read at startup and makes no second read of the history directory.
+  - The whole-story figures are not held in the module-level per-operation estimates table, which is written and read by its own two functions alone.
+  - No configuration key is added for any part of this, in the target's schema or in the shipped configuration.
+  - Standard library only, type hints on public functions, and functions small enough to read in one pass.
+  - No existing assertion is weakened or skipped; a test may bound how slow an operation is allowed to be and may not bound how slow the machine is allowed to be.
+  - The coordinator stays deterministic and makes no model call.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-23 13:34:59
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 333
