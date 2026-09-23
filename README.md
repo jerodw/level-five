@@ -149,6 +149,8 @@ The dependencies that command needs are declared in `requirements-dev.txt`, and 
 
 Install it into only the first and your local suite is green while the clean-clone check dies on an unrecognized argument, because that check runs the same command under the second interpreter. That is the failure this instruction exists to prevent.
 
+A test that asserts something is *absent* carries a demonstration that it can fail: the same check, run again over a case where the thing it looks for is present. That negative case is a mutation of a shipped file or of the reader, read back through the same reader the positive assertion runs — never a string the test built by concatenating the searched-for text onto it, which asserts a property of Python and stays green through any edit to the subject.
+
 ## Contributing and feedback
 
 This repository tracks the book through level 3, so its scope is what Part 3 and Appendix A describe. Small fixes — genuine bugs, or errors in the code and its docs — are welcome via pull request. Improvements the book's roadmap calls for are welcome as issues; they are best planned and executed through the harness itself, which is the whole point of it. Changes that would take the harness past level 3, or in a direction the book does not argue for, are out of scope here.
