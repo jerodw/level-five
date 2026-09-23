@@ -1810,7 +1810,34 @@ def declined_reasons(verdict) -> dict:
     return reasons
 
 
-def declined_accounting(remainder, reasons) -> list:
+def not_worth_filing_texts(verdict) -> dict:
+    """What the verdict's `declined_findings` said was not worth filing, by slug.
+
+    A mapping from slug to the text of that entry's `not_worth_filing`, read
+    defensively on the terms `declined_reasons` beside it states, and the
+    first entry naming a slug wins there too. The presence of a slug here is
+    the whole of the drop: a finding whose slug this mapping carries is
+    dropped rather than filed, and one it does not is filed exactly as it was
+    before the field existed. The drop is never read out of the prose of a
+    reason — only the explicit field — so the coordinator stays deterministic.
+    """
+    if not isinstance(verdict, dict):
+        return {}
+    texts: dict = {}
+    for entry in verdict.get("declined_findings") or ():
+        if not isinstance(entry, dict):
+            continue
+        slug = entry.get("slug")
+        text = entry.get("not_worth_filing")
+        if not (isinstance(slug, str) and slug):
+            continue
+        if not (isinstance(text, str) and text.strip()):
+            continue
+        texts.setdefault(slug, text)
+    return texts
+
+
+def declined_accounting(remainder, reasons, dropped=None) -> list:
     """One entry per finding the verdict left, saying why or that nothing said.
 
     Each carries the finding's slug and `reason_given`; the reason itself is
@@ -1819,13 +1846,26 @@ def declined_accounting(remainder, reasons) -> list:
     could mistake for a reason that happened to be blank. A finding carrying
     no slug cannot have been declined by name and is recorded as declined
     without a reason.
+
+    `dropped` is the mapping `not_worth_filing_texts` returns, and an entry
+    whose slug it carries records `dropped` true beside the verdict's own
+    words in `not_worth_filing` — a finding the run drops rather than files,
+    recorded here so the accounting says which of the two a left finding was
+    and the completion line can name it. A caller passing none records every
+    left finding as not dropped, which is what a verdict carrying the field
+    nowhere means, and an entry not dropped carries the boolean false and no
+    text, on the terms `reason_given` beside it already takes.
     """
+    dropped = dropped or {}
     declined: list = []
     for one in remainder:
         slug = _slug_of(one)
         entry = {"slug": slug, "reason_given": slug in reasons}
         if slug in reasons:
             entry["reason"] = reasons[slug]
+        entry["dropped"] = slug in dropped
+        if slug in dropped:
+            entry["not_worth_filing"] = dropped[slug]
         declined.append(entry)
     return declined
 
@@ -1895,13 +1935,19 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
     was given — see `declined_accounting` for the shape — and the two counts
     say how many were declined each way; a caller passing none records every
     left finding as declined without a reason, which is what a verdict
-    carrying no `declined_findings` means. `filed` and `dropped` are zero when
-    this is written, because the accounting files nothing: they are here so
-    the record and the event say the same thing. Nothing routes on any of it.
+    carrying no `declined_findings` means. Beside them `dropped_slugs` names
+    the left findings the verdict judged not worth filing, which the filing at
+    completion reads back and excludes from what it files — the counterpart of
+    `remainder_slugs`, read through the same accessor the acted-on slugs are.
+    `filed` and `dropped` are zero when this is written, because the
+    accounting files nothing: they are here so the record and the event say
+    the same thing. Nothing routes on any of it.
     """
     if declined is None:
         declined = declined_accounting(remainder, {})
     with_reason = sum(1 for one in declined if one.get("reason_given"))
+    dropped_by_verdict = [one["slug"] for one in declined
+                          if one.get("dropped") and one.get("slug")]
     try:
         path = Path(run_dir) / accounting_artifact_file(artifact, attempt)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1919,6 +1965,8 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
                     "declined": declined,
                     "declined_with_reason": with_reason,
                     "declined_without_reason": len(declined) - with_reason,
+                    "dropped_slugs": dropped_by_verdict,
+                    "dropped_by_verdict": len(dropped_by_verdict),
                     "filed": filed,
                     "dropped": dropped,
                     "reason": reason,
@@ -1997,6 +2045,51 @@ def acted_on_slugs(directory: Path, artifact: str, attempt: int) -> tuple:
     and read by nothing that routes.
     """
     return _accounting_slugs(directory, artifact, attempt, "acted_on_slugs")
+
+
+def dropped_slugs(directory: Path, artifact: str, attempt: int) -> tuple:
+    """The slugs the accounting artifact records the verdict as having judged
+    not worth filing — a finding the run drops rather than sends to the
+    backlog.
+
+    Read by the filing at completion, which excludes them from what it
+    assembles on the terms it already excludes the slugs a newer entry
+    repaired, and reports them as a named drop. Empty where no attempt was
+    accounted and where the verdict dropped nothing, and read by nothing that
+    routes.
+    """
+    return _accounting_slugs(directory, artifact, attempt, "dropped_slugs")
+
+
+def _gather_drops(into: dict, directory: Path, artifact: str,
+                  attempt: int) -> None:
+    """Add to `into` the slug and the verdict's own words for each finding one
+    attempt's accounting records as dropped, first occurrence winning.
+
+    The slugs come from `dropped_slugs`, the one accessor that answers which
+    were dropped, and the words from the `declined` entry beside them, so the
+    exclusion and the report cannot disagree about which findings they are
+    about. A slug whose entry carries no readable text is recorded with an
+    empty one: a drop with no words is still a drop and is still named.
+    """
+    named = dropped_slugs(directory, artifact, attempt)
+    if not named:
+        return
+    # In the order the accounting recorded them rather than a set's, so what
+    # the completion line names is the same on every run.
+    wanted = dict.fromkeys(named)
+    record = _read_record(
+        Path(directory) / accounting_artifact_file(artifact, attempt))
+    words: dict = {}
+    for entry in (record or {}).get("declined") or ():
+        if not isinstance(entry, dict):
+            continue
+        slug = entry.get("slug")
+        text = entry.get("not_worth_filing")
+        if isinstance(slug, str) and slug in wanted:
+            words.setdefault(slug, text if isinstance(text, str) else "")
+    for slug in wanted:
+        into.setdefault(slug, words.get(slug, ""))
 
 
 # The same guarantee a third time, for the caller that runs after the verdict
@@ -2106,9 +2199,16 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     # declined without one. This decides nothing — the remainder is the
     # remainder whether or not it was declined by name — and stops no run: it
     # makes a silent decline visible where a reader of the run looks first.
-    declined = declined_accounting(remainder, declined_reasons(verdict))
+    # Beside it, which of those left findings the verdict judged not worth
+    # filing at all. That one *is* read later — the filing at completion
+    # excludes it — so it is recorded as a slug list beside the reasons, and
+    # the drop is read off the explicit field alone rather than out of the
+    # prose of a reason.
+    declined = declined_accounting(remainder, declined_reasons(verdict),
+                                   not_worth_filing_texts(verdict))
     with_reason = sum(1 for one in declined if one["reason_given"])
     without_reason = len(declined) - with_reason
+    dropped_by_verdict = sum(1 for one in declined if one["dropped"])
 
     # The remainder is recorded and not filed. What is filed, and when, is
     # `file_at_completion`'s: it reads these slugs back off this artifact for
@@ -2123,11 +2223,16 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     # where the next says "0 held and 1 left by the verdict" cannot tell that
     # the word changed what it was about. Both sets are held for the
     # completion; only one of them is what `held` counts.
-    _say(run_dir,
-         f"{label}: {len(routed)} routed on attempt {attempt}; "
-         f"{len(acted)} acted on by the verdict, {len(remainder)} left by it "
-         f"for the run's completion, of which {with_reason} declined with a "
-         f"reason and {without_reason} declined without one; 0 filed, 0 dropped",
+    line = (f"{label}: {len(routed)} routed on attempt {attempt}; "
+            f"{len(acted)} acted on by the verdict, {len(remainder)} left by it "
+            f"for the run's completion, of which {with_reason} declined with a "
+            f"reason and {without_reason} declined without one")
+    # Named only where the verdict dropped something, so a verdict carrying the
+    # field nowhere writes exactly the line it wrote before this clause existed.
+    if dropped_by_verdict:
+        line += (f"; {dropped_by_verdict} of those the verdict judged not "
+                 f"worth filing, so nothing is filed for them")
+    _say(run_dir, line + "; 0 filed, 0 dropped",
          kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
          filed=0, dropped=0)
 
@@ -2221,6 +2326,12 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
         entry = {"slug": slug, "reason_given": slug in reasons}
         if slug in reasons:
             entry["reason"] = reasons[slug]
+        # A slug moved here was acted on by the first verdict and is left only
+        # because the coordinator refused the extension the repair needed, so
+        # it is filed rather than dropped whatever else the verdict said. The
+        # entries carried over above keep whatever they recorded, so a finding
+        # the first verdict dropped stays dropped across an amendment.
+        entry["dropped"] = False
         declined.append(entry)
     write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
                      acted_on=acted, remainder=remainder, declined=declined)
@@ -2582,18 +2693,61 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     # retried into a later one whose verdict acted on nothing. Reading that
     # entry's highest attempt alone would then find no repair, and the earlier
     # copy of a defect this run had already fixed would be filed.
+    #
+    # A finding the verdict judged not worth filing is excluded on the same
+    # terms, and in both directions rather than only over the earlier entries:
+    # size is a reason to fix or to drop and never to file, so what the verdict
+    # dropped reaches no queue from this entry or from an earlier one. The set
+    # is read off the accounting through the accessor the acted-on slugs are
+    # read through, and the drops are reported below so nothing goes silently.
+    #
+    # The drops are gathered over *every* entry before anything is filtered,
+    # where the acted-on slugs accumulate as the walk goes, and the asymmetry
+    # is the whole of what makes each right. A repair bears only on the entries
+    # older than the one that made it, so accumulating it is the direction
+    # stated above. A drop bears on the finding itself whichever entry's
+    # verdict dropped it, so gathering it as the walk goes would filter each
+    # entry against the drops of the entries newer than it alone — and an
+    # entry's own dropped finding, whose drop is recorded in that same entry,
+    # would be filed by the pass that reads it and then named as dropped on
+    # the line that filed it.
+    closed = [(directory, found)
+              for directory, found in
+              ((one, _attempts_holding(one, artifact))
+               for one in entry_directories(run_dir))
+              if found]
+    dropped_why: dict = {}
+    for one in attempts:
+        _gather_drops(dropped_why, run_dir, artifact, one)
+    for directory, found in closed:
+        for one in found:
+            _gather_drops(dropped_why, directory, artifact, one)
+    dropped_by_verdict = set(dropped_why)
+
+    # What the line below opens with is counted before the filter rather than
+    # after it, so it reports what the verdict left rather than what survived
+    # being dropped — the number the accounting event of the same attempt
+    # records, so the two lines of one run agree. The drop clause beneath
+    # accounts for the difference; counting the filtered lists there would give
+    # a reader two numbers for one quantity in one sentence, worst on the run
+    # whose whole remainder was dropped, which is the run that writes a line
+    # rather than returning silently.
+    held_count = len(held)
+    remainder_count = len(remainder)
+
+    held = [one for one in held if _slug_of(one) not in dropped_by_verdict]
+    remainder = [one for one in remainder
+                 if _slug_of(one) not in dropped_by_verdict]
     repaired: set = set()
     for one in attempts:
         repaired.update(acted_on_slugs(run_dir, artifact, one))
     earlier: list = []
-    for directory in entry_directories(run_dir):
-        found = _attempts_holding(directory, artifact)
-        if not found:
-            continue
+    for directory, found in closed:
         contributed = (held_findings(directory, artifact, found[-1])
                        + remainder_findings(directory, artifact, found[-1]))
         earlier.extend(one for one in contributed
-                       if _slug_of(one) not in repaired)
+                       if _slug_of(one) not in repaired
+                       and _slug_of(one) not in dropped_by_verdict)
         suggestions[:0] = held_area_suggestions(directory, artifact, found[-1])
         refused.extend(
             held_refused_area_suggestions(directory, artifact, found[-1]))
@@ -2608,7 +2762,25 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     current = _deduped(held + remainder)
     assembled = _deduped(held + remainder + earlier)
     from_earlier = len(assembled) - len(current)
-    if not assembled:
+
+    # One named drop per finding the verdict judged not worth filing, carrying
+    # the verdict's own words, so the line below says how many were dropped and
+    # why rather than reporting a smaller filing with nothing to account for
+    # the difference. They are drops of this filing and not of the inspection
+    # that found them: the inspection counted them among what it routed, and
+    # this is where they stopped.
+    drops = [
+        inspection.Drop(
+            inspection.NOT_WORTH_FILING,
+            f"{slug}: {why}" if why else slug,
+        )
+        for slug, why in dropped_why.items()
+    ]
+    # A run whose whole remainder was dropped has nothing to assemble and
+    # something to say, so the event is written on what there is to report
+    # rather than on what there is to file. A run with neither returns having
+    # written nothing, exactly as it did before.
+    if not assembled and not drops:
         return
 
     # What every line below opens with, composed once so the two cannot
@@ -2617,7 +2789,8 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     # has only its earlier entries to file from — and the earlier-entry clause
     # where there were none, which is what keeps a run that was never
     # interrupted writing exactly the line it wrote before.
-    head = f"{label}: {len(held)} held and {len(remainder)} left by the verdict"
+    head = (f"{label}: {held_count} held"
+            f" and {remainder_count} left by the verdict")
     if attempt:
         head += f" on attempt {attempt}"
     if from_earlier:
@@ -2628,10 +2801,12 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
         # Unreachable while the inspection that held these resolved the same
         # bound, and handled anyway: nothing is filed on a bound the target got
         # wrong, and the record says so rather than obeying a default.
+        line = f"{head}; 0 filed, {len(assembled) + len(drops)} dropped: {problem}"
+        if drops:
+            line += (f"; {inspection.NOT_WORTH_FILING}: {len(drops)}")
         write_problem = _say(
-            run_dir,
-            f"{head}; 0 filed, {len(assembled)} dropped: {problem}",
-            kind=FILED_EVENT, filed=0, dropped=len(assembled))
+            run_dir, line,
+            kind=FILED_EVENT, filed=0, dropped=len(assembled) + len(drops))
         commit_record(run_dir, target_root, config, story_id,
                       FILED_COMMIT_SUBJECT, write_problem=write_problem)
         return
@@ -2648,6 +2823,12 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
         target_root, [_Routed(one, scope) for one in assembled],
         bound.max_findings, min_severity=bound.min_severity,
     )
+    # The verdict's own drops join the filing's, so the line below counts and
+    # names both and a reader meets one account of what did not reach the
+    # queue. They are ordered after the filing's for the reason the remainder
+    # is ordered after the held findings: the order is the order they were
+    # decided in.
+    dropped = list(dropped) + drops
     # A filed brief that named no area is said here, where the brief reached
     # the queue, on the terms `_report` says it: the suggestions travelled with
     # the held findings for exactly this line, and so did the suggestions the

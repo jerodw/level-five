@@ -1305,9 +1305,14 @@ def test_the_default_paragraph_extends_an_out_of_scope_fix_rather_than_declining
     assert "extended" in default
     assert "rather than declined" in default
     assert "declined_findings" in default
-    # The right to decline is kept for a finding too small or wrong, once.
+    # The right to decline is kept, and the phrase naming size appears once.
+    # Since story-202 size is no longer one of the grounds — a correct finding
+    # judged small is corrected or repaired, and one too small to be worth
+    # either is dropped — so the phrase this reads for is the drop's, and
+    # wrongness is named as the ground it still is in the words the paragraph
+    # now uses rather than the ones it used when the two were listed together.
     assert RIGHT_TO_DECLINE in default
-    assert "or wrong" in default
+    assert "the finding is wrong" in default
     assert "no single stage can make in one file" not in default
 
 

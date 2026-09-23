@@ -3338,6 +3338,25 @@ DECLARED_HISTORY_READERS = {
         "directory and one editing it — so an empty diff here is the story "
         "having left those paths alone rather than a range bounded at the "
         "wrong commits",
+    "test_a_small_finding_is_repaired_or_dropped_never_filed.py":
+        "two of its assertions are about this repository's own text as it "
+        "stood before the story that made size a reason to fix: that the "
+        "repairable-findings passage of each shipped verifier prompt did not "
+        "move, and that the accounting artifact still carries every field it "
+        "carried, whose names are read out of write_accounting's own source "
+        "rather than listed — a list would be a second copy of the answer and "
+        "would go stale the moment a field is added for any other reason. No "
+        "constructed repository holds the text this deployment shipped, and "
+        "both reads are through the shared reader at the module's own story "
+        "bound rather than against HEAD or the working tree, which would go "
+        "vacuously green the moment the story is committed. Each has its "
+        "control beside it: the passage comparison is re-run against that same "
+        "baseline text with one word of the passage changed and must differ, "
+        "and the field set is required non-empty and to have grown, so an "
+        "empty diff is the passage having been left alone rather than a range "
+        "bounded at the wrong commits. Everything else in the module reads the "
+        "shipped prompts and schema as its subject or runs against the "
+        "sibling modules' built workflow",
     "test_baseline_honesty.py":
         "its regression set is committed evidence rather than a constructed "
         "fixture: the five known vacuous assertions are recovered from this "

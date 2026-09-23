@@ -84,19 +84,28 @@ attempt produced, injected below — is corrected or repaired unless there is a
 reason not to. The default runs that way because of what each route costs: a
 declined routed finding becomes a brief, a planning interview, a whole story
 run, a review and a merge, where a repair pass spends no retry, archives no
-attempt and leaves the verdict recorded as passed. You keep the right to
-decline one — a finding can be correct and still be too small to fail the run,
-or wrong — but a fix that is only out of scope is not a reason: a routed
-finding whose fix lives in a file the story did not declare is extended
-rather than declined, on the terms the repairable paragraph below gives, and
-one that matters more than a pass is a blocking issue. A declined routed
-finding is recorded rather than silent: name its slug and the reason in
-declined_findings, so the verdict says why it was not acted on. Nothing routes on that array, and a routed
-finding no entry names is filed as a brief at the run's completion whether or
-not it is declined there. The two routes for a finding you act on without
-failing the run are correctable_findings, for a fix to the words alone, and
-repairable_findings, for a fix that is not — and either is open to a finding
-of your own as much as to a routed one.
+attempt and leaves the verdict recorded as passed. Size is therefore a reason
+to fix rather than a reason to decline: a routed finding you judge correct and
+too small to fail the run is recorded as correctable where a correction to the
+words alone carries it, and as repairable where one stage can make the fix in
+the file it names.
+You keep the right to decline one, and the grounds that remain are not size —
+the fix is a design decision the plan did not make, a reasoned do_not_modify
+entry protects the file, or the finding is wrong on the evidence. A fix that is
+only out of scope is not a reason either: a routed finding whose fix lives in a
+file the story did not declare is extended rather than declined, on the terms
+the repairable paragraph below gives, and one that matters more than a pass is
+a blocking issue. A declined routed finding is recorded rather than silent:
+name its slug and the reason in declined_findings, so the verdict says why it
+was not acted on. Where a finding is correct and smaller than either of those
+cheap routes is worth, say so in that entry's not_worth_filing and the harness
+drops it: nothing is filed for it, and the drop is recorded in the accounting
+and in the line the run writes when it completes. Nothing routes on that array,
+and a routed finding no entry names is filed as a brief at the run's completion
+whether or not it is declined there. The two routes for a finding you act on
+without failing the run are correctable_findings, for a fix to the words alone,
+and repairable_findings, for a fix that is not — and either is open to a
+finding of your own as much as to a routed one.
 
 Record in correctable_findings a finding you judge correct, that one stage can
 fix mechanically, and whose repair is to the words alone — a comment, a
@@ -376,9 +385,11 @@ after your verdict, every finding here whose slug no entry names is
 filed as a brief at the run's completion, so declining one sends it to the
 backlog rather than losing it — and the accounting records, for each one
 left, the reason your declined_findings gave for its slug or that none was
-given, so a decline with no entry is recorded as silent. A finding you act on
-without naming its slug is filed too, as a duplicate a person closes rather
-than a loss:
+given, so a decline with no entry is recorded as silent. One left finding is
+not filed: one your declined_findings dropped through not_worth_filing, which
+the harness drops rather than sending to the backlog, recording the drop and
+what you said about it. A finding you act on without naming its slug is filed
+too, as a duplicate a person closes rather than a loss:
 {{inspection_findings}}
 
 Repository standards:

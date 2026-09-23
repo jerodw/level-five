@@ -270,6 +270,17 @@ UNKNOWN_WORKFLOW = "names a workflow the harness does not define"
 #: not crowded out by findings that mattered more.
 BENEATH_THE_FLOOR = "beneath the severity floor"
 
+#: The finding is real and correct and the verdict that read it judged it
+#: beneath what this repository files a brief at. Distinct from the floor above
+#: and from the cap below, because a reader is owed which bound decided: the
+#: floor reads the severity the Inspector rated, the cap excluded what was
+#: crowded out by findings that mattered more, and this is a judgement a
+#: verifier made about one finding after reading the change it is about. The
+#: drop is never inferred from the prose of a decline: only the verdict's
+#: explicit not_worth_filing drops a finding, so the coordinator stays
+#: deterministic.
+NOT_WORTH_FILING = "the verdict judged it not worth filing"
+
 PAST_THE_CAP = "past the cap"
 #: The sibling of `findings` an envelope may carry: what the Inspector could
 #: name no area for. Spelled once here, because the envelope schema declares it
