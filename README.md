@@ -43,7 +43,7 @@ Everything below arrived as a story the harness planned, executed, verified and 
 
 **The outbox.** Work to file externally goes to a durable local queue first and reaches a tracker on a sweep, so a provider that is slow or unreachable can never turn a finished story into a failed one. Entries are deduplicated by identity, receipts are kept apart from the queue, and a partly-filed entry says so. *(Ch. 17)*
 
-**Observability.** `l5-status` reports runs and their stages. Every run leaves its state, the same events in two renderings, a record of every retry, and the artifacts each stage produced. Long steps announce themselves before they start and say how long they are expected to take, from what they have taken before; a fresh target with no history announces nothing invented. What a run and an inspection cost is recorded where a reader meets it. *(Ch. 18)*
+**Observability.** A run opens by saying what the whole story is expected to take — the time if it goes straight through, the time if it is sent back, and how often that happens — taken over the stories the history already holds and excluding time spent waiting for the machine; a target with too few stories to say so is told nothing. `l5-status` reports runs and their stages. Every run leaves its state, the same events in two renderings, a record of every retry, and the artifacts each stage produced. Long steps announce themselves before they start and say how long they are expected to take, from what they have taken before; a fresh target with no history announces nothing invented. What a run and an inspection cost is recorded where a reader meets it. *(Ch. 18)*
 
 ## What's next
 
