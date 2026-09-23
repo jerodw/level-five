@@ -21,6 +21,7 @@
         "description": "What kind of event this is.",
         "enum": [
           "workflow-started",
+          "whole-story-estimated",
           "resumed",
           "stage-started",
           "stage-completed",

@@ -1257,6 +1257,14 @@ def set_history_past_bound(counts: dict[str, int], bound: object = None) -> None
 # no check compares against it, and a step that runs past it is a step,
 # running. Where too few observations exist the step says exactly what it said
 # before, so a fresh target announces nothing invented.
+#
+# The same records answer a second question, which a run says once at its
+# start: how long the whole story takes. Adding the per-step figures up gives
+# the wrong answer, because they cover one pass through the work and some runs
+# go round again — so the whole-story figures are taken per story rather than
+# per step, from the stories the execution log records as completed, split by
+# whether the story was sent back. That line is a report to a person on
+# exactly the terms above: nothing routes, waits, stops or compares on it.
 
 #: How many of an operation's most recent observations an estimate is the
 #: median of. A module constant rather than configuration: the window decides
@@ -1267,6 +1275,27 @@ DURATION_ESTIMATE_WINDOW = 10
 #: How many observations an operation needs before a figure is announced at
 #: all. Below it the step announces what it announced before this existed.
 DURATION_ESTIMATE_MINIMUM = 3
+
+#: How many of the most recent stories the whole-story figures are taken over,
+#: ordered by each story's latest duration record. A module constant rather
+#: than configuration, for the reason the per-operation window is one: it
+#: decides how quickly the two figures and the rate follow a change in the
+#: machine, in the suite or in how stories are planned, which is a judgement
+#: about the estimate rather than about any target.
+WHOLE_STORY_ESTIMATE_WINDOW = 20
+
+#: How many stories each group — the ones that went straight through, and the
+#: ones that were sent back — needs before the whole-story line is announced
+#: at all. Below it in either group the run says nothing, the way a step with
+#: too little history announces nothing invented. A constant rather than
+#: configuration for the same reason the window is one.
+WHOLE_STORY_ESTIMATE_MINIMUM = 3
+
+#: The status an execution-log record carries for a story whose run finished.
+#: A story counts toward the whole-story figures only where the execution log
+#: records it under this status, so an abandoned run's partial total does not
+#: drag a median down.
+COMPLETED_EXECUTION_STATUS = "completed"
 
 #: The fixed operation names for the checks and the inspection. A stage's
 #: operation is its own name, so it is not spelled here.
@@ -1401,6 +1430,161 @@ def _with_estimate(message: str, estimate: float | None) -> str:
     if estimate is None:
         return message
     return f"{message} {estimated_run_time(estimate)}"
+
+
+@dataclass(frozen=True)
+class WholeStoryTotals:
+    """The per-story totals the whole-story figures are taken over, split by
+    whether the story was sent back for another pass.
+
+    Each entry is one story's whole working time in seconds — every timed
+    operation of that story's run added up. The split is by how many records
+    the story holds for the workflow's first stage: one and it went straight
+    through, more than one and it went round again. A story holding none of
+    that stage's records is in neither group and in neither denominator, since
+    nothing about it says which way it went.
+    """
+
+    straight_through: list[float]
+    sent_back: list[float]
+
+
+def execution_log_name(declarations: dict[str, dict]) -> str | None:
+    """The declared log whose record shape says what point an execution
+    reached.
+
+    Located through the declaration and never by filename, exactly as
+    `duration_log_name` locates the duration log: the log is the one whose
+    `status` property admits the value a finished run is recorded under, so a
+    deployment that named the file differently would still be read.
+    """
+    for name, declaration in declarations.items():
+        status = declaration.get("properties", {}).get("status", {})
+        if COMPLETED_EXECUTION_STATUS in status.get("enum", []):
+            return name
+    return None
+
+
+def completed_story_ids(reading: "HistoryReading") -> set[str]:
+    """The stories the execution log records as having completed.
+
+    These are the stories that count toward the whole-story figures. A run
+    that escalated, paused or was abandoned leaves duration records for the
+    operations it did make, and summing those would report a story that did
+    less work as a story that took less time.
+    """
+    log = execution_log_name(history_log_declarations())
+    if log is None:
+        return set()
+    completed: set[str] = set()
+    for path, lines in reading.files.items():
+        if path.name != log:
+            continue
+        for _, record in lines:
+            if not isinstance(record, dict):
+                continue
+            if record.get("status") != COMPLETED_EXECUTION_STATUS:
+                continue
+            story = record.get("story_id")
+            if isinstance(story, str) and story:
+                completed.add(story)
+    return completed
+
+
+def whole_story_totals(
+    records: Iterable[object], counted: set[str], first_stage: str
+) -> WholeStoryTotals:
+    """Per-story totals from the duration log's parsed records, split by
+    whether the story was sent back.
+
+    Pure over its inputs. A record belongs to a story through its own
+    `story_id`; only the stories `counted` names contribute, the stories are
+    ordered by each one's latest record timestamp — never by file order, since
+    a log is gathered from segments whose names do not sort in time order —
+    and the most recent `WHOLE_STORY_ESTIMATE_WINDOW` are kept. `first_stage`
+    is the name the loaded workflow gives its first stage rather than a
+    literal, so the classification follows the definition the run executes.
+    A record that is not an observation contributes nothing and stops nothing.
+    """
+    seconds: dict[str, float] = {}
+    entries: dict[str, int] = {}
+    latest: dict[str, float] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        observed = _observation(record)
+        if observed is None:
+            continue
+        when, operation, took = observed
+        story = record.get("story_id")
+        if not isinstance(story, str) or story not in counted:
+            continue
+        seconds[story] = seconds.get(story, 0.0) + took
+        latest[story] = max(latest.get(story, when), when)
+        if operation == first_stage:
+            entries[story] = entries.get(story, 0) + 1
+    recent = sorted(latest, key=lambda story: (latest[story], story))
+    straight_through: list[float] = []
+    sent_back: list[float] = []
+    for story in recent[-WHOLE_STORY_ESTIMATE_WINDOW:]:
+        passes = entries.get(story, 0)
+        if passes == 1:
+            straight_through.append(seconds[story])
+        elif passes > 1:
+            sent_back.append(seconds[story])
+    return WholeStoryTotals(straight_through, sent_back)
+
+
+def whole_story_run_time(
+    straight_through: float, sent_back: float, rate: float
+) -> str:
+    """The line a starting run says about the story as a whole.
+
+    All four parts are needed and none stands alone: one number would be
+    wrong by a factor of two or three for whichever kind of run it did not
+    describe, and a bare figure would be read as clock time, which is badly
+    wrong exactly when the machine is busy and a run sits waiting its turn.
+    The rate is rounded to the nearest five percent because the history behind
+    it does not support a finer one, and the two figures to whole minutes.
+    This is the one spelling of the form; it is not `estimated_run_time`,
+    which says what one operation takes, and it does not disturb it.
+    """
+    straight_minutes = max(1, round(straight_through / 60))
+    sent_minutes = max(1, round(sent_back / 60))
+    share = 5 * round(rate * 100 / 5)
+    unit = "minute" if straight_minutes == 1 else "minutes"
+    return (
+        f"Estimated: {straight_minutes} {unit}, or {sent_minutes} if it is "
+        f"sent back (about {share}% are). Excludes waiting for the machine."
+    )
+
+
+def whole_story_estimate(
+    reading: "HistoryReading", first_stage: str
+) -> str | None:
+    """The whole-story line this run announces, or None where it announces
+    none.
+
+    Composed from the startup read the run already makes, so nothing here
+    reads the history a second time. Where either group holds fewer than
+    `WHOLE_STORY_ESTIMATE_MINIMUM` stories there is nothing to say and None is
+    what a target with thin history gets, the way a step with too few
+    observations announces what it announced before this existed.
+    """
+    totals = whole_story_totals(
+        history_duration_records(reading),
+        completed_story_ids(reading),
+        first_stage,
+    )
+    if (len(totals.straight_through) < WHOLE_STORY_ESTIMATE_MINIMUM
+            or len(totals.sent_back) < WHOLE_STORY_ESTIMATE_MINIMUM):
+        return None
+    counted = len(totals.straight_through) + len(totals.sent_back)
+    return whole_story_run_time(
+        float(statistics.median(totals.straight_through)),
+        float(statistics.median(totals.sent_back)),
+        len(totals.sent_back) / counted,
+    )
 
 
 def history_log_declarations(harness_root: Path | None = None) -> dict[str, dict]:
@@ -10867,6 +11051,26 @@ def run_story(
         f"{resolution.identity or 'an identity the mandate does not name'}",
         kind="note",
     )
+
+    # What the whole story is expected to take, said once and only on a fresh
+    # run: a resumed run would be told about work it has already done. It is
+    # composed from the startup read above — the same records the per-stage
+    # estimates come from, read once — and from the workflow's own first stage
+    # rather than a name written here, so the classification follows the
+    # definition this run executes. A history too thin in either group says
+    # nothing at all, which is every target that has not run stories here.
+    #
+    # Its own kind, so a reader of the stream can tell it from the notes
+    # beside it, and it reaches this run's events.log and structured history
+    # and no cross-run log: what the whole story takes is derived from the
+    # durable records rather than being a second durable record itself.
+    # Nothing reads it back — no timeout, check, bound, retry or routing
+    # decision consults these figures, and a run over a seeded history takes
+    # exactly the route the same run over none takes.
+    if fresh_run:
+        whole_story = whole_story_estimate(history_read, stage_names[0])
+        if whole_story is not None:
+            append_event(run_dir, whole_story, kind="whole-story-estimated")
 
     # The opportunistic sweep, below every refusing pre-flight and above the
     # first stage invocation. Every check above this point refuses — the
