@@ -31,13 +31,15 @@ story that asked for it, both because the repository moved between the
 planning and the writing:
 
   * the story asks that the implementer's rendering name "the stage that
-    writes test-results.json" as one of the three whole-suite runs. Since
-    story-066 that stage runs no suite at all: the coordinator runs the
-    configured command as a subprocess once the stage's turn has ended. The
-    rendering names it that way, so that is what is asserted — the run was
-    moved from the stage to the coordinator, not narrowed, and the count of
-    whole-suite runs after the implementer is checked against the workflow's
-    own declarations rather than against a number written here.
+    writes test-results.json" as one of the whole-suite runs. Since story-066
+    that stage runs no suite at all: the coordinator runs the configured
+    command as a subprocess once the stage's turn has ended. The rendering
+    names it that way, so that is what is asserted — the run was moved from
+    the stage to the coordinator, not narrowed. The rendering no longer states
+    how many whole-suite runs follow the implementer, and what stands where
+    that count was checked is the list itself: every declaration the workflow
+    puts after the implementer has to be named in the passage, derived from
+    the definition rather than written out here.
   * the story asks that the tester prompt still instruct the stage to run the
     full suite. story-066 deliberately removed that instruction, and
     `tests/test_coordinator_runs_the_suite.py` holds the prompt to its
@@ -50,8 +52,10 @@ Every absence asserted here carries a demonstration that the same check reports
 when the text it looks for is present or removed, as the case may be: the
 whole-suite scan is run again over a rendering with the removed directive
 planted back into it, the selection count is run again over that same planted
-rendering, and the three-checks scan is run again over a rendering with the
-passage naming them cut out.
+rendering, the scan for the checks is run again over a rendering with the
+passage naming them cut out, and the derivation that holds the passage to the
+workflow's declarations is run again both over that cut and over a passage
+with one stage's attribution reworded away.
 
 Nothing here asserts that a stage *followed* either instruction. There is no
 deterministic check for that, and this module does not build one that looks
@@ -246,35 +250,53 @@ WHOLE_SUITE_DIRECTIVES = (
 THE_SELECTION = "the tests your change touches"
 THE_DIRECTIVE_TAIL = "before completing"
 
-#: The three whole-suite runs the rendering has to name, by the words it names
-#: each of them with. The middle one is a coordinator subprocess rather than a
-#: stage's own command since story-066, and the rendering says so.
+#: The whole-suite runs the rendering has to name, by the words it names each
+#: of them with — one entry per run that follows the implementer, which for the
+#: revert check means one entry per stage declaring it. Two of them are
+#: coordinator subprocesses rather than a stage's own command since story-066,
+#: and the rendering says so. No count is written beside this list and none is
+#: asserted from it: what the passage is held to is the workflow's
+#: declarations, below.
 THE_CHECKS = (
     "revert check",
+    "the tester's revert check",
+    "the documenter's",
     "the stage that authors the validation",
     "clean-clone check",
 )
 
 #: The workflow declarations that put a whole-suite run after the implementer.
-#: One per check named above, and the count of them is what the rendering's own
-#: "three times" is checked against — a number in prose beside a number nothing
-#: checks is the pair that goes stale, so here it is checked.
+#: Each one the workflow declares from the implementer's stage onward has to be
+#: named in the passage, and which words name it is decided by the two entries
+#: below — a list in prose beside the declarations it is a list of is the pair
+#: that goes stale, so here the pairing is checked rather than described.
 WHOLE_SUITE_DECLARATIONS = ("revert_check", "suite_run", "clean_clone")
 
-#: Of those, the one a stage declares about its own writing: the revert check
+#: Of those, the one a stage declares about its own writing: a revert check
 #: runs on the edits of the stage that declares it, only when that stage makes
-#: one, and the passage names it that way — "with *your* edits reverted". So
-#: the implementer's count carries the implementer's own and not another
-#: stage's, while `suite_run` and `clean_clone` put the whole tree, the
-#: implementer's work in it, to the suite wherever they are declared. Since
-#: story-106 a second stage declares a revert check, which is what makes the
-#: distinction load-bearing rather than academic.
+#: one. So the passage has to name it once per declaring stage and say whose
+#: edits each run reverts — the reader's own as "your edits", another stage's
+#: by that stage's name — while `suite_run` and `clean_clone` put the whole
+#: tree, the implementer's work in it, to the suite wherever they are declared
+#: and are named once each by the words they carry below. Since story-106 a
+#: second stage declares a revert check and since story-044 a third, which is
+#: what makes the distinction load-bearing rather than academic: naming the
+#: revert check once would leave the other declaring stages' runs unnamed.
 DECLARED_ABOUT_THE_DECLARING_STAGE = ("revert_check",)
 
-#: Enough number words to say what the count above comes to. A count that grew
-#: past this fails as a missing key rather than as a silent mismatch.
-NUMBER_WORDS = {1: "once", 2: "twice", 3: "three times", 4: "four times",
-                5: "five times"}
+#: The words the passage names a declaration by when it is not one stage's own
+#: — one per declaration key, looked for whichever stage carries it. A key
+#: added to `WHOLE_SUITE_DECLARATIONS` and not here fails loudly as a missing
+#: key rather than quietly as a declaration nothing looks for.
+NAMED_BY_DECLARATION = {
+    "suite_run": "the stage that authors the validation",
+    "clean_clone": "clean-clone check",
+}
+
+#: How the passage names the reader's own revert check: the edits it reverts
+#: are the reader's, so the prose says whose they are rather than naming a
+#: stage at a reader who is standing in it.
+THE_READERS_OWN = "your edits"
 
 
 def whole_suite_directives(prose: str) -> list[str]:
@@ -287,8 +309,44 @@ def whole_suite_directives(prose: str) -> list[str]:
 
 
 def checks_named(prose: str) -> list[str]:
-    """Which of the three whole-suite runs a text names. Likewise a list."""
+    """Which of the whole-suite runs a text names. Likewise a list."""
     return [phrase for phrase in THE_CHECKS if phrase in prose]
+
+
+def namings_required(workflow: dict) -> list[tuple[str, str, str]]:
+    """Every whole-suite run the workflow puts after the implementer, as the
+    kind of naming it takes, a label for it, and the words that name it.
+
+    Derived from the definition rather than listed: a workflow that declared
+    one more, or moved one to a stage that runs before the implementer, changes
+    what the passage is required to say without anything here being edited.
+    """
+    stages = workflow["stages"]
+    implementing = next(stage for stage in stages
+                        if stage["prompt"] == IMPLEMENTER_TEMPLATE)
+    order = [stage["name"] for stage in stages]
+    required = []
+    for stage in stages[order.index(implementing["name"]):]:
+        for key in WHOLE_SUITE_DECLARATIONS:
+            if key not in stage:
+                continue
+            label = f"{stage['name']}.{key}"
+            if key not in DECLARED_ABOUT_THE_DECLARING_STAGE:
+                required.append(
+                    ("wherever it is declared", label, NAMED_BY_DECLARATION[key]))
+            elif stage["name"] == implementing["name"]:
+                required.append(("the reader's own", label, THE_READERS_OWN))
+            else:
+                required.append(("another stage's", label, f"{stage['name']}'s"))
+    return required
+
+
+def namings_missing_from(prose: str, workflow: dict) -> list[str]:
+    """Which of those a text does not name. A list rather than an assertion so
+    the same derivation can be made of a text that names none of them, which is
+    what the controls need."""
+    return [label for _, label, naming in namings_required(workflow)
+            if naming not in prose]
 
 
 def with_the_removed_directive(prose: str) -> str:
@@ -302,19 +360,32 @@ def with_the_removed_directive(prose: str) -> str:
     return f"{prose} {planted}"
 
 
-def without_the_checks_passage(renderings: Renderings) -> str:
-    """The implementer's rendering with the passage naming the checks cut out.
+def passage_bounds(raw: str, test_command: str) -> tuple[int, int]:
+    """Where the passage about the whole suite begins and ends in a rendering.
 
     Bounded by the rendered test command at one end and the layer header that
-    follows the stage layer at the other, so the cut is anchored on the
-    prompt's own structure rather than on a sentence of the passage it removes
-    — a control anchored on the text it is demonstrating the absence of would
+    follows the stage layer at the other, so the span is anchored on the
+    prompt's own structure rather than on a sentence of the passage itself — a
+    control anchored on the text it is demonstrating the absence of would
     report whether the anchor was there rather than whether the check works.
     """
-    raw = renderings.raw(IMPLEMENTER_TEMPLATE)
-    start = raw.index(renderings.test_command) + len(renderings.test_command)
+    start = raw.index(test_command) + len(test_command)
     end = raw.index(RUNTIME_LAYER)
     assert start < end, "the stage layer does not precede the runtime layer"
+    return start, end
+
+
+def the_checks_passage(raw: str, test_command: str) -> str:
+    """That span, flattened and lowercased. The same bounds the cut below uses,
+    so what is read and what is removed are one span of the prompt."""
+    start, end = passage_bounds(raw, test_command)
+    return flat(raw[start:end]).lower()
+
+
+def without_the_checks_passage(renderings: Renderings) -> str:
+    """The implementer's rendering with the passage naming the checks cut out."""
+    raw = renderings.raw(IMPLEMENTER_TEMPLATE)
+    start, end = passage_bounds(raw, renderings.test_command)
     return raw[:start] + "\n\n" + raw[end:]
 
 
@@ -327,6 +398,20 @@ def implementer(renderings) -> str:
     anything about which tests are to be run.
     """
     return renderings.prose(IMPLEMENTER_TEMPLATE).lower()
+
+
+@pytest.fixture
+def passage(renderings) -> str:
+    """The stage layer's passage about the whole suite, on its own.
+
+    The subject of the derivation below is this span rather than the whole
+    rendering: the schema the coordinator injects names a stage of its own for
+    reasons that have nothing to do with which runs follow the implementer, and
+    a derivation reading the whole prompt would take that mention as the
+    passage having named a run it never names.
+    """
+    return the_checks_passage(renderings.raw(IMPLEMENTER_TEMPLATE),
+                              renderings.test_command)
 
 
 def test_the_rendering_directs_no_run_of_the_whole_suite(implementer):
@@ -376,9 +461,9 @@ def test_the_rendering_names_the_test_command_once(renderings, implementer):
 
 
 def test_the_rendering_names_each_whole_suite_check_that_follows_it(implementer):
-    """The three runs of the whole suite that stand between this stage and the
-    story completing, each named, so the narrowing above is legible as
-    delegation rather than as coverage given up."""
+    """The runs of the whole suite that stand between this stage and the story
+    completing, each named, so the narrowing above is legible as delegation
+    rather than as coverage given up."""
     assert checks_named(implementer) == list(THE_CHECKS)
 
 
@@ -399,39 +484,65 @@ def test_that_scan_reports_a_rendering_with_the_passage_cut_out(
         flat(without_the_checks_passage(renderings))
 
 
-def test_the_rendering_states_as_many_whole_suite_runs_as_the_workflow_declares(
-    renderings, implementer,
+def test_the_rendering_names_every_whole_suite_run_the_workflow_declares_after_it(
+    renderings, passage,
 ):
-    """The number in the prose, held to the number of declarations behind it.
+    """The list in the prose, held to the declarations behind it.
 
-    The prompt tells the implementer how many times the whole suite runs after
-    it. That is a count beside something it does not sit next to, so it is held
-    with an assertion rather than with prose: a workflow that gained or lost a
-    coordinator-run whole-suite check reddens here instead of leaving the
-    prompt quietly claiming the old number.
+    The prompt used to tell the implementer how many times the whole suite runs
+    after it, and the count was held here against the declarations. The count
+    is gone from the prose — a number written beside the list it counts is the
+    pair that goes stale — so what is held here is the list itself: every
+    declaration the workflow puts from the implementer's stage onward has to be
+    named in the passage, so a workflow that gained or lost a coordinator-run
+    whole-suite check reddens here instead of leaving the prompt naming a stale
+    set.
 
-    A revert check declared on another stage is that stage's and is not
-    counted here — see `DECLARED_ABOUT_THE_DECLARING_STAGE` for why — so the
-    control that the exclusion is a rule and not a way of arriving at the
-    number already in the prose is the assertion beneath it: counting every
-    declaration wherever it sits comes to *more* than the passage names, so
-    the exclusion is subtracting something real. A deployment where it
-    subtracted nothing reddens there rather than passing as a rule that had
-    quietly stopped applying to anything.
+    Which words name a declaration depends on whose work it puts to the suite —
+    see `DECLARED_ABOUT_THE_DECLARING_STAGE` — and the second assertion is what
+    keeps that rule from being a way of arriving at whatever the prose happens
+    to say: all three kinds of naming occur under this deployment, so the rule
+    is discriminating rather than applying to nothing. The third is why it
+    matters, since the passage naming a revert check once would leave the other
+    declaring stages' runs unnamed.
     """
-    stages = renderings.workflow["stages"]
-    implementing = next(stage for stage in stages
-                        if stage["prompt"] == IMPLEMENTER_TEMPLATE)
-    declared = sum(
-        1 for stage in stages for key in WHOLE_SUITE_DECLARATIONS
-        if key in stage and (key not in DECLARED_ABOUT_THE_DECLARING_STAGE
-                             or stage["name"] == implementing["name"]))
-    assert declared == len(THE_CHECKS)
-    assert f"runs {NUMBER_WORDS[declared]} after you" in implementer
+    required = namings_required(renderings.workflow)
+    assert namings_missing_from(passage, renderings.workflow) == []
 
-    everywhere = sum(1 for stage in stages
-                     for key in WHOLE_SUITE_DECLARATIONS if key in stage)
-    assert everywhere > declared
+    kinds = {kind for kind, _, _ in required}
+    assert kinds == {"the reader's own", "another stage's",
+                     "wherever it is declared"}
+
+    per_stage = [label for kind, label, _ in required
+                 if kind != "wherever it is declared"]
+    assert len(per_stage) > 1, per_stage
+
+
+def test_that_derivation_reports_a_passage_that_stopped_naming_one(
+    renderings, passage,
+):
+    """The control for the derivation above, in both directions it can fail.
+
+    First over the rendering with the whole passage cut out, where every run
+    the workflow declares has to be reported — so the derivation is reading
+    this span and not some other mention of the same words elsewhere in the
+    prompt. Then over the same passage with one stage's attribution reworded
+    into an anonymous one, where exactly that stage's run has to be reported
+    and no other — so the derivation tells one declaring stage from another
+    rather than being satisfied by any revert check being named at all.
+    """
+    cut = the_checks_passage(without_the_checks_passage(renderings),
+                             renderings.test_command)
+    assert cut.strip() == ""
+    assert namings_missing_from(cut, renderings.workflow) == \
+        [label for _, label, _ in namings_required(renderings.workflow)]
+
+    kind, label, naming = next(
+        entry for entry in namings_required(renderings.workflow)
+        if entry[0] == "another stage's")
+    anonymous = passage.replace(naming, "that stage's")
+    assert anonymous != passage, (kind, naming)
+    assert namings_missing_from(anonymous, renderings.workflow) == [label]
 
 
 def test_the_whole_suite_still_runs_after_the_stage_that_authors_validation(

@@ -54,18 +54,19 @@ Run the tests your change touches before completing — the modules the
 story's plan names, and the modules whose subject is the code you changed:
 {{test_command}}
 
-Not the whole suite. It runs three times after you, on the whole of it, and
-all three are coordinator subprocesses rather than an agent's own command:
-the revert check re-runs it with your edits under a governed path reverted,
-the coordinator runs it again once the stage that authors the validation has
-ended its turn, and the clean-clone check runs it in a fresh clone with the
-story committed. At this repository's
+Not the whole suite. The whole of it runs after you, and every one of those
+runs is a coordinator subprocess rather than an agent's own command: the
+revert check re-runs it with your edits under a governed path reverted; the
+tester's revert check and the documenter's each re-run it with that stage's
+edits outside its confinement reverted; the coordinator runs it again once
+the stage that authors the validation has ended its turn; and the clean-clone
+check runs it in a fresh clone with the story committed. At this repository's
 size the whole suite takes over ten minutes, and a stage that starts a
 ten-minute command late in its turn can end the turn still waiting for it,
 having produced nothing. Run what tells you your change is sound and leave
 the rest to the checks that own it.
 
-The first of those three re-runs can often be answered by one test instead.
+The revert check on your own edits can often be answered by one test instead.
 If your record names an edit the revert check governs, and you know a single
 test that passes on the tree you are leaving and fails once that edit is
 reverted, name it in your record's optional

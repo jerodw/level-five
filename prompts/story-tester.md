@@ -37,6 +37,20 @@ sent back to that stage rather than your edit standing. Either way your changed-
 record must name the edit — the record is left exactly as you wrote it and
 the revert is recorded beside it.
 
+That check can often be answered by one test instead of by the whole suite.
+If your changed-files record names an edit outside the paths this stage is
+confined to, and you know a single test that passes on the tree you are
+leaving and fails once that edit is reverted, name it in your record's
+optional test_that_fails_without_this_change field — the changed-files
+schema below says what a nomination must satisfy and what it is worth. The
+check runs that one test in both trees and takes pass-then-fail as its
+answer; anything else falls through to the whole suite, so naming one costs
+at most one extra selector run and naming none costs nothing at all. What a
+nomination buys a stage confined to one place is the decision in seconds
+rather than a whole-suite run, and, where the suite did need the edit, a
+faster hand-off to the stage that owns the work. It does not let the edit
+stand: the edit is undone either way, as the paragraph above says.
+
 Name a validation module for the behaviour it validates, so that a reader
 looking for that behaviour finds the module by its name rather than by
 searching for it.

@@ -1,0 +1,12 @@
+{"story_id": "story-201", "operation": "implementer", "duration_seconds": 426.66, "timestamp": "2026-09-23 10:36:23"}
+{"story_id": "story-201", "operation": "suite-run", "duration_seconds": 445.888, "timestamp": "2026-09-23 11:08:56"}
+{"story_id": "story-201", "operation": "tester", "duration_seconds": 1391.739, "timestamp": "2026-09-23 11:08:56"}
+{"story_id": "story-201", "operation": "documenter", "duration_seconds": 114.739, "timestamp": "2026-09-23 11:10:51"}
+{"story_id": "story-201", "operation": "inspection", "duration_seconds": 223.137, "timestamp": "2026-09-23 11:14:34"}
+{"story_id": "story-201", "operation": "verifier", "duration_seconds": 486.265, "timestamp": "2026-09-23 11:18:57"}
+{"story_id": "story-201", "operation": "clean-clone", "duration_seconds": 455.502, "timestamp": "2026-09-23 11:26:33"}
+{"story_id": "story-201", "operation": "suite-run", "duration_seconds": 428.493, "timestamp": "2026-09-23 11:41:09"}
+{"story_id": "story-201", "operation": "tester", "duration_seconds": 876.344, "timestamp": "2026-09-23 11:41:09"}
+{"story_id": "story-201", "operation": "documenter", "duration_seconds": 70.81, "timestamp": "2026-09-23 11:42:20"}
+{"story_id": "story-201", "operation": "verifier", "duration_seconds": 247.875, "timestamp": "2026-09-23 11:46:28"}
+{"story_id": "story-201", "operation": "clean-clone", "duration_seconds": 427.721, "timestamp": "2026-09-23 11:56:01"}

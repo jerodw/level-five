@@ -275,22 +275,26 @@ def test_documenter_prompt_requires_the_record_with_the_schema_injected(harness_
     assert "{{changed_files_schema}}" in prompt
 
     fields = _changed_files_fields(harness_root)
-    # The absence: the template restates no field of the schema it injects.
-    assert _fields_stated_in_prose(prompt, fields) == []
+    required = _changed_files_required_fields(harness_root)
+    assert required
+    # The absence: the template restates no field of the record's own shape
+    # beside the schema it injects. Scoped to the fields a record must carry,
+    # because since story-201 both confined stages' templates name the optional
+    # nomination field on purpose — a stage cannot be told it may nominate a
+    # test without the field it names one in being named — while the shape of
+    # the record itself is still stated once, in the injection.
+    assert _fields_stated_in_prose(prompt, required) == []
     # Two controls for that absence. The first is a template that does state
     # the fields — the tester's, which lists them rather than injecting them —
     # and the second is this same template with the schema pasted in where the
     # placeholder stands. Both must be reported, or the check above is passing
-    # because it has stopped seeing field names at all.
-    # The tester's template lists the fields a record must carry; an optional
-    # one it has no reason to mention is not what this control is about, so it
-    # is held to the required set rather than to every declared property. Still
-    # an equality, and still non-empty, which is the whole of what it has to be
-    # to show the scan has not stopped seeing field names.
+    # because it has stopped seeing field names at all. The first is held to
+    # the same required set the absence is, so the two are the same question
+    # asked of two templates; the second stays an equality against every
+    # declared property, so the scan is shown still seeing the optional field
+    # the absence above no longer asks about.
     tester_prompt = (harness_root / "prompts" / "story-tester.md").read_text()
-    required = _changed_files_required_fields(harness_root)
-    assert required
-    assert _fields_stated_in_prose(tester_prompt, fields) == required
+    assert _fields_stated_in_prose(tester_prompt, required) == required
     pasted = prompt.replace(
         "{{changed_files_schema}}",
         (harness_root / "schemas" / "changed-files.schema.json").read_text(),
