@@ -38,12 +38,16 @@ Every absence asserted here carries a demonstration that it can fail:
     scan over a copy of each shipped file with a comment and a closing keyword
     planted in it, and beside a driven copy whose close call carries a
     comment, which the same reading of the recorded call reports;
-  * "neither configured value is written down" sits beside the same search
-    over a copy of the script carrying a fallback, the value interpolated from
-    the configuration rather than spelled here;
+  * "neither configured value is written down" sits beside the same reader run
+    over a throwaway copy of the script carrying a fallback, the value
+    interpolated from the configuration rather than spelled here — one reader,
+    so a reader that had stopped seeing anything reddens the control;
   * "an artifact mentioning the field only in prose resolves nothing" sits
     beside the same artifact with the field added at column zero, which
     resolves;
+  * "no run line interpolates the merged ref into the command" sits beside the
+    same readers over a copy of the definition written the interpolated way,
+    which report it;
   * every declaration read out of the shipped workflow definition sits beside
     the same reader over a copy with that declaration removed.
 
@@ -525,6 +529,70 @@ def test_a_state_that_could_not_be_read_is_loud(tmp_path):
     assert [call[:2] for call in made] == [["issue", "view"]], made
 
 
+#: How the state read asks for the state, as the tracker receives it: the one
+#: field, and the field's own value rather than the object carrying it. Both
+#: are load-bearing — everything the script decides afterwards compares what it
+#: captured against the bare word the second flag leaves behind, and a read
+#: that came back as `{"state":"OPEN"}` would be neither open nor closed to it.
+STATE_READ = ["--json", "state", "--jq", ".state"]
+
+
+def viewed(ledger: Path) -> list[list[str]]:
+    """Every state read the script made, as the tracker was given it."""
+    return [call for call in calls(ledger) if call[:2] == ["issue", "view"]]
+
+
+def test_the_state_read_asks_for_the_one_field_and_for_its_value(tmp_path):
+    """Driven rather than read off the script's source: the argument list the
+    tracker was handed carries the key and both flags, so what is asserted is
+    the call the script makes rather than a line somebody could rewrite into a
+    comment. The control is below."""
+    environment, ledger = a_tracker(tmp_path, issues={BRIEF_KEY: "OPEN"})
+    root = a_target(tmp_path, "state-read", prefix=INVENTED_PREFIX,
+                    stories_dir=INVENTED_STORIES_DIR,
+                    artifacts={STORY_ID: an_artifact(brief_key=BRIEF_KEY)})
+
+    result = drive(root, INVENTED_PREFIX + STORY_ID, environment)
+
+    assert result.returncode == 0, result.stderr
+    assert viewed(ledger) == [["issue", "view", BRIEF_KEY, *STATE_READ]]
+
+
+@pytest.mark.parametrize("dropped", [
+    pytest.param(["--json", "state"], id="the-field-selector"),
+    pytest.param(["--jq", ".state"], id="the-value-selector"),
+])
+def test_a_copy_dropping_either_flag_is_reported_by_that_reading(tmp_path,
+                                                                 dropped):
+    """The control for the drive above.
+
+    A copy of the script differing only in the flag its state read carries is
+    installed and driven, and the same reading of the recorded call must
+    report it — so the argument list asserted above is a property of the
+    shipped script rather than of a stub that discards what it was given or a
+    reading that would have passed for any call at all.
+    """
+    environment, ledger = a_tracker(tmp_path, issues={BRIEF_KEY: "OPEN"})
+    root = a_target(tmp_path, "-".join(dropped).strip("-."),
+                    prefix=INVENTED_PREFIX,
+                    stories_dir=INVENTED_STORIES_DIR,
+                    artifacts={STORY_ID: an_artifact(brief_key=BRIEF_KEY)})
+    installed = root / SCRIPT_REL
+    source = installed.read_text(encoding="utf-8")
+    without = source.replace(" " + " ".join(dropped), "", 1)
+    assert without != source, dropped
+    installed.write_text(without, encoding="utf-8")
+
+    result = drive(root, INVENTED_PREFIX + STORY_ID, environment)
+
+    assert result.returncode == 0, result.stderr
+    made = viewed(ledger)
+    assert len(made) == 1, made
+    assert made != [["issue", "view", BRIEF_KEY, *STATE_READ]], made
+    for flag in dropped:
+        assert flag not in made[0], (flag, made)
+
+
 # --------------------------------------------------------------------------
 # 4. Nothing references the pull request to the issue
 # --------------------------------------------------------------------------
@@ -630,6 +698,17 @@ def test_this_target_configures_both_values_the_script_reads():
         assert isinstance(value, str) and value.strip(), key
 
 
+def writing_down(text: str, value: str) -> list[str]:
+    """Every line of a file that writes a configured value down.
+
+    The one reader for this question: the assertion about the shipped files
+    and the control below are the same call, so a reader that had stopped
+    seeing anything — a value it never looks for, a split that yields no
+    lines — turns the control red instead of turning the assertion green.
+    """
+    return [line for line in text.splitlines() if value in line]
+
+
 @pytest.mark.parametrize("key", [BRANCH_PREFIX_KEY, STORIES_DIR_KEY])
 @pytest.mark.parametrize("shipped", [SCRIPT, DEFINITION],
                          ids=lambda path: path.name)
@@ -639,7 +718,7 @@ def test_neither_configured_value_is_written_down_in_the_change(shipped: Path,
     it a second time, which is the rule story-134 established."""
     value = THIS_TARGETS_CONFIG[key]
     text = shipped.read_text(encoding="utf-8")
-    assert value not in text, (shipped.name, key)
+    assert writing_down(text, value) == [], (shipped.name, key)
     # And the key itself is named, so the file is silent about the value
     # because it reads it rather than because it is silent about the whole
     # subject. The definition names neither, which the script's reads cover.
@@ -648,15 +727,29 @@ def test_neither_configured_value_is_written_down_in_the_change(shipped: Path,
 
 
 @pytest.mark.parametrize("key", [BRANCH_PREFIX_KEY, STORIES_DIR_KEY])
-def test_the_same_search_reports_a_fallback_planted_in_the_script(key: str):
-    """The negative control: a copy of the script carrying a default for the
-    value — the second writing-down the rule forbids — is found by the same
-    search. The value is interpolated from the configuration rather than
-    spelled here, so this control writes nothing down either."""
+def test_the_same_reader_reports_a_fallback_planted_in_a_copy(key: str,
+                                                              tmp_path: Path):
+    """The negative control for the silence above.
+
+    A throwaway copy of the shipped script with a default for the value
+    appended — the second writing-down the rule forbids — is read back off
+    disk by the reader the assertion above runs, which must report the line it
+    was planted on. The copy is read rather than the text held in memory, and
+    the value is interpolated from the configuration rather than spelled here,
+    so this control writes nothing down either.
+    """
     value = THIS_TARGETS_CONFIG[key]
-    planted = SCRIPT_SOURCE + f'\n{key}="${{{key}:-{value}}}"\n'
-    assert value in planted
-    assert value not in SCRIPT_SOURCE
+    copy = tmp_path / SCRIPT.name
+    shutil.copy2(SCRIPT, copy)
+    # The copy is the shipped script, so the reader is silent about it too:
+    # what the planting changes is the one line, and this is what says so.
+    assert writing_down(copy.read_text(encoding="utf-8"), value) == []
+
+    fallback = f'{key}="${{{key}:-{value}}}"'
+    copy.write_text(copy.read_text(encoding="utf-8") + f"\n{fallback}\n",
+                    encoding="utf-8")
+
+    assert writing_down(copy.read_text(encoding="utf-8"), value) == [fallback]
 
 
 def test_the_script_follows_the_configuration_it_was_installed_beside(tmp_path,
@@ -791,8 +884,102 @@ def test_the_definition_invokes_the_script_this_story_ships():
     assert os.access(SCRIPT, os.X_OK), SCRIPT
 
 
+#: The expression the definition takes the merged branch name from. A name
+#: GitHub defines rather than one this module invents, which is why it can be
+#: written here: what the rule forbids writing down is what this deployment
+#: configured, and this is the event payload's own spelling.
+HEAD_REF = "github.event.pull_request.head.ref"
+
+
 def test_the_branch_the_step_hands_the_script_is_the_pull_requests_head():
-    assert "github.event.pull_request.head.ref" in DEFINITION_SOURCE
+    assert HEAD_REF in DEFINITION_SOURCE
+
+
+def branch_variable(text: str) -> str | None:
+    """The environment variable a step puts the merged head branch into."""
+    found = re.search(
+        rf"(?m)^\s+([A-Z][A-Z0-9_]*):\s*\$\{{\{{\s*{re.escape(HEAD_REF)}\s*\}}\}}\s*$",
+        text)
+    return found.group(1) if found else None
+
+
+def interpolating_run_lines(text: str) -> list[str]:
+    """Every command line the definition builds by interpolating into it."""
+    return [line for line in run_lines(text) if "${{" in line]
+
+
+def test_the_head_branch_reaches_the_script_through_the_environment():
+    """A branch name is somebody else's text, and a runner holding a token
+    with `issues: write` is where that matters: a name written to look like
+    shell reaches the step as the value of a variable, which is a string, and
+    not as characters pasted into the command line before it runs. The
+    controls are below."""
+    variable = branch_variable(DEFINITION_SOURCE)
+    assert variable is not None, DEFINITION_SOURCE
+
+    invocations = [line for line in run_lines(DEFINITION_SOURCE)
+                   if SCRIPT_REL in line]
+    assert len(invocations) == 1, invocations
+    assert f'"${variable}"' in invocations[0], invocations
+    assert interpolating_run_lines(DEFINITION_SOURCE) == []
+
+
+def test_the_same_readers_report_a_copy_written_the_interpolated_way(tmp_path):
+    """The control for the assertion above.
+
+    A copy of the shipped definition with the environment entry removed and
+    the ref interpolated straight into the command line — the form the comment
+    in that file exists to warn against — written out and read back by the
+    same two readers, which must report both halves of it. Silence over the
+    shipped definition is then that file's own shape rather than a reader
+    matching nothing.
+    """
+    variable = branch_variable(DEFINITION_SOURCE)
+    interpolated = DEFINITION_SOURCE.replace(f'"${variable}"',
+                                             "${{ " + HEAD_REF + " }}")
+    assert interpolated != DEFINITION_SOURCE
+    copy = tmp_path / DEFINITION.name
+    copy.write_text(re.sub(rf"(?m)^\s+{variable}:.*\n", "", interpolated),
+                    encoding="utf-8")
+    written = copy.read_text(encoding="utf-8")
+
+    assert branch_variable(written) is None
+    reported = interpolating_run_lines(written)
+    assert [line for line in reported if SCRIPT_REL in line] == reported
+    assert reported
+
+
+#: A story id written to look like shell: command substitution in both
+#: spellings, a statement separator, a background operator and a subshell.
+#: What a hostile branch name on a merged pull request would carry.
+A_STORY_ID_WRITTEN_LIKE_SHELL = "invented-$(echo one)-`echo two`;&()"
+
+
+def test_a_branch_written_to_look_like_shell_is_a_string_the_script_is_given(
+        tmp_path, tracker):
+    """The other half of the defence, driven rather than read.
+
+    The definition hands the name over as a variable's value; this is what the
+    script does with such a name once it has it. The name is carried whole
+    into the sentence the script prints, which is a name it passed around as
+    data — a name any of these characters had been acted on would have come
+    back out of the shell changed, shortened or not at all.
+    """
+    for character in "$`();&":
+        assert character in A_STORY_ID_WRITTEN_LIKE_SHELL, character
+
+    environment, ledger = tracker
+    root = a_target(tmp_path, "shell-shaped-branch", prefix=INVENTED_PREFIX,
+                    stories_dir=INVENTED_STORIES_DIR,
+                    artifacts={STORY_ID: an_artifact(brief_key=BRIEF_KEY)})
+
+    result = drive(root, INVENTED_PREFIX + A_STORY_ID_WRITTEN_LIKE_SHELL,
+                   environment)
+
+    assert result.returncode == 0, result.stderr
+    assert (f"{INVENTED_STORIES_DIR}/{A_STORY_ID_WRITTEN_LIKE_SHELL}.yaml"
+            in result.stderr), result.stderr
+    assert calls(ledger) == []
 
 
 #: Each declaration the definition makes, and a rewriting of the shipped text

@@ -371,9 +371,10 @@ def test_the_helper_is_where_the_route_is_and_is_exempt_for_that_reason():
 # 3. Each converted site, shown reporting inconclusive
 #
 # Every case below constructs the miss rather than waiting for one: a command
-# that backgrounds nothing, a child whose source cannot announce, a session
-# that never writes, a child that never exits, and commands that sleep past the
-# bound their landing half needs them to finish inside.
+# that backgrounds nothing, a pid file a redirect opened and nothing wrote
+# into, a child whose source cannot announce, a session that never writes, a
+# child that never exits, and commands that sleep past the bound their landing
+# half needs them to finish inside.
 # --------------------------------------------------------------------------
 
 
@@ -405,6 +406,47 @@ def test_a_command_that_backgrounds_no_child_is_inconclusive(tmp_path):
     with pytest.raises(pytest.skip.Exception) as raised:
         transport_module.spawned_child_pid(tmp_path / "child.pid")
     assert "backgrounded" in reported(raised)
+
+    # The control the report needs: the same helper, against a pid file that
+    # was written, hands back the pid. So the report above is the precondition
+    # being missed rather than a helper that reports whatever it is given.
+    recorded = tmp_path / "recorded.pid"
+    recorded.write_text("4242\n", encoding="utf-8")
+    assert transport_module.spawned_child_pid(recorded) == 4242
+
+
+def test_a_pid_file_the_redirect_only_opened_is_inconclusive(tmp_path):
+    """The other way the precondition is missed, which is the one that ended a
+    run: the path is there and holds nothing.
+
+    `echo $! >` creates and truncates the pid file before it writes into it, so
+    a leader killed at the bound partway through that redirect leaves the path
+    behind holding the empty string. Nothing says that to the transport's
+    helper except this case: the absent-path case beside it leaves no path at
+    all, and every other caller hands it a path a pid was written into. What it
+    must do with an empty one is what it does with an absent one -- report that
+    the child was never backgrounded -- because a pid is what the group
+    assertion needs and there is none here either way.
+
+    The path is read back afterwards to say which of the two states was driven:
+    a helper changed to ask whether the path exists would find this one there
+    and hand back whatever it read, and a `recorded_pid` changed to raise on
+    the empty string would come out of here as a ValueError rather than as the
+    report. Neither passes this case.
+    """
+    opened = tmp_path / "opened.pid"
+    opened.write_text("", encoding="utf-8")
+
+    with pytest.raises(pytest.skip.Exception) as raised:
+        transport_module.spawned_child_pid(opened)
+    reason = reported(raised)
+    assert "backgrounded" in reason
+    assert f"{transport_module.SPAWN_BOUND_SECONDS:g}s" in reason
+
+    # The state this case is about, read back off the tree it drove against:
+    # the path is there, and what it holds is nothing.
+    assert opened.is_file()
+    assert opened.read_text(encoding="utf-8") == ""
 
     # The control the report needs: the same helper, against a pid file that
     # was written, hands back the pid. So the report above is the precondition

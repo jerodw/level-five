@@ -50,10 +50,14 @@ Every absence asserted here carries a demonstration that it can fail:
     a copy whose manifest is broken, which fails;
   * "nothing beneath the stories directory was written" sits beside the same
     snapshot comparison with a file planted there, which reports it;
-  * "the skill names what this story put in it" sits beside the same searches
-    over a rendering of the prompt with those words taken out, which report
-    every one of them absent, so a search that has stopped seeing anything is
-    told apart from a prompt that says it.
+  * "the skill names what this story put in it", and the same of the assist
+    prompt, each sit beside the same reader and the same searches over a copy
+    of that shipped file with the block stating those things cut out of it —
+    the skill below its frontmatter, the prompt from the paragraph that
+    introduces briefs onwards. Each search must report its phrase absent and
+    must go on finding what survived the cut, so a search that has stopped
+    seeing anything is told apart from a file that says it, and a statement
+    made somewhere other than where the cut was taken reddens the control.
 
 Nothing here invokes a model: the one inspection driven below goes through the
 fake runner `tests/test_inspection.py` already provides.
@@ -1305,7 +1309,39 @@ def collapsed(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
-SKILL_SAID = collapsed(SKILL_TEXT)
+def said_by(path: Path) -> str:
+    """A shipped prose file, read and collapsed into what is searched.
+
+    One reader for the shipped file and for the mutated copy of it below, so
+    the control puts the same question to a file that no longer states these
+    things — and a reader that had stopped seeing anything reddens the
+    control rather than passing the assertion.
+    """
+    return collapsed(path.read_text(encoding="utf-8"))
+
+
+def stripped_to(path: Path, opening: str, copy: Path) -> Path:
+    """`path` with everything from `opening` onwards cut out, written to `copy`.
+
+    The cut is structural and is made without reference to any phrase being
+    searched for: the block that states these things begins at `opening` and
+    runs to the end of the file, and what is written out is the shipped file
+    with that block gone and the rest of it byte for byte.
+    """
+    text = path.read_text(encoding="utf-8")
+    kept = text[:text.index(opening)]
+    assert kept.strip(), (path, opening)
+    copy.write_text(kept, encoding="utf-8")
+    return copy
+
+
+SKILL_SAID = said_by(SKILL_PATH)
+
+#: Where the skill's prose begins. Everything the skill states about filing a
+#: brief is below this line, and the frontmatter above it is what the control
+#: keeps — which is what lets the same reading be shown still working on the
+#: copy it reports nothing else in.
+SKILL_PROSE_OPENS = "\n# "
 
 #: What the skill must state, keyed by what the story requires it to state.
 #: Each value is the phrases that must all appear; the key is why.
@@ -1331,19 +1367,29 @@ def test_the_skill_states_what_the_filing_procedure_requires(requirement):
         assert phrase in SKILL_SAID, (requirement, phrase)
 
 
-def test_the_same_searches_report_a_rendering_with_each_statement_removed():
+@pytest.mark.parametrize("requirement", sorted(SKILL_STATES),
+                         ids=sorted(SKILL_STATES))
+def test_the_same_searches_report_a_skill_stripped_of_its_prose(requirement,
+                                                                tmp_path):
     """The control for the searches above.
 
-    Every phrase is stripped out of a rendering of the skill and the same
-    searches are run over it; each must report its absence. A search that has
-    stopped seeing anything reports nothing whatever the skill says.
+    A copy of the shipped skill with its prose cut off below the frontmatter,
+    read back off disk by the same reader and searched the same way: every
+    phrase must be reported absent, and the reading must go on finding what
+    the frontmatter still carries. So a green search over the shipped skill is
+    the skill saying these things rather than a search that has stopped seeing
+    anything — and a phrase the frontmatter turned out to carry would redden
+    this rather than pass unnoticed above.
     """
-    for requirement, phrases in SKILL_STATES.items():
-        stripped = SKILL_SAID
-        for phrase in phrases:
-            stripped = stripped.replace(phrase, "")
-        for phrase in phrases:
-            assert phrase not in stripped, (requirement, phrase)
+    said = said_by(stripped_to(SKILL_PATH, SKILL_PROSE_OPENS,
+                               tmp_path / SKILL_PATH.name))
+
+    for phrase in SKILL_STATES[requirement]:
+        assert phrase not in said, (requirement, phrase)
+
+    # The same reading, over the same copy, still reports what survived the
+    # cut: the skill's own declared name.
+    assert SKILL_NAME.lower() in said
 
 
 def test_the_skill_names_the_entry_point_and_reports_its_three_suppressions():
@@ -1422,7 +1468,14 @@ def test_both_rules_report_a_violation_planted_in_a_copy_of_that_skill(
 # ==========================================================================
 
 ASSIST_PROMPT_REL = "prompts/assist.md"
-ASSIST_NOW = (REPO_ROOT / ASSIST_PROMPT_REL).read_text(encoding="utf-8")
+ASSIST_PATH = REPO_ROOT / ASSIST_PROMPT_REL
+ASSIST_NOW = ASSIST_PATH.read_text(encoding="utf-8")
+
+#: Where everything the prompt says about briefs begins. The paragraph that
+#: introduces them and everything after it is the block these statements are
+#: made in; what stands above it is the prompt's own role and investigation
+#: material, which the control keeps.
+ASSIST_BRIEF_BLOCK_OPENS = "When you propose a harness improvement"
 
 #: What the brief shape story-094 and story-098 put in the prompt rests on, and
 #: what this story adds beside it. Asserted of the prompt as it reads today
@@ -1443,24 +1496,35 @@ ASSIST_STATES = {
 def test_the_assist_prompt_states_the_shape_and_names_where_filing_happens(
         requirement):
     """The brief shape stays where it is and the skill joins it."""
-    said = collapsed(ASSIST_NOW)
+    said = said_by(ASSIST_PATH)
 
     for phrase in ASSIST_STATES[requirement]:
         assert phrase in said, (requirement, phrase)
 
 
-def test_the_same_searches_report_a_prompt_with_each_statement_removed():
+@pytest.mark.parametrize("requirement", sorted(ASSIST_STATES),
+                         ids=sorted(ASSIST_STATES))
+def test_the_same_searches_report_a_prompt_without_its_brief_block(requirement,
+                                                                   tmp_path):
     """The control for the searches above.
 
-    Every phrase is taken out of a rendering of the prompt and the same
-    searches are run over it; each must report its absence. A search that has
-    stopped seeing anything reports nothing whatever the prompt says.
+    A copy of the shipped prompt with the block that introduces briefs, and
+    everything after it, cut away — read back off disk by the same reader and
+    searched the same way. Every phrase must be reported absent, and the
+    reading must go on finding what the prompt still says above the cut, so a
+    green search over the shipped prompt is the prompt saying these things
+    rather than a search that has stopped seeing anything.
     """
-    said = collapsed(ASSIST_NOW)
+    said = said_by(stripped_to(ASSIST_PATH, ASSIST_BRIEF_BLOCK_OPENS,
+                               tmp_path / ASSIST_PATH.name))
 
-    for requirement, phrases in ASSIST_STATES.items():
-        stripped = said
-        for phrase in phrases:
-            stripped = stripped.replace(phrase, "")
-        for phrase in phrases:
-            assert phrase not in stripped, (requirement, phrase)
+    for phrase in ASSIST_STATES[requirement]:
+        assert phrase not in said, (requirement, phrase)
+
+    # The same reading, over the same copy, still reports what survived the
+    # cut: the prompt's own opening line, lowercased rather than put through
+    # `collapsed`, so a collapsing that had stopped returning anything cannot
+    # satisfy this check with an empty needle as well as an empty haystack —
+    # the same shape the skill control beside this one has in `SKILL_NAME`.
+    assert said
+    assert ASSIST_NOW.splitlines()[0].lower() in said

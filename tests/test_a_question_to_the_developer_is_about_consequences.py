@@ -36,12 +36,24 @@ Every absence asserted here carries a demonstration that it can fail:
     placeholder unresolved" sits beside the same two checks over a launcher
     that appends the template unrendered, which fail — so a green check is the
     injection rather than the template file merely existing;
-  * "the layer states each of these things" sits beside the same searches over
-    a rendering with each statement removed, which report every one of them
-    absent, so a search that has stopped seeing anything is told apart from a
-    layer that says it;
+  * "the layer states each of these things" sits beside the same reader,
+    collapsing and searches over a copy of the shipped layer with the entry's
+    two paragraphs cut out of it, which report every statement absent and go
+    on finding the material beside the cut — so a search that has stopped
+    seeing anything is told apart from a layer that says it, and so is a
+    statement that turns out to be made somewhere else as well;
   * "the worked pair carries both halves" sits beside the same extraction over
     a copy with each half removed in turn, which reports both.
+
+What this module no longer holds, and where those facts live instead. How the
+partial resolves and where it reaches is the subject of
+`tests/test_harness_layer_extraction.py`, and each such fact is asserted
+there and not here: that the layer carries no placeholder of its own and the
+detector control beside it, that the assist template carries the prose
+placeholder, that editing the layer alone changes every prompt carrying it,
+and that the assist side receives none of the harness layer. What is kept
+here is what the layer's own text says, and the launcher seam that module
+does not use.
 
 Nothing here invokes a model.
 """
@@ -86,9 +98,16 @@ PLANNER_LAUNCHER = "l5-plan"
 PLANNED_WORKFLOW = harness_config.load_config(REPO_ROOT)["workflow"]
 
 
-def prose_layer() -> str:
-    """The shared partial as this repository ships it."""
-    return (PROMPTS / PROSE_LAYER).read_text(encoding="utf-8")
+def prose_layer(harness_root: Path = REPO_ROOT) -> str:
+    """The shared partial, read out of a prompts tree.
+
+    Defaulted to this repository's own, which is the subject of every
+    assertion below. The parameter is what lets the control read a copy of
+    that file with a block taken out of it through this same reader, so the
+    searches are run over a mutated layer rather than over a text a test
+    built.
+    """
+    return (harness_root / "prompts" / PROSE_LAYER).read_text(encoding="utf-8")
 
 
 def collapsed(text: str) -> str:
@@ -227,21 +246,60 @@ def test_the_conversational_entry_states_what_the_rule_requires(requirement):
         assert phrase in said, (requirement, phrase)
 
 
-def test_the_same_searches_report_a_layer_with_each_statement_removed():
+def paragraphs(text: str) -> list[str]:
+    """A prose file's blank-line-separated blocks."""
+    return text.split("\n\n")
+
+
+@pytest.fixture
+def a_layer_without_the_entry(tmp_path: Path) -> Path:
+    """A prompts tree whose copy of the layer has the entry cut out of it.
+
+    The cut is structural and is made without reference to what is being
+    searched for: the paragraph the entry opens with, and the paragraph of
+    limits that follows it, are dropped from a copy of the shipped file and
+    the rest is written out unchanged. So the control is a mutation of the
+    subject rather than a text with the searched-for words deleted from it,
+    and it reddens for a statement that turns out to be made somewhere else
+    in the layer as well as here.
+    """
+    root = tmp_path / "harness"
+    (root / "prompts").mkdir(parents=True)
+    blocks = paragraphs(prose_layer())
+    opening = next(index for index, block in enumerate(blocks)
+                   if CONVERSATIONAL_OPENS in block)
+    kept = blocks[:opening] + blocks[opening + 2:]
+    assert len(kept) == len(blocks) - 2, blocks
+    (root / "prompts" / PROSE_LAYER).write_text("\n\n".join(kept),
+                                                encoding="utf-8")
+    return root
+
+
+@pytest.mark.parametrize("requirement", sorted(ENTRY_STATES),
+                         ids=sorted(ENTRY_STATES))
+def test_the_same_searches_report_a_layer_whose_entry_was_cut_out(
+        requirement, a_layer_without_the_entry):
     """The control for the searches above.
 
-    Every phrase is stripped out of a rendering of the layer and the same
-    searches are run over it; each must report its absence. A search that has
-    stopped seeing anything reports nothing whatever the layer says.
+    The same reader, the same collapsing and the same searches, run over a
+    copy of the shipped layer with the entry removed: every phrase must be
+    reported absent. A search that has stopped seeing anything reports nothing
+    whatever the layer says, and this is what tells the two apart.
     """
-    said = collapsed(prose_layer())
+    said = collapsed(prose_layer(a_layer_without_the_entry))
 
-    for requirement, phrases in ENTRY_STATES.items():
-        stripped = said
-        for phrase in phrases:
-            stripped = stripped.replace(phrase, "")
-        for phrase in phrases:
-            assert phrase not in stripped, (requirement, phrase)
+    for phrase in ENTRY_STATES[requirement]:
+        assert phrase not in said, (requirement, phrase)
+
+    # And the searches still see the file they were pointed at: what the cut
+    # took out is the entry, and the material beside it is still found by the
+    # same reading. Without this the absences above would also be what an
+    # unreadable copy produced. The phrase looked for here is written in the
+    # form the collapsing produces rather than put through `collapsed` itself,
+    # so a collapsing that had stopped returning anything cannot satisfy this
+    # check by handing it an empty needle as well as an empty haystack.
+    assert said
+    assert COUNT_ENTRY_OPENS.lower() in said
 
 
 # --------------------------------------------------------------------------
@@ -520,12 +578,6 @@ def carries_the_partial(prompt: str, harness_root: Path = REPO_ROOT) -> bool:
             and context_assembler.PLACEHOLDER.search(prompt) is None)
 
 
-def test_the_assist_template_carries_the_placeholder_the_partial_lands_in():
-    template = context_assembler.load_template(REPO_ROOT, ASSIST_TEMPLATE)
-
-    assert "{{prose_layer}}" in template
-
-
 def test_the_prompt_the_launcher_appends_carries_the_resolved_partial(
         monkeypatch):
     """Read off what the launcher would have handed `claude`, because a
@@ -570,23 +622,16 @@ def test_the_appended_prompt_carries_both_halves_of_the_worked_pair(
     assert carries_both_halves(appended(args))
 
 
-def test_the_assist_prompt_receives_none_of_the_harness_layer(monkeypatch):
-    """The other partial's reach is untouched: the assist agent mutates no
-    tree and is given no blocked-path block, before this story or after it."""
-    _, args = launched(monkeypatch, [ASSIST_LAUNCHER])
-    prompt = appended(args)
-
-    assert "{{harness_layer}}" not in prompt
-    assert "[Harness Layer]" not in prompt
-    assert "All work must:" not in prompt
-
-
 def test_the_same_searches_find_the_harness_layer_where_it_is_injected():
-    """The control for the absence above.
+    """The control the harness layer's absence from the assist side needs.
 
-    The harness partial's own text carries what those searches look for, so an
-    empty result over the assist prompt is that prompt's reach rather than a
-    search looking for something nothing spells.
+    That absence is asserted once, of the assist template, in
+    `tests/test_harness_layer_extraction.py`, which is where the two partials'
+    reach lives. What is held here is the other half of it: the harness
+    partial's own text carries what those searches look for, and some template
+    carries its placeholder, so an empty result over anything on the assist
+    side is a fact about reach rather than a search looking for something
+    nothing spells.
     """
     partial = (PROMPTS / "harness-layer.md").read_text(encoding="utf-8")
 
@@ -681,10 +726,13 @@ def test_the_widened_text_reaches_the_planning_session_too(planner_prompt):
 
 
 # --------------------------------------------------------------------------
-# One file with one home: editing it changes both rendered prompts
+# One file with one home: the two prompts get the entry from that file
+#
+# That editing it changes every prompt carrying it is asserted once, over all
+# of them, in `tests/test_harness_layer_extraction.py`. What is held here is
+# the direction that needs this module's seam: both prompts rendered through
+# the real launcher against a tree the layer was taken out of.
 # --------------------------------------------------------------------------
-
-MARKER = "ONE-FILE-CONVERSATIONAL-EDIT-MARKER"
 
 
 @pytest.fixture
@@ -692,8 +740,8 @@ def mirrored_prompts(tmp_path: Path) -> Path:
     """A harness root carrying copies of the prompts this story is about.
 
     A copy rather than this repository's own tree, because the assertion is
-    about what editing the layer does and editing the shipped one is not
-    something a test may do.
+    about what a tree without the layer renders, and taking the shipped one
+    away is not something a test may do.
     """
     root = tmp_path / "harness"
     (root / "prompts").mkdir(parents=True)
@@ -721,32 +769,14 @@ def rendered_pair(monkeypatch, harness_root: Path) -> dict[str, str]:
     return {ASSIST_TEMPLATE: appended(args), PLANNER_TEMPLATE: planner}
 
 
-def test_editing_the_layer_alone_changes_both_rendered_prompts(
-        monkeypatch, mirrored_prompts):
-    """What makes it a partial rather than a paragraph written twice: neither
-    template is touched, and both renders change."""
-    before = rendered_pair(monkeypatch, mirrored_prompts)
-    templates_before = {
-        name: (mirrored_prompts / "prompts" / name).read_text(encoding="utf-8")
-        for name in (ASSIST_TEMPLATE, PLANNER_TEMPLATE)}
-
-    (mirrored_prompts / "prompts" / PROSE_LAYER).write_text(
-        f"[Prose Layer]\n{MARKER}\n", encoding="utf-8")
-    after = rendered_pair(monkeypatch, mirrored_prompts)
-
-    for name in (ASSIST_TEMPLATE, PLANNER_TEMPLATE):
-        assert MARKER in after[name], name
-        assert after[name] != before[name], name
-        # The templates themselves were not touched, so the change came from
-        # the one file that was.
-        assert (mirrored_prompts / "prompts" / name).read_text(
-            encoding="utf-8") == templates_before[name], name
-
-
 def test_a_prompts_tree_with_no_layer_leaves_the_prompts_without_it(
         monkeypatch, mirrored_prompts):
-    """The control for the edit above: the text reaches both prompts *from*
-    that file, so removing it removes the text from both.
+    """Where the text reaches these two prompts from: that file, and nothing
+    else, so a tree without it renders both prompts without the entry.
+
+    The other direction — that an edit to the layer alone changes every prompt
+    carrying it — is asserted once, over every carrier including this one, in
+    `tests/test_harness_layer_extraction.py`.
 
     An absent partial resolves to None and renders as the literal None, which
     is the optional-placeholder convention every other injection follows, so
@@ -763,23 +793,14 @@ def test_a_prompts_tree_with_no_layer_leaves_the_prompts_without_it(
 
 
 # ==========================================================================
-# The layer stays one file with one home, and carries no placeholder of its own
+# The layer stays one file with one home
+#
+# That it carries no placeholder of its own, and the detector control beside
+# that absence, are asserted once in `tests/test_harness_layer_extraction.py`,
+# whose subject is how each partial resolves and where it reaches. What is
+# left here is what this module's own subject requires: that both launchers
+# reach the file through the one helper.
 # ==========================================================================
-
-
-def test_the_layer_carries_no_placeholder_of_its_own():
-    """What lets both launchers render it against a context narrower than a
-    stage's. A placeholder here would resolve to the literal None in the two
-    prompts that most need the rule. The control is below."""
-    assert context_assembler.PLACEHOLDER.search(prose_layer()) is None
-
-
-def test_the_same_detector_reports_the_placeholder_the_other_partial_carries():
-    """The control for the absence above: an empty result means there is no
-    placeholder rather than that the detector has stopped seeing them."""
-    other = (PROMPTS / "harness-layer.md").read_text(encoding="utf-8")
-
-    assert context_assembler.PLACEHOLDER.search(other) is not None
 
 
 def test_the_two_launchers_resolve_the_layer_through_one_helper():

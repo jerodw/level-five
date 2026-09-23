@@ -20,6 +20,14 @@ are read back out of prompts a *run* rendered and out of the prompt
 `scripts/l5-plan` hands to a session, rather than off the templates alone,
 because a placeholder in a template that nothing resolves is not reach.
 
+This module is the one home of how each partial resolves and where it
+reaches. Where a fact about that was also asserted beside the layer's own
+text in `tests/test_a_question_to_the_developer_is_about_consequences.py`, it
+is asserted here and not there: the prose partial carrying no placeholder of
+its own and the detector control beside it, the assist template carrying the
+prose placeholder and no harness layer, and the one-file edit, which now
+covers every prompt that carries the partial including the assist template.
+
 Every absence asserted here carries a demonstration that it can fail:
 
   * "the prose partial carries no {{placeholder}} of its own" sits beside the
@@ -27,14 +35,15 @@ Every absence asserted here carries a demonstration that it can fail:
   * "the planner receives none of the harness layer" sits beside the same
     search for the prose partial's text in the same rendered prompt, which
     finds it, and beside a stage prompt, which carries both;
+  * "the assist template receives none of the harness layer" sits beside the
+    same searches over a stage template and the planner's, which carry the
+    placeholders it is silent about;
   * "editing one file changes every stage" is the existing one-file-edit
-    control, restated for the second partial.
+    control, restated for the second partial, and the templates are read back
+    unchanged so the change is the one file's.
 """
 import json
-import os
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -46,6 +55,12 @@ import schema_validator
 import story_coordinator
 import story_parser
 from agent_runner import AgentResult
+
+# The module whose subject is the layer's own text, imported for the one
+# fixture the two share — the idiom `tests/test_no_test_bounds_the_machine.py`
+# already uses to reach into `tests/test_command_transport.py`.
+import test_a_question_to_the_developer_is_about_consequences \
+    as consequences_module
 
 STAGE_TEMPLATES = ("story-implementer.md", "story-tester.md", "documenter.md")
 
@@ -403,43 +418,15 @@ def test_the_harness_layer_partial_still_reaches_the_stages_it_reached(
 # --------------------------------------------------------------------------
 
 
-@pytest.fixture
-def planner_prompt(tmp_path: Path) -> str:
-    """The prompt `scripts/l5-plan` hands to a session, captured whole.
-
-    Through the real script with a stub `claude` on PATH, which is the render
-    the planner actually receives — the same fixture shape
-    `tests/test_planner_injection.py` established for the same reason.
-    """
-    (tmp_path / ".harness").mkdir()
-    (tmp_path / ".harness" / "config.yaml").write_text(
-        "workflow: story-workflow\ntests_dir: tests/\n", encoding="utf-8")
-    # A repository, because since story-117 planning happens in a worktree cut
-    # from this tree's base and a directory that is no repository is one no
-    # plan can be written in.
-    conftest.init_repository(tmp_path)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    argv_path = tmp_path / "argv.json"
-    stub = bin_dir / "claude"
-    stub.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        f"open({str(argv_path)!r}, 'w').write(json.dumps(sys.argv))\n",
-        encoding="utf-8")
-    stub.chmod(0o755)
-    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    result = subprocess.run(
-        # The session states the workflow it renders against: this module's
-        # subject is the shared partial in the rendered prompt, and since
-        # story-072 an invocation with no terminal and no --workflow is refused
-        # rather than falling back to the configured name.
-        [sys.executable, str(REPO_ROOT / "scripts" / "l5-plan"),
-         "--workflow", "story-workflow", "a story request"],
-        env=env, capture_output=True, text=True, cwd=tmp_path)
-    assert result.returncode == 0, result.stderr
-    argv = json.loads(argv_path.read_text(encoding="utf-8"))
-    return argv[argv.index("--append-system-prompt") + 1]
+#: The render of a planning session, defined once for the two modules that
+#: assert about it. It stood in both under this name until story-203, and the
+#: two copies had drifted: the surviving one renders against the workflow this
+#: repository configures rather than against a name written down here, so a
+#: deployment configuring another workflow is not planned under a name it does
+#: not configure. The fixture is taken from the module it lives in rather than
+#: moved to a third file, which keeps it beside the launcher seam that is that
+#: module's own.
+planner_prompt = consequences_module.planner_prompt
 
 
 def test_the_planner_prompt_the_script_renders_carries_the_prose_partial(
@@ -496,6 +483,9 @@ def test_assist_receives_the_prose_partial_and_not_the_harness_one(
     assist = context_assembler.load_template(harness_root, "assist.md")
     assert "{{harness_layer}}" not in assist
     assert "[Harness Layer]" not in assist
+    # The block's own opening line, which a template carrying the layer
+    # inline rather than through the placeholder would still have.
+    assert "All work must:" not in assist
     assert "{{prose_layer}}" in assist
     # Control: a template that does carry the harness partial says so in the
     # same spelling, so the absence above is the assist template's reach rather
@@ -511,11 +501,17 @@ def test_one_file_edit_changes_the_prose_layer_of_every_prompt_carrying_it(
 ):
     """The partial is one file with one home: editing it changes every prompt
     that carries it, which is what makes it a partial rather than a paragraph
-    repeated five times."""
+    repeated five times.
+
+    Every carrier, the assist prompt included, and the templates themselves
+    are read back afterwards unchanged — so what moved the renders is the one
+    file that was edited and not an edit that reached them all.
+    """
     fake_root = tmp_path / "harness"
     prompts_dir = fake_root / "prompts"
     prompts_dir.mkdir(parents=True)
-    carriers = (*STAGE_TEMPLATES, "story-verifier.md", "planner.md")
+    carriers = (*STAGE_TEMPLATES, "story-verifier.md", "planner.md",
+                "assist.md")
     for name in (*carriers, "harness-layer.md", PROSE_LAYER):
         (prompts_dir / name).write_text(
             (harness_root / "prompts" / name).read_text(encoding="utf-8"),
@@ -550,6 +546,9 @@ def test_one_file_edit_changes_the_prose_layer_of_every_prompt_carrying_it(
         return rendered
 
     before = render_all()
+    templates_before = {
+        name: (prompts_dir / name).read_text(encoding="utf-8")
+        for name in carriers}
     (prompts_dir / PROSE_LAYER).write_text(
         "[Prose Layer]\nONE-FILE-PROSE-EDIT-MARKER\n", encoding="utf-8")
     after = render_all()
@@ -557,3 +556,7 @@ def test_one_file_edit_changes_the_prose_layer_of_every_prompt_carrying_it(
     for name in carriers:
         assert "ONE-FILE-PROSE-EDIT-MARKER" in after[name], name
         assert after[name] != before[name], name
+        # The templates themselves were not touched, so the change came from
+        # the one file that was.
+        assert (prompts_dir / name).read_text(
+            encoding="utf-8") == templates_before[name], name

@@ -744,9 +744,13 @@ def test_the_pid_reader_answers_none_for_a_path_the_redirect_has_only_opened(
     find it mid-write depends on the load on the machine at that moment --
     so a green suite says nothing about which state they saw. This drives
     each state instead, and the middle one is the one that matters: a file
-    the shell's redirect has created and not yet written into. Reading that
-    as a pid is what ended a run here, and the last assertion is that same
-    read, shown failing on the same bytes the reader answers None for.
+    the shell's redirect has created and not yet written into.
+
+    That the middle state is a real one rather than a branch this reader
+    invented is established where it matters, by the caller:
+    `tests/test_no_test_bounds_the_machine.py` hands `spawned_child_pid` a
+    pid file holding the empty string and requires the inconclusive report,
+    which is the behaviour the None answered here exists to produce.
     """
     absent = tmp_path / "never-written.pid"
     opened = tmp_path / "opened.pid"
@@ -757,12 +761,6 @@ def test_the_pid_reader_answers_none_for_a_path_the_redirect_has_only_opened(
     assert recorded_pid(absent) is None
     assert recorded_pid(opened) is None
     assert recorded_pid(written) == 4242
-
-    # The read the reader replaces, on the middle file: this is the crash,
-    # and it is what says the middle case is a real state and not a state
-    # the reader invented a branch for.
-    with pytest.raises(ValueError):
-        int(opened.read_text(encoding="utf-8").strip())
 
 
 # --------------------------------------------------------------------------
