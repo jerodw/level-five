@@ -1,0 +1,224 @@
+story:
+  id: story-203
+  title: Every assertion a test declares as its negative control can fail for an edit to the subject it vouches for
+  description: |
+    Six tests in this suite say, in their own docstrings, that they are the
+    demonstration that the check above them can fail — and none of them can.
+    Each builds a piece of text inside the test and then asserts a property of
+    Python about it: glue two strings together and find the second one in the
+    result, delete a phrase and find it gone, ask whether converting an empty
+    string to a number raises. Nothing a person could do to the code being
+    checked would turn any of them red. So the checks they stand beside are
+    unvouched, and the defect each was written to prevent could come back with
+    the whole suite green.
+
+    This story replaces each of the six with a demonstration that bites — the
+    same reader run over a real mutation of the real subject, or over a text
+    the reader was never told about. In one case it also adds the assertion the
+    vacuous one was standing in for: the helper that decides whether a machine
+    was too loaded to conduct a test is driven with the exact state that once
+    stopped a run, which nothing in the suite does today. It adds two further
+    assertions that were missing outright, both about the script that closes a
+    brief when its story merges: that the script asks the tracker for the issue
+    state in the machine-readable form the rest of its logic depends on, and
+    that a merged branch name reaches it as data rather than as something the
+    build runner executes. Finally it removes a set of duplicated assertions:
+    five facts about how the shared prose text reaches the prompts are asserted
+    in two modules at once, one pair under an identical function name, and each
+    fact ends up asserted once in the module whose subject it is.
+
+    It deliberately leaves alone every check these controls vouch for — those
+    assertions are sound and are not touched; what changes is only what stands
+    beside them. It leaves the shipped files those checks are about alone too:
+    no prompt, skill, script or build definition changes, because none of them
+    is wrong. And it leaves alone the mechanical scan that would catch this
+    shape in future, which is filed as separate work.
+
+    Planned from brief 325, which carries the cases filed as 13, 106, 300 and
+    321 together with 107, 108 and 15.
+
+    The six vacuous controls, by file. In
+    tests/test_a_merge_closes_the_brief.py,
+    test_the_same_search_reports_a_fallback_planted_in_the_script builds
+    `SCRIPT_SOURCE + a fallback line` and asserts the configured value is in the
+    result, which is a property of string concatenation; its second assertion
+    restates what test_neither_configured_value_is_written_down_in_the_change
+    already asserts for the same keys. In
+    tests/test_a_question_to_the_developer_is_about_consequences.py,
+    test_the_same_searches_report_a_layer_with_each_statement_removed deletes
+    each phrase from the collapsed layer with str.replace and then asserts the
+    phrase is absent. In tests/test_the_assist_agent_files_a_brief.py,
+    test_the_same_searches_report_a_rendering_with_each_statement_removed and
+    test_the_same_searches_report_a_prompt_with_each_statement_removed do the
+    same thing over SKILL_STATES and ASSIST_STATES — these are where the
+    consequences module's copy came from. In tests/test_command_transport.py,
+    the closing `pytest.raises(ValueError)` around `int(opened.read_text(...))`
+    in test_the_pid_reader_answers_none_for_a_path_the_redirect_has_only_opened
+    is introduced by a comment claiming it shows the middle state is real; the
+    empty file it reads was written by the test three lines earlier.
+
+    The repairs. Each replacement keeps the subject and the requirement mapping
+    it controls for, and reaches its negative case through the real subject:
+    the shipped script with a fallback planted in a throwaway copy, read by a
+    reader the module can be wrong about rather than by a bare `in`; the shipped
+    prose layer, skill and assist prompt with the block carrying the statements
+    removed in a throwaway copy, read through the same collapsing and searching
+    path the positive assertion uses. tests/test_a_merge_closes_the_brief.py
+    already has this shape twice — test_the_same_scan_reports_a_link_planted_in_that_file runs `linking_lines` over planted text, and every workflow
+    declaration reader is run over a copy with the declaration removed — and
+    conftest.load_mutant is the seam the consequences module already uses for
+    the launcher control.
+
+    The pid case. tests/test_command_transport.py's `spawned_child_pid` turns
+    `recorded_pid`'s None into a machine_load.inconclusive report; that turn is
+    what decides whether a loaded machine ends a run or reports it, and the
+    only two inputs any caller hands it today are an absent path and a path
+    holding a number. The state that stopped a run — a path the shell's
+    redirect created and the kill caught before `echo` wrote into it — reaches
+    it from nowhere. A case beside the two at
+    tests/test_no_test_bounds_the_machine.py's
+    test_a_command_that_backgrounds_no_child_is_inconclusive hands it a path
+    holding the empty string and requires the report, and the vacuous `int("")`
+    assertion is then deleted because the claim it stood in for is made by the
+    caller's behaviour instead.
+
+    The two missing assertions. `.harness/scripts/close-brief.sh` reads the
+    issue state with `gh issue view "$brief_key" --json state --jq .state` and
+    then compares the captured output against the bare word OPEN; both flags are
+    load-bearing and nothing asserts either. The assertion is made off the stub
+    tracker's recorded call rather than off the script's source, so it is a
+    statement about what the script does. `.github/workflows/close-brief-on-merge.yml` passes the pull request's head branch through `env: HEAD_BRANCH:`
+    and invokes the script with `"$HEAD_BRANCH"`, rather than interpolating the
+    ref into the `run:` line, which is the standard script-injection defence on
+    a runner holding a token with issues: write. The assertion reads the shipped
+    definition and is controlled by the same reader over a copy carrying the
+    interpolated form, which must report; a drive of the script with a branch
+    name full of shell metacharacters shows the string is data.
+
+    The deduplication. tests/test_a_question_to_the_developer_is_about_consequences.py
+    restates five facts that tests/test_harness_layer_extraction.py
+    already holds: the layer carrying no placeholder of its own and the same
+    detector reporting the one the other partial carries (this pair under
+    identical function names in the two modules), the assist template carrying
+    the prose placeholder, the one-file-edit property, and the assist prompt
+    receiving no harness layer. Each fact is left asserted once, in the module
+    whose subject it is: how the partial resolves and where it reaches belongs
+    to tests/test_harness_layer_extraction.py, and what the layer's own text
+    says — the conversational entry, the worked pair, the absence of any agent
+    named by role — belongs to the consequences module. The consequences
+    module's launcher-mutant control and its `carries_the_partial` predicate
+    stay where they are: they drive `scripts/l5-assist` through an intercepted
+    `execvp`, which is a seam the extraction module does not use.
+
+    Every module docstring in this story's scope lists its controls in a
+    "Every absence asserted here carries a demonstration that it can fail"
+    block. Each of those lines must end up describing what the module now does.
+
+  workflow: story-workflow
+
+tasks:
+  - Replace test_the_same_search_reports_a_fallback_planted_in_the_script in tests/test_a_merge_closes_the_brief.py with a control that runs a reader over a throwaway copy of the shipped script carrying a fallback, and have test_neither_configured_value_is_written_down_in_the_change use that same reader, so the control vouches for the reader the positive assertion uses. Drop the restated second assertion.
+  - Add to tests/test_a_merge_closes_the_brief.py an assertion that the state read the script makes carries --json state and --jq .state, taken off the stub tracker's recorded call rather than off the script's source, with the control the module's other tracker assertions already carry.
+  - Add to tests/test_a_merge_closes_the_brief.py an assertion that the shipped workflow definition passes the head branch through the step's environment and does not interpolate the ref into the command line, controlled by the same reader over a copy of the definition carrying the interpolated form; and a drive of the script with a branch name containing shell metacharacters, showing it is treated as a string.
+  - Replace test_the_same_searches_report_a_layer_with_each_statement_removed in tests/test_a_question_to_the_developer_is_about_consequences.py with a control whose negative case is a real mutation of prompts/prose-layer.md, read through the same path the positive assertion uses.
+  - Replace test_the_same_searches_report_a_rendering_with_each_statement_removed and test_the_same_searches_report_a_prompt_with_each_statement_removed in tests/test_the_assist_agent_files_a_brief.py with controls whose negative cases are real mutations of the shipped skill and the shipped assist prompt.
+  - Add to tests/test_no_test_bounds_the_machine.py a case handing tests/test_command_transport.py's spawned_child_pid a pid file holding nothing and requiring the inconclusive report, beside the absent-path case and the written-pid control already there.
+  - Delete the pytest.raises(ValueError) around int() on the empty pid file, and the comment introducing it, from test_the_pid_reader_answers_none_for_a_path_the_redirect_has_only_opened in tests/test_command_transport.py.
+  - Remove the five duplicated assertions from tests/test_a_question_to_the_developer_is_about_consequences.py, leaving each fact asserted in tests/test_harness_layer_extraction.py, and move into the surviving copy anything the removed copy asserted that it does not.
+  - Update the docstring control block of every module this story touches so each line describes the control as it now stands.
+  - Record in .harness/docs/ARCHITECTURE.md what a negative control has to reach through to be one, and the six instances repaired here, beside the existing bullets about vacuous assertions and mutation controls.
+
+acceptance_criteria:
+  - No test in tests/test_a_merge_closes_the_brief.py, tests/test_a_question_to_the_developer_is_about_consequences.py, tests/test_the_assist_agent_files_a_brief.py or tests/test_command_transport.py declares itself a negative control while its negative case is a text the test itself constructed by concatenating, replacing or writing the searched-for content, and then asserts a property of the Python language or standard library about that text.
+  - Each replacement control is demonstrated failing when the reader or extraction it vouches for is broken, and passing over the repository as it stands — the demonstration being that its negative case is a mutation of a shipped file or a mutation of the reader, not a string the test built.
+  - test_neither_configured_value_is_written_down_in_the_change and the control beside it in tests/test_a_merge_closes_the_brief.py run the same reader, so breaking that reader turns the control red.
+  - tests/test_a_merge_closes_the_brief.py asserts that the state read the script makes carries both --json state and --jq .state, read off a recorded tracker call, and the assertion goes red for a script that drops either flag.
+  - tests/test_a_merge_closes_the_brief.py asserts that .github/workflows/close-brief-on-merge.yml gives the head branch to the step through the environment and runs the script with that variable rather than with the ref interpolated into the command line, and the same reader reports a copy of the definition written the interpolated way.
+  - tests/test_a_merge_closes_the_brief.py drives the script with a branch name containing at least the characters $ ` ( ) ; and &, and the drive establishes the name was handled as a string.
+  - tests/test_no_test_bounds_the_machine.py drives tests/test_command_transport.py's spawned_child_pid with a path holding the empty string and requires the inconclusive report, beside the existing absent-path case and written-pid control; the case goes red if spawned_child_pid is changed to test the path's existence instead of the recorded value, or if recorded_pid is changed to raise on the empty string.
+  - The int() assertion on the empty pid file and its introducing comment are gone from tests/test_command_transport.py, and no assertion there is weakened by their removal.
+  - Each of the five duplicated facts — the layer carrying no placeholder of its own, the same detector reporting the other partial's placeholder, the assist template carrying the prose placeholder, the one-file-edit property, and the assist prompt receiving no harness layer — is asserted in exactly one module under tests/, and no function name is defined in both tests/test_a_question_to_the_developer_is_about_consequences.py and tests/test_harness_layer_extraction.py.
+  - Nothing the surviving copy of a deduplicated fact asserts is weaker than what the two copies asserted between them before.
+  - The docstring control block of every module this story changes describes the controls as they now stand, with no line still describing a control that was replaced.
+  - The suite census reports no counter lower than at the stage baseline.
+
+technical_plan:
+  implementation_steps:
+    - Add to tests/test_a_merge_closes_the_brief.py a reader deciding whether a text writes a configured value down, and route both the shipped-file assertion and the planted-copy control through it.
+    - Write the state-read and environment-passing assertions in that module, each beside its control, reusing the stub tracker ledger and the copy-with-the-declaration-removed idiom the module already carries.
+    - Replace the three str.replace controls in the consequences and assist modules with controls whose negative case is a mutation of the shipped subject, through conftest.load_mutant or the module's own throwaway-copy helper.
+    - Add the empty-pid-file case in tests/test_no_test_bounds_the_machine.py and delete the int() assertion in tests/test_command_transport.py.
+    - Remove the five duplicated tests from the consequences module and fold anything they asserted beyond their counterparts into tests/test_harness_layer_extraction.py.
+    - Rewrite the affected docstring control blocks.
+    - Record the convention and the repairs in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: tests/test_a_merge_closes_the_brief.py
+      stage: tester
+      reason: The vacuous fallback control is replaced with one that runs through a reader, and the state-read and environment-passing assertions are added with their controls.
+    - file: tests/test_a_question_to_the_developer_is_about_consequences.py
+      stage: tester
+      reason: The str.replace control is replaced with a mutation of the shipped layer, and the five facts duplicated from the extraction module are removed.
+    - file: tests/test_the_assist_agent_files_a_brief.py
+      stage: tester
+      reason: The two str.replace controls over the shipped skill and the shipped assist prompt are replaced with mutations of those files.
+    - file: tests/test_command_transport.py
+      stage: tester
+      reason: The int() assertion on the empty pid file and its introducing comment are deleted.
+    - file: tests/test_no_test_bounds_the_machine.py
+      stage: tester
+      reason: The empty-pid-file case is added beside the absent-path case and the written-pid control, which is where this helper's report and its control already live.
+    - file: tests/test_harness_layer_extraction.py
+      stage: tester
+      reason: Receives anything the removed duplicate copies asserted beyond what it already holds, so the deduplication loses nothing.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records what a negative control has to reach through to be one, and the six instances this story repaired, beside the existing bullets on vacuous assertions and mutation controls.
+
+scope:
+  modify:
+    - tests/test_a_merge_closes_the_brief.py
+    - tests/test_a_question_to_the_developer_is_about_consequences.py
+    - tests/test_the_assist_agent_files_a_brief.py
+    - tests/test_command_transport.py
+    - tests/test_no_test_bounds_the_machine.py
+    - tests/test_harness_layer_extraction.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/prose-layer.md (the layer's text is the subject the repaired control vouches for and is correct as it stands; only what stands beside the assertion changes)
+    - prompts/assist.md (same: the prompt is the subject of the repaired control, and what it states is not in question)
+    - plugin/skills/file-a-brief/SKILL.md (same: the shipped skill is the subject of the repaired control and is correct)
+    - .harness/scripts/close-brief.sh (it already reads the state with the flags this story asserts; the defect is the missing assertion, not the script)
+    - .github/workflows/close-brief-on-merge.yml (it already passes the head branch through the environment with a comment saying why; the defect is the missing assertion, not the definition)
+    - recorded_pid in tests/test_command_transport.py (its three-state behaviour and the cases that drive it directly are sound; what is missing is a driver of the caller)
+    - tests/test_filed_query.py, tests/test_brief_fetch.py and tests/test_a_planned_story_is_published_onto_its_item.py (they still carry the unrepaired pid reader, which is filed as its own piece of work; this story drives the repaired helper where the repair is used)
+    - the parametrized sibling case in tests/test_no_test_bounds_the_machine.py that drives the other three modules' spawned_child_pid (those modules have not adopted the repair, so the empty-file case does not belong to them yet)
+    - tests/test_mutation_controls.py and tests/test_baseline_honesty.py (the mechanical scan that would catch this shape in future is filed separately; this story repairs the known cases and adds no new rule to either scan)
+    - every assertion the six controls vouch for (they are sound and are why the controls exist; keeping them unchanged is what makes the repaired controls a demonstration about the same checks)
+    - prompts/story-tester.md and prompts/story-verifier.md (both already state the rule this story makes true, so neither needs an edit)
+
+verification_requirements:
+  - Confirm that each replacement control's negative case is a mutation of a shipped file or of a reader, and not a text the test built by concatenating, replacing or writing the content it then searches for.
+  - Confirm each replacement control was demonstrated red against the mutation it names and green against the repository as it stands, and that the evidence offered for that is a run rather than an argument.
+  - Confirm that the reader introduced in tests/test_a_merge_closes_the_brief.py is the one the positive configured-value assertion runs, not a second reader written only for the control.
+  - Confirm the empty-pid-file case drives spawned_child_pid rather than recorded_pid, and that it goes red under both mutations the acceptance criteria name.
+  - Confirm the five deduplicated facts are each asserted exactly once under tests/, that no function name is defined in both modules, and that nothing asserted by the removed copies is now asserted by nothing.
+  - Confirm that no existing assertion was weakened, loosened or deleted other than the six vacuous ones and the one restated duplicate this story names, and that no test was skipped or marked xfail to pass.
+  - Confirm the census reports no counter lower than at the stage baseline, and say what both counters were.
+  - Confirm no file listed in do_not_modify was changed.
+
+constraints:
+  - The checks these controls vouch for keep their subjects, their strictness and their requirement mappings; a repair that narrows what a check asserts is not a repair.
+  - A control's negative case must reach the assertion through the same reader, extraction or search the positive assertion uses, so that breaking that machinery turns the control red.
+  - No mutation control may pin the subject it mutates at a revision; it mutates the code or the shipped file as it stands.
+  - Nothing outside tests/ and the architecture document changes: no prompt, skill, script or build definition is edited, because none of them is wrong.
+  - The census must not fall. The deduplication removes test functions, so the new assertions and cases have to more than replace them; where they would not, the surviving copies absorb what the removed ones asserted rather than the deduplication being abandoned.
+  - Nothing added here reaches a network, runs git against this repository with a HEAD-derived revision, or invokes a model.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-23 12:37:32
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 325
