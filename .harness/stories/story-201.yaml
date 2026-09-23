@@ -1,0 +1,149 @@
+story:
+  id: story-201
+  title: Every stage whose work can be put to the revert check is told it can nominate a single test
+  description: |
+    Three of the stages in a run are each allowed to write in one place and
+    watched everywhere else. When one of them changes a file outside its own
+    place, a check re-runs the whole test suite to decide whether that change
+    was really needed — and at this repository's size that suite takes over
+    ten minutes. Any of those stages can skip the wait by naming one test that
+    passes on the tree it is leaving and fails once the watched change is
+    undone: the check runs that one test twice and answers in seconds. Only
+    the implementer is ever told this. The other two are handed the field in a
+    schema and nothing else, so a stage in exactly the same situation pays the
+    full suite every time, because nothing told it there was another way.
+
+    This story writes that guidance into the two prompts that lack it, and
+    corrects a related claim in the prompt that has it. What it does not do is
+    change the mechanism: the field, the check and the workflow declarations
+    behind them are all correct and are read but not edited. The whole of the
+    defect is what the stages are told.
+
+    The guidance the two stages get is deliberately not a copy of the
+    implementer's, because the bargain is different for them. The implementer
+    is forbidden to add files in one place; when the check finds its change
+    was needed, the change stands. The other two are confined to one place
+    each, and a change of theirs outside it is undone whichever way the check
+    lands — where the suite needed it, the work is handed to the stage that
+    owns it instead. So for them naming a test buys a fast decision and a
+    faster hand-off, not permission to keep the change. Saying otherwise would
+    promise something they do not get.
+
+    The third change is a correction. The implementer's prompt tells it not to
+    run the whole suite itself, because the suite runs after it anyway, and
+    then says it runs "three times" and names three. A fourth was added when
+    the tester gained a check of its own. The number goes and the list stays,
+    gaining the run that was missing — a count written beside the list it
+    counts is the pair that goes stale, and with no number there the next
+    stage to gain a check cannot make the sentence wrong again.
+
+    Planned from the brief filed under key 24, which also covers the item
+    filed as 22 and closed as superseded by it.
+
+    In the harness's own terms: the nomination field is
+    test_that_fails_without_this_change on the changed-files record, described
+    in schemas/changed-files.schema.json and read generically by
+    nominated_test in orchestration/story_coordinator.py. story-106 gave the
+    tester a revert_check declaration in workflows/story-workflow.json beside
+    its may_only_change confinement; the documenter has carried both since
+    story-044. prompts/story-implementer.md carries the nomination paragraph
+    at lines 68-76; prompts/story-tester.md and prompts/documenter.md carry
+    the paragraph explaining what the revert check does to a governed edit and
+    stop there. The count being corrected is at prompts/story-implementer.md
+    lines 57-66, and tests/test_turn_ending_instructions.py holds it against
+    the workflow's declarations while deliberately excluding a revert check
+    declared on another stage.
+  workflow: story-workflow
+
+tasks:
+  - Add a nomination paragraph to prompts/story-tester.md, placed after the existing paragraph about what the revert check does to an edit outside the stage's confinement, stating what a nomination is, what it must satisfy, and what it is worth to a confined stage — a decision in seconds rather than a whole-suite run, and a faster hand-off of the work, rather than permission for the edit to stand.
+  - Add the same paragraph to prompts/documenter.md, in the same position relative to that prompt's own revert-check paragraph, written against that stage's confinement.
+  - Rewrite the passage at prompts/story-implementer.md lines 57-66 so it names the whole-suite runs that follow the implementer without stating how many there are, and so the list includes the tester's revert check alongside the three already named.
+  - Reword the sentence at prompts/story-implementer.md line 68 that refers to "the first of those three re-runs", so it names the run it means without depending on a count that is no longer written.
+  - Rework tests/test_turn_ending_instructions.py so the assertion that held the prose number to the workflow's declarations is replaced by one holding the passage to naming every whole-suite declaration that follows the implementer, with DECLARED_ABOUT_THE_DECLARING_STAGE and its stated reasoning revised to match, and its control revised with it.
+  - Write a standing validation module asserting that every stage the workflow declares a revert check on is handed the nomination guidance in its rendered prompt, with the stages derived from the workflow definition rather than named in the test.
+  - Record the change in .harness/docs/ARCHITECTURE.md as a new section.
+
+acceptance_criteria:
+  - The rendered prompt for every stage the loaded workflow declares a revert_check on carries guidance naming test_that_fails_without_this_change and stating what a nomination must satisfy, with no placeholder left unresolved in it.
+  - The tester's and documenter's guidance states what a nomination is worth to a stage confined by may_only_change — that the check decides on the nominated test instead of on the whole suite — and does not state that a nomination lets a governed edit stand.
+  - The implementer's guidance is unchanged in what it promises: for that stage a nomination that passes with its edits applied and fails with them reverted permits the edits.
+  - prompts/story-implementer.md no longer states a count of the whole-suite runs that follow the implementer, and states none of "three times", "four times" or an equivalent numeral in that passage.
+  - The passage at prompts/story-implementer.md naming the whole-suite runs that follow the implementer names the tester's revert check in addition to the three it already named.
+  - A test derives from the loaded workflow the set of stages declaring a revert check and asserts each of their rendered prompts carries the guidance, so a workflow that adds a fourth such stage reddens rather than passing.
+  - That test carries a demonstration that it can fail — the same check run again over a rendering with the guidance stripped out, where it must report — as the standing rule for an absence assertion requires.
+  - A test asserts that the implementer's passage names every whole-suite declaration the workflow puts after the implementer, so a workflow that gained or lost one reddens rather than leaving the prompt naming a stale list.
+  - No assertion in tests/test_turn_ending_instructions.py is deleted or weakened: the assertion on the prose count is replaced by one over the same subject that derives its answer from the workflow.
+  - The whole suite passes, including in a fresh clone with the story committed.
+
+technical_plan:
+  implementation_steps:
+    - Read prompts/story-implementer.md lines 57-76 for the wording the two new paragraphs are modelled on, and schemas/changed-files.schema.json for the field description both prompts already have injected.
+    - Write the nomination paragraph into prompts/story-tester.md after the paragraph ending "the revert is recorded beside it", stating the nomination against that stage's confinement — the test must pass on the tree the stage is leaving and fail once its edits outside the paths it is confined to are reverted — and stating plainly that the edit is undone either way, so what the nomination buys is the decision without the whole-suite run.
+    - Write the same paragraph into prompts/documenter.md after its corresponding revert-check paragraph, with the confinement's own sense.
+    - Rewrite prompts/story-implementer.md lines 57-66 to drop the count and name the runs as a list, adding the tester's revert check to it, and reword line 68's reference to "the first of those three re-runs" accordingly.
+    - Rework tests/test_turn_ending_instructions.py - replace the count assertion with one comparing the checks the passage names against the whole-suite declarations the workflow puts after the implementer, revise DECLARED_ABOUT_THE_DECLARING_STAGE and the comment stating its reason, extend THE_CHECKS with the words the passage names the tester's check by, and revise the control that plants a cut rendering so it still demonstrates the check reports.
+    - Write the new validation module - drive a coordinator run against the shipped harness root, read each stage's rendered prompt back out of the run directory, derive the stages from the workflow's revert_check declarations, and assert each rendering carries the nomination guidance, with a control over a rendering with the guidance stripped.
+    - Add a section to .harness/docs/ARCHITECTURE.md recording that the guidance now reaches every stage declaring the check and that the implementer's passage no longer carries a count.
+  likely_file_changes:
+    - file: prompts/story-tester.md
+      stage: implementer
+      reason: gains the nomination paragraph, written against this stage's confinement
+    - file: prompts/documenter.md
+      stage: implementer
+      reason: gains the same paragraph, written against this stage's confinement
+    - file: prompts/story-implementer.md
+      stage: implementer
+      reason: the passage naming the whole-suite runs loses its count and gains the tester's revert check
+    - file: tests/test_turn_ending_instructions.py
+      stage: tester
+      reason: the assertion on the prose count loses its subject and is replaced by one holding the passage to the declarations behind it
+    - file: tests/test_every_stage_put_to_the_revert_check_is_told_it_can_nominate_a_test.py
+      stage: tester
+      reason: the standing module asserting the guidance reaches every stage declaring the check, so the prompts cannot separate again
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: records that the guidance is now stated per declaring stage and that the implementer's passage carries no count
+
+scope:
+  modify:
+    - prompts/story-tester.md
+    - prompts/documenter.md
+    - prompts/story-implementer.md
+    - tests/test_turn_ending_instructions.py
+    - tests/ (for the new standing validation module)
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/story_coordinator.py (the nomination mechanism decides correctly for whichever stage declares the check; the defect is entirely in what the stages are told, and a coordinator edit here would be a change nothing in this story asks for)
+    - schemas/changed-files.schema.json (the field's description is accurate and is already injected into all three prompts; the new paragraphs point at it rather than restating it, so there is one statement of what a nomination must satisfy and not two that can disagree)
+    - workflows/story-workflow.json (every revert_check and confinement declaration it carries is already correct; the story changes no stage's restrictions, budgets or ownership)
+    - schemas/revert-check-result.schema.json (the record the check writes is unchanged, because the check itself is unchanged)
+    - .harness/config.yaml (test_selection_command is already configured and is what makes a nomination worth anything here; nothing about the story needs it altered)
+    - .harness/docs/ARCHITECTURE.md line 1623 and the surrounding story-077 section (it records what was true when the field was added, and rewriting a historical record to match today would destroy the account of how the gap arose; the new section is written beside it)
+    - tests/test_revert_check.py (it is the mechanism's own validation and the mechanism does not change; adapting it here would be coverage moved rather than coverage added)
+
+verification_requirements:
+  - Confirm that each stage the workflow declares a revert_check on has a rendered prompt carrying the nomination guidance, by reading the renderings this run produced rather than the templates alone.
+  - Confirm that the tester's and documenter's guidance describes what a nomination is worth under a confinement and does not promise that a nominated test lets their governed edit stand, since it does not.
+  - Confirm that the implementer's guidance still describes what a nomination is worth under its own restriction, unchanged.
+  - Confirm that prompts/story-implementer.md states no count of the whole-suite runs that follow it, and that the list it does state includes the tester's revert check.
+  - Confirm that the rework of tests/test_turn_ending_instructions.py replaced the count assertion with one over the same subject rather than removing it, and that no other assertion in that module was weakened, skipped or deleted.
+  - Confirm that every absence asserted in the new validation module carries a demonstration that the same check reports when the text it looks for is removed.
+  - Confirm that the new validation module derives the stages it checks from the workflow definition and writes no stage name of its own.
+  - Confirm the suite passes, and that the clean-clone result for this run records a pass.
+
+constraints:
+  - The nomination mechanism's behaviour is unchanged - no stage's restrictions, declarations or budgets move, and no coordinator decision is altered.
+  - What a nomination must satisfy is stated once, in the injected schema description; the prompt paragraphs point at it and do not restate the contract in words that could drift from it.
+  - Each prompt's paragraph is written against that stage's own restriction as the workflow declares it, and restates no restriction in stricter words than the workflow uses.
+  - No existing test is weakened, skipped or deleted; an assertion whose subject this story removes is replaced by one over the same subject.
+  - The new validation module names no stage and no restricted prefix of its own, deriving each from the workflow.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-23 10:15:22
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 24
