@@ -182,6 +182,22 @@ def test_the_sentence_taken_out_of_a_rendering_is_a_sentence(
     assert len(sentence.split()) > 10
 
 
+def carries_the_sentence(prose: str, sentence: str) -> bool:
+    """Whether one rendering states the rule at all."""
+    return sentence in prose
+
+
+def states_it_after_the_run_directory(prose: str, sentence: str,
+                                      run_dir) -> bool:
+    """Whether it stands directly after the sentence naming the run directory."""
+    return f"{run_dir}. {sentence}" in prose
+
+
+def states_it_exactly_once(prose: str, sentence: str) -> bool:
+    """Whether one rendering states it once rather than twice."""
+    return prose.count(sentence) == 1
+
+
 def test_every_stage_that_writes_to_the_run_directory_carries_the_sentence(
     renderings, sentence,
 ):
@@ -189,7 +205,7 @@ def test_every_stage_that_writes_to_the_run_directory_carries_the_sentence(
     stage added to the workflow is a stage this holds to the same rule."""
     assert len(renderings.templates) > 1, "one rendering cannot drift from itself"
     for template in renderings.templates:
-        assert sentence in renderings.prose(template), template
+        assert carries_the_sentence(renderings.prose(template), sentence), template
 
 
 def test_the_sentence_stands_in_the_same_place_in_every_rendering(
@@ -199,15 +215,16 @@ def test_the_sentence_stands_in_the_same_place_in_every_rendering(
     of files — one placement as well as one wording, so a reader of any of the
     four meets it at the same point."""
     for template in renderings.templates:
-        assert f"{renderings.run_dir}. {sentence}" in renderings.prose(template), \
-            template
+        assert states_it_after_the_run_directory(
+            renderings.prose(template), sentence, renderings.run_dir), template
 
 
 def test_no_rendering_states_the_rule_more_than_once(renderings, sentence):
     """One statement per prompt as well as one wording across them: a prompt
     that said it twice would be two places a later edit could change one of."""
     for template in renderings.templates:
-        assert renderings.prose(template).count(sentence) == 1, template
+        assert states_it_exactly_once(
+            renderings.prose(template), sentence), template
 
 
 def test_the_placement_check_reports_a_rendering_without_the_sentence(
@@ -215,16 +232,20 @@ def test_the_placement_check_reports_a_rendering_without_the_sentence(
 ):
     """The control for the three checks above.
 
-    The same checks over the same renderings with the sentence removed, where
-    every one of them must report. Without this, a comparison that had drifted
-    to an empty or ubiquitous string would pass while asserting nothing about
-    whether the four prompts agree.
+    The same three checks — the functions the assertions above are decided by,
+    rather than a second spelling of them beside those — put to the same
+    renderings with the sentence removed, where every one of them must report.
+    Without this, a comparison that had drifted to an empty or ubiquitous
+    string would pass while asserting nothing about whether the four prompts
+    agree; and a control that searched the cut text itself would report on the
+    removal this test performed rather than on those checks.
     """
     for template in renderings.templates:
         without = renderings.prose(template).replace(sentence, "", 1)
-        assert sentence not in without, template
-        assert f"{renderings.run_dir}. {sentence}" not in without, template
-        assert without.count(sentence) == 0, template
+        assert not carries_the_sentence(without, sentence), template
+        assert not states_it_after_the_run_directory(
+            without, sentence, renderings.run_dir), template
+        assert not states_it_exactly_once(without, sentence), template
 
 
 # --------------------------------------------------------------------------

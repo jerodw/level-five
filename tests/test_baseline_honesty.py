@@ -16,11 +16,20 @@ module is a mechanical check rather than a paragraph.
 What it covers, and only this: a `subprocess` git invocation that targets
 *this* repository's root and carries a HEAD-derived revision or a
 working-tree status query. It is deliberately narrow. It catches the one
-idiom above; it does not catch the general class of vacuous assertions, and
-nothing here should be read as claiming it does. An assertion can still be
-empty on both sides of an honest baseline, tautological, or aimed at the
-wrong subject, and no AST scan will say so — that is what the negative
-control now required of absence assertions in `prompts/story-tester.md` is for.
+idiom above.
+
+The rules that joined it are each as narrow, and the newest of them is the
+one that reads the negative control itself: a test that plants a phrase into
+a value and then asserts that same phrase against that same value has
+demonstrated string concatenation rather than the check it stood beside.
+Each rule here decides one mechanical question about one shape. **This module
+does not catch the general class of vacuous assertions, and nothing in it
+should be read as claiming it does.** An assertion can still be empty on both
+sides of an honest baseline, tautological, or aimed at the wrong subject, and
+no AST scan will say so. What is left to `prompts/story-tester.md` is
+everything the shapes do not reach: that an absence assertion carries a
+negative control at all, and that the control it carries is one the subject
+could actually turn red.
 
 The regression set is committed evidence rather than a constructed fixture:
 the four merged instances are recovered from git history at the revision
@@ -37,6 +46,7 @@ commits — and the shared resolution must report the violation.
 import ast
 import re
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -3323,6 +3333,19 @@ DECLARED_HISTORY_READERS = {
         "rather than about a resolution that has stopped seeing anything. "
         "Everything else in the module is read from the shipped documents as "
         "its subject or rendered under tmp_path",
+    "test_a_control_is_decided_by_its_subject.py":
+        "the only evidence that the plant-then-assert-the-plant rule catches "
+        "the defect it was written for, rather than the shapes its own author "
+        "composed, is the set of controls story-203 repaired: they were written "
+        "by different authors for different subjects, and what they looked like "
+        "before that repair exists nowhere but this repository's own history. "
+        "No constructed repository holds them. Each is read through the shared "
+        "reader at a revision found by searching for a line one of them "
+        "carried rather than at a sha, and each is asserted reported there and "
+        "reported by nothing in the working tree, so the recovery is shown to "
+        "have resolved to the pre-repair text rather than to today's. "
+        "Everything else in the module is a source composed in the test or a "
+        "module of this repository read as its subject",
     "test_a_repair_reaches_outside_the_storys_scope_within_bounds.py":
         "one of its criteria is a claim about this repository's own change and "
         "nothing else: that the story letting a repair reach outside a story's "
@@ -3993,3 +4016,472 @@ def test_every_phrase_this_section_looks_for_is_absent_once_it_is_removed(
     assert phrase in flattened(rendered_tester_prompt)
     assert phrase not in flattened(
         without_the_commit_graph_guidance(rendered_tester_prompt))
+
+
+# --------------------------------------------------------------------------
+# A control that plants a phrase and then finds it has found nothing
+#
+# Its own rule: it calls no scan above it, no scan above it calls it, and its
+# vocabulary is expressible in none of theirs. What sets it apart from its
+# neighbours is not a position in a list but its subject — they read where a
+# comparison's baseline comes from, how a module or an instrument is built,
+# where a file's historical text is read, what a control may *mutate*, what a
+# module under tests/ is named for, which live artifacts a test may read, and
+# how this repository's own history is resolved. This one is the first to read
+# what an `assert` compares, and it is about a control whose whole subject is
+# the test's own arithmetic.
+#
+# A test that asserts something is absent passes for two very different
+# reasons: the thing really is absent, or the search has stopped looking. The
+# tester's prompt already asks for a negative control beside every absence —
+# break the thing deliberately, and show the same check notices. That
+# instruction works, in the sense that controls get written. What nothing
+# checked is whether a control that got written is capable of noticing
+# anything, and several have shipped that were not: each planted a phrase into
+# some text and then asserted that the planting happened.
+#
+# Adding a phrase to a value and then finding it, or deleting a phrase from a
+# value and then not finding it, establishes that string concatenation and
+# string replacement work. It says nothing about the check the control is
+# vouching for, because that check was never run. Every one of them was green,
+# and every assertion they stood beside was unvouched for as long as they
+# stood.
+#
+# So this rule reports a narrow, unmistakable version of that: a local name
+# bound to a plant — `<value> + <needle>`, or `<value>.replace(<needle>, ...)`
+# — and an `assert` in the same function comparing that same needle against
+# that same name, with `in` for the concatenation form and `not in` for the
+# removal form. It reads what a test *does* rather than what it calls itself,
+# so a control that never uses the word "control" is caught anyway, and so is
+# one written by someone who has never heard the term.
+#
+# The clause that makes it a rule about controls rather than about string
+# arithmetic is the last one: the pair is left alone when the planted name is
+# handed to a call this module defines, or imports from outside the standard
+# library, anywhere in that function. That is what separates a sound control
+# from a vacuous one, and it is not an afterthought —
+# `tests/test_mutation_controls.py` writes exactly this plant-and-assert pair
+# and is sound, because the stripped source then goes back through the real
+# check, and it must be left alone.
+#
+# What it does not cover, stated here because this is where a reader meets it:
+#
+#   * **an assertion about the interpreter or the standard library over a file
+#     the test itself wrote.** `open(p, "w").write("")` and then
+#     `pytest.raises(ValueError, int, p.read_text())` is the same defect by a
+#     different route — nothing about the subject is exercised — and it is
+#     deliberately outside this rule. Catching it mechanically means deciding
+#     that every operand of an assertion traces back to a literal the test
+#     constructed, and that does not come out cleanly over a suite this size:
+#     the shapes that decide it are the ordinary ones a sound test also writes.
+#   * **a plant and an assertion split across functions.** The pairing is
+#     followed inside one function. A value planted in one function and
+#     asserted in another — through a fixture, a helper, or a module-level
+#     constant — is not seen.
+#   * **a plant written any other way.** `%`, `.format(...)`, an f-string that
+#     interpolates the needle into the whole value, `join`, `textwrap` and a
+#     list built and joined afterwards all plant, and none of them is this
+#     rule's shape. It reads two constructs, and says so. It reads them as the
+#     assigned value of a plain assignment, so a plant added to a name already
+#     bound — `planted += needle`, an annotated assignment, a chained one — is
+#     outside the rule even though it is one of the two constructs, and that
+#     leaves the two forms disagreeing about the same accumulate-in-a-loop
+#     shape: `stripped = stripped.replace(needle, "")` in a loop is read,
+#     because it is still an assignment whose assigned value is the plant,
+#     while its concatenation twin `planted += needle` is not an assignment of
+#     that shape at all and is not read. A plant the binding
+#     computes something further from — appended and then stripped, or built
+#     and then handed to a reading — is outside it for the same reason: the
+#     name has to be bound to the plant, since a name bound to what some
+#     reading said about the plant is the sound shape rather than the defect.
+#   * **whether an assertion is meaningful.** No scan decides that, and this
+#     one decides one mechanical question about one shape. The disclaimer this
+#     module's own docstring opens with holds over this rule as over the seven
+#     before it.
+#
+# And the same standing limit as everything mechanical here: it is not
+# tamper-proof. An edit deleting this check alongside a genuinely forced repair
+# is not caught, at any granularity.
+# --------------------------------------------------------------------------
+
+
+#: The method that removes a phrase from a value. One name, matched on the
+#: attribute alone for the reason `PATH_WRITES` is: how the value it is called
+#: on was spelled is not what the rule is about.
+PLANT_BY_REMOVAL = "replace"
+
+
+def _expressions_within(node: ast.AST) -> set[str]:
+    """Every expression inside one, dumped, so needles can be compared.
+
+    Sub-expressions rather than the operand whole, because a needle is as often
+    interpolated into the plant as concatenated onto it: `SOURCE + f'{key}={x}'`
+    plants `x`, and a comparison against the operand as written would miss it.
+    """
+    return {ast.dump(inner) for inner in ast.walk(node)
+            if isinstance(inner, ast.expr)}
+
+
+def _plant(value: ast.AST) -> tuple[type, set[str]] | None:
+    """The plant a name is bound to, as an (operator, needle) pair, or None.
+
+    The operator is the one an assertion has to use for the plant to be
+    vouching for nothing: `in` after adding a phrase, `not in` after removing
+    one. Any other comparison is asking something the plant did not decide.
+
+    The value must *be* the plant rather than carry one somewhere inside it,
+    which is what the rule says and is what keeps the sound shape out. A plant
+    handed straight to a reading — `found = the_check(SOURCE + BREAK)` — binds
+    the name to what that reading said, so the assertion below it is about the
+    reading, and a scan that walked into the argument would report it.
+    """
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        return ast.In, (_expressions_within(value.left)
+                        | _expressions_within(value.right))
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute) \
+            and value.func.attr == PLANT_BY_REMOVAL and value.args:
+        return ast.NotIn, _expressions_within(value.args[0])
+    return None
+
+
+def _module_callables(tree: ast.Module) -> set[str]:
+    """What a call in this module can name that is neither local nor stdlib.
+
+    Two sources, both stated in the source rather than inferred: the functions
+    and classes this module defines at its top level, and the names it imports
+    from a module outside the standard library. `sys.stdlib_module_names` is
+    what decides the second, so `re.sub` and `Path.read_text` are not routes to
+    a real check while `story_coordinator.load_state` and a helper defined
+    beside the test are.
+    """
+    names = {node.name for node in tree.body
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef))}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root not in sys.stdlib_module_names:
+                    names.add(alias.asname or root)
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if node.level or root not in sys.stdlib_module_names:
+                for alias in node.names:
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _call_root(node: ast.AST) -> str | None:
+    """The name a call is reached through: `f(...)` is `f`, `a.b.c(...)` is `a`."""
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _handed_to_a_real_check(function: ast.AST, name: str,
+                            callables: set[str]) -> bool:
+    """Whether the planted value reaches something other than the assertion.
+
+    Handed as an argument — positionally, by keyword, or unpacked — to a call
+    reached through a name this module defines or imported from outside the
+    standard library. That is the sound control's shape: plant the break, put
+    the planted value back through the reading the assertion vouches for, and
+    watch that reading report it.
+    """
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call):
+            continue
+        root = _call_root(node.func)
+        if root is None or root not in callables:
+            continue
+        for argument in list(node.args) + [kw.value for kw in node.keywords]:
+            inner = (argument.value if isinstance(argument, ast.Starred)
+                     else argument)
+            if isinstance(inner, ast.Name) and inner.id == name:
+                return True
+    return False
+
+
+def planted_assertions(source: str, module: str) -> list[Flag]:
+    """Every plant-then-assert-the-plant pair in one module.
+
+    A per-function pairing, and all of it is required: a name bound to a plant,
+    an assertion comparing that plant's own needle against that name with the
+    operator the plant already decided, and the planted value reaching no call
+    that could be the check the control claims to be demonstrating.
+
+    No exemption is applied, here or by any caller. There is nowhere under
+    `tests/` where asserting the plant is the right answer, so there is nothing
+    to exempt — the sound shape is the third clause rather than a named module.
+    """
+    flags = []
+    tree = ast.parse(source)
+    callables = _module_callables(tree)
+    for function in ast.walk(tree):
+        if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        planted: dict[str, list[tuple[type, set[str]]]] = {}
+        for node in ast.walk(function):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                    and isinstance(node.targets[0], ast.Name):
+                plant = _plant(node.value)
+                if plant is not None:
+                    planted.setdefault(node.targets[0].id, []).append(plant)
+        if not planted:
+            continue
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Assert):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+                continue
+            operator = test.ops[0]
+            if not isinstance(operator, (ast.In, ast.NotIn)):
+                continue
+            subject = test.comparators[0]
+            if not isinstance(subject, ast.Name) or subject.id not in planted:
+                continue
+            needle = ast.dump(test.left)
+            for kind, needles in planted[subject.id]:
+                if not isinstance(operator, kind) or needle not in needles:
+                    continue
+                if _handed_to_a_real_check(function, subject.id, callables):
+                    continue
+                flags.append(Flag(
+                    module=module, line=node.lineno,
+                    reason=(f"{function.name} asserts the phrase it planted in "
+                            f"{subject.id} against {subject.id} itself, and "
+                            f"hands {subject.id} to no check; a control that "
+                            f"finds what it planted has found nothing"),
+                ))
+                break
+    return flags
+
+
+def test_no_module_under_tests_asserts_the_phrase_it_planted():
+    """The rule, run rather than inspected, over every module the glob finds.
+
+    It compares against the empty set and names no register of known
+    violations, because the story that added it repaired the three sites the
+    suite carried.
+    """
+    flags = [
+        flag
+        for path in all_modules()
+        for flag in planted_assertions(path.read_text(encoding="utf-8"),
+                                       path.name)
+    ]
+    assert flags == [], "\n".join(str(flag) for flag in flags)
+
+
+def test_the_glob_this_rule_runs_over_found_modules():
+    """The companion the glob needs: a scan over zero files reports nothing and
+    is indistinguishable above from a suite with nothing to report."""
+    assert len(all_modules()) > 1
+    assert {path.name for path in all_modules()} \
+        == {path.name for path in TESTS_DIR.glob("*.py")}
+
+
+@pytest.mark.parametrize("planted", [
+    pytest.param(
+        "def probe():\n"
+        "    planted = SOURCE + SENTENCE\n"
+        "    assert SENTENCE in planted\n",
+        id="the-concatenation-form"),
+    pytest.param(
+        "def probe(key):\n"
+        "    value = CONFIG[key]\n"
+        "    planted = SCRIPT + f'\\n{key}=\"{value}\"\\n'\n"
+        "    assert value in planted\n",
+        id="the-concatenation-form-with-the-needle-interpolated"),
+    pytest.param(
+        "def probe():\n"
+        "    stripped = SOURCE.replace(SENTENCE, '')\n"
+        "    assert SENTENCE not in stripped\n",
+        id="the-removal-form"),
+    pytest.param(
+        "def probe(phrases):\n"
+        "    stripped = said\n"
+        "    for phrase in phrases:\n"
+        "        stripped = stripped.replace(phrase, '')\n"
+        "    for phrase in phrases:\n"
+        "        assert phrase not in stripped\n",
+        id="the-removal-form-written-as-a-loop"),
+])
+def test_the_planted_assertion_scan_reports_a_source_composed_for_it(planted):
+    """Its reach demonstrated rather than asserted, on the same terms as the
+    scans above: a scan with no reported source is indistinguishable from
+    one that has stopped looking."""
+    flags = planted_assertions(planted, "probe.py")
+    assert len(flags) == 1, flags
+
+
+def test_the_scan_leaves_a_plant_that_goes_back_through_a_real_check():
+    """The clause that separates a sound control from a vacuous one, stated as
+    a pair over one source.
+
+    The same plant and the same assertion, differing only in whether the
+    planted value is put back through the reading the control vouches for.
+    With the call there the scan reports nothing; with it removed the scan
+    reports the pair — so the silence is that clause deciding rather than the
+    scan having stopped seeing this shape.
+    """
+    sound = (
+        "def the_real_check(text):\n"
+        "    assert SENTENCE in text\n"
+        "def probe():\n"
+        "    stripped = SOURCE.replace(SENTENCE, '')\n"
+        "    assert SENTENCE not in stripped\n"
+        "    with pytest.raises(AssertionError):\n"
+        "        the_real_check(stripped)\n"
+    )
+    assert planted_assertions(sound, "probe.py") == []
+
+    without_the_check = sound.replace(
+        "    with pytest.raises(AssertionError):\n"
+        "        the_real_check(stripped)\n", "")
+    assert len(planted_assertions(without_the_check, "probe.py")) == 1
+
+
+@pytest.mark.parametrize("benign", [
+    pytest.param(
+        "def probe():\n"
+        "    planted = SOURCE + SENTENCE\n"
+        "    assert SENTENCE not in SOURCE\n",
+        id="the-plant-asserted-against-the-value-it-was-planted-into"),
+    pytest.param(
+        "def probe():\n"
+        "    stripped = SOURCE.replace(SENTENCE, '')\n"
+        "    assert OTHER in stripped\n",
+        id="a-removal-asserting-what-survived-it"),
+    pytest.param(
+        "def probe():\n"
+        "    planted = SOURCE + SENTENCE\n"
+        "    assert len(planted) > len(SOURCE)\n",
+        id="a-plant-asserted-with-no-membership-comparison"),
+    pytest.param(
+        "def probe():\n"
+        "    whole = FIRST + SECOND\n"
+        "    assert SENTENCE in whole\n",
+        id="a-joined-value-asserted-against-a-phrase-neither-half-carries"),
+    pytest.param(
+        "def probe():\n"
+        "    assert SENTENCE in SOURCE + SENTENCE\n",
+        id="a-plant-bound-to-no-name"),
+    pytest.param(
+        "def the_real_check(text):\n"
+        "    return [line for line in text.splitlines() if BREAK in line]\n"
+        "def probe():\n"
+        "    reported = the_real_check(SOURCE + BREAK)\n"
+        "    assert BREAK in reported\n",
+        id="a-plant-handed-straight-to-the-reading-it-vouches-for"),
+])
+def test_the_planted_assertion_scan_leaves_these_alone(benign):
+    """What it must not report. The pairing is the subject, so a plant whose
+    assertion asks something the plant did not decide is unreported, and so is
+    a phrase the plant never carried."""
+    assert planted_assertions(benign, "probe.py") == []
+
+
+def test_this_rule_draws_nothing_from_the_seven_above():
+    """Eight rules, eight subjects. No scan calls this one, this one calls no
+    scan, and its vocabulary is expressible in no other's terms — asserted the
+    way each rule before it asserts its own independence."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    functions = {node.name: node for node in ast.parse(source).body
+                 if isinstance(node, ast.FunctionDef)}
+
+    others = ("flagged_calls", "undeclared_targets", "module_construction",
+              "git_text_reads", "mutation_controls", "story_numbered_modules",
+              "live_artifact_reads", "history_reads")
+
+    reachable = set()
+    frontier = ["planted_assertions"]
+    while frontier:
+        name = frontier.pop()
+        for inner in ast.walk(functions[name]):
+            if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name) \
+                    and inner.func.id not in reachable:
+                reachable.add(inner.func.id)
+                if inner.func.id in functions:
+                    frontier.append(inner.func.id)
+    assert reachable.isdisjoint(others)
+
+    # And nothing calls it either, so no other rule's verdict rests on this one.
+    for name in others:
+        called = {inner.func.id for inner in ast.walk(functions[name])
+                  if isinstance(inner, ast.Call)
+                  and isinstance(inner.func, ast.Name)}
+        assert "planted_assertions" not in called, name
+
+    for vocabulary in (set(LIVE_ARTIFACT_SEGMENTS), set(WORKFLOW_RESOLVERS),
+                       set(MODULE_CONSTRUCTORS + SOURCE_EXECUTORS),
+                       set(CONTENT_SUBCOMMANDS), set(HISTORY_RESOLVERS),
+                       set(REVISION_KEYWORDS + PATH_WRITES + LOADER_INTERFACE)):
+        assert PLANT_BY_REMOVAL not in vocabulary, vocabulary
+
+
+def test_this_rule_states_what_it_does_not_cover():
+    """Including the shape it deliberately leaves out, with the reason — a
+    limit stated nowhere is indistinguishable from a limit nobody noticed."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    stated = source[:source.index("def planted_assertions(")]
+    limits = stated[stated.rindex("What it does not cover"):]
+
+    assert "interpreter or the standard library" in limits
+    assert "does not come out cleanly" in limits
+    assert "split across functions" in limits
+    assert "whether an assertion is meaningful" in limits
+    assert "not tamper-proof" in stated
+
+    # And why it is its own rule rather than an extension of one above.
+    assert "it calls no scan above it" in stated
+    assert "the first to" in stated and "what an `assert` compares" in stated
+
+
+# --------------------------------------------------------------------------
+# The clause that separates a sound control from a vacuous one, shown against
+# a module of this repository's
+#
+# The historical half of this rule's evidence — the controls story-203
+# repaired, recovered at the revision before it repaired them — is held in
+# this story's own validation module rather than here, and for a reason worth
+# stating where the next reader of this section looks for it.
+# `tests/test_mutation_controls.py` holds this module to resolving every
+# historical bound through `validation_file=` and `bound=`, and bans the
+# `revision=` form outright. That ban is right for a *story's* own bound, and a
+# revision found by searching the history for a text is neither a story bound
+# nor a pinned sha, so the recovery cannot be spelled here without either
+# breaking that assertion or working around it by respelling the call.
+# --------------------------------------------------------------------------
+
+
+#: The sound control of exactly the written shape this rule reports: it strips
+#: a paragraph out of a copy of a module's source, asserts the paragraph is
+#: gone, and then puts the stripped source back through the real check. The
+#: call to that check is the whole of what distinguishes it, so it is the
+#: module the third clause is demonstrated against.
+THE_SOUND_CONTROL = "tests/test_mutation_controls.py"
+THE_CALL_TO_THE_REAL_CHECK = (
+    "    with pytest.raises(AssertionError):\n"
+    "        assert_states_its_limits(stripped, THE_NEW_SCAN)\n"
+)
+
+
+def test_the_sound_control_of_the_same_shape_is_left_alone():
+    """The clause that separates a sound control from a vacuous one, shown
+    against a module of this repository's rather than against a source composed
+    here.
+
+    Unreported as it stands; reported once the call that puts the stripped
+    source back through the real check is taken out, and nothing else about it
+    changed — so the silence is that call and not the scan overlooking a shape
+    it was written for.
+    """
+    text = (REPO_ROOT / THE_SOUND_CONTROL).read_text(encoding="utf-8")
+    assert planted_assertions(text, Path(THE_SOUND_CONTROL).name) == []
+
+    assert THE_CALL_TO_THE_REAL_CHECK in text
+    without_the_check = text.replace(THE_CALL_TO_THE_REAL_CHECK, "")
+    flags = planted_assertions(without_the_check, Path(THE_SOUND_CONTROL).name)
+    assert len(flags) == 1, flags
