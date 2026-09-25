@@ -289,6 +289,33 @@ AREA_SUGGESTIONS = "area_suggestions"
 LOST_BY_THE_QUEUE = "lost by the queue"
 NO_ARTIFACT = "no findings artifact"
 
+#: The key the supply below records on a finding it supplied a workflow into.
+#: Recorded on the finding itself rather than beside it because the finding is
+#: what travels: a narrow inspection writes its findings into a run-directory
+#: artifact and files them when the run completes, so a mark held anywhere else
+#: would be lost between the reading and the filing — and the one fact that
+#: makes a supplied brief distinguishable, that the Inspector named no workflow,
+#: is destroyed by the supply itself. `file_findings` reads it onto the `Filed`
+#: record. It reaches the filed payload as a consequence of the payload being
+#: the brief, which is honest and is routed on by nothing: no check, verdict,
+#: dedupe or identity reads it, and the brief schema admits it like any other
+#: property it does not declare.
+WORKFLOW_SUPPLIED = "workflow_supplied"
+
+#: Appended to the body of a finding the harness supplied a workflow into, so
+#: the person who meets the brief on a board meets the mark on the brief's own
+#: text rather than only in a run's record. It says the choice was not the
+#: Inspector's and that it may be changed, because that is what makes supplying
+#: safe: a workflow is a pick between two named options a human reviews anyway,
+#: and correcting one costs a word where a finding thrown away over a missing
+#: one costs the whole review.
+SUPPLIED_WORKFLOW_SENTENCE = (
+    "The harness supplied this brief's workflow ({workflow}): the finding named "
+    "none, so the workflow this target's configuration declares was filled in "
+    "rather than the finding being dropped. It was supplied and not chosen, so "
+    "change it when you plan this brief if another workflow suits the work."
+)
+
 
 # --------------------------------------------------------------------------
 # What a scope is
@@ -558,6 +585,14 @@ class Filed:
     #: reported as a refile. Defaulted so every existing construction stays
     #: valid.
     refiled_over_failure: bool = False
+    #: Whether the harness supplied this brief's workflow rather than the
+    #: Inspector choosing it. The record of what was filed, beside the brief's
+    #: own body, which says the same thing to whoever meets it on a board.
+    #: Reported and routed on by nothing — it exists so a person reviewing the
+    #: brief knows the choice was not the Inspector's and is theirs to change —
+    #: and defaulted so every existing construction stays valid, with false
+    #: meaning the workflow came from the finding.
+    workflow_supplied: bool = False
 
 
 def was_made(dropped) -> bool:
@@ -779,6 +814,25 @@ class Report:
             (brief, suggested.get(brief.slug, ""))
             for brief in self.filed if not brief.area
         )
+
+    @property
+    def supplied_workflows(self) -> tuple[Filed, ...]:
+        """Each filed brief whose workflow the harness supplied.
+
+        One derivation beneath every report surface, for the reason
+        `unnamed_areas` above is one: the broad report and both surfaces the
+        narrow modes write say the same thing on the same terms, and two
+        derivations of one rule are two answers that can disagree.
+
+        It carries the brief alone where `unnamed_areas` carries a pair, because
+        there is no second fact to pair with: an area-less brief may have a
+        suggestion the Inspector wrote in a separate array, while what was
+        supplied here is on the brief itself. And it needs no gate of the kind
+        that one has — a brief filed with a supplied workflow is evidence of
+        itself, where an area-less brief means nothing at all until something
+        shows the target declares areas.
+        """
+        return tuple(brief for brief in self.filed if brief.workflow_supplied)
 
     @property
     def dedupe_ran(self) -> bool:
@@ -1156,6 +1210,61 @@ def _area(finding) -> str:
     return ""
 
 
+def with_supplied_workflow(finding, workflow: str):
+    """The finding as the loop works with it: a workflow supplied where it named
+    none, marked as supplied, and its body saying so.
+
+    A finding complete in every other respect used to be thrown away whole over
+    this one field — the defect, the evidence, the severity and the paths with
+    it — and a workflow is the one required field where that trade is plainly
+    wrong: it is a pick between named options a person reviews when they plan
+    the brief, so a supplied value costs a word to correct where a dropped
+    finding costs the whole review to recover.
+
+    The trigger is the field being **absent** and nothing else. A `workflow`
+    carrying a name no definition answers, an empty one, and one that is not a
+    string are each a wrong answer rather than a missing one: the first two go
+    to the unknown-workflow drop below and the third to the schema's, and
+    supplying over any of them would bury a mistake the Inspector made. Nothing
+    else the brief's shape requires is supplied for, either — a finding missing
+    anything else is dropped as malformed exactly as it was.
+
+    Returns the finding to work with, and nothing beside it: whether a workflow
+    was supplied is recorded on the finding, which is the thing that travels, so
+    a second return value would be a second answer that only the call site
+    below could read. A new dict rather than an edit, so what the invocation
+    wrote stays what it wrote, and anything this cannot read — a finding that is
+    not an object at all — comes back untouched for the validation below to
+    refuse.
+    """
+    if not isinstance(finding, dict) or "workflow" in finding:
+        return finding
+    supplied = {**finding, "workflow": workflow, WORKFLOW_SUPPLIED: True}
+    body = finding.get("body")
+    if isinstance(body, str):
+        # Appended rather than prepended: the opening paragraphs are what a
+        # person reads first and are the Inspector's account of the work, and
+        # this is a note about how the brief was filed. A body that is not text
+        # is left as it is — the finding is dropped as malformed for it below,
+        # and a sentence appended to a value of some other type would be this
+        # function deciding what that value meant.
+        supplied["body"] = (
+            body.rstrip() + "\n\n"
+            + SUPPLIED_WORKFLOW_SENTENCE.format(workflow=workflow)
+        )
+    return supplied
+
+
+def _supplied(finding) -> bool:
+    """Whether the supply above marked this finding, read where it is filed.
+
+    Read off the finding rather than carried beside it, so the answer survives
+    every artifact a finding travels through between the inspection that
+    supplied the value and the filing that records it.
+    """
+    return isinstance(finding, dict) and finding.get(WORKFLOW_SUPPLIED) is True
+
+
 def _severity(finding) -> int | None:
     """A finding's severity where it has a readable one, for the drop report."""
     if isinstance(finding, dict):
@@ -1329,7 +1438,18 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
 
     brief_schema = schema_validator.load_schema(BRIEF_SCHEMA, harness_root)
     defined = harness_config.workflow_names(harness_root)
+    # Read once for the scope, through the one derivation that spells the
+    # fallback, so an inspection and a run of the same target cannot come to
+    # name different workflows.
+    configured = harness_config.configured_workflow(config)
     for position, finding in enumerate(document["findings"], start=1):
+        # Before the validation below, which is what makes the supply reach a
+        # finding at all: the field is required, so a finding that named no
+        # workflow fails the shape and is dropped before anything downstream
+        # sees it. Everything the validation then decides is untouched — the
+        # supplied value goes through the same schema check and the same
+        # unknown-workflow drop as a value the Inspector named.
+        finding = with_supplied_workflow(finding, configured)
         named = _describe(finding, f"the finding at position {position}")
         problems = schema_validator.validate(finding, brief_schema)
         if problems:
@@ -1487,6 +1607,13 @@ def file_findings(target_root: Path, found: list, max_findings: int, *,
             # per producer.
             area=_area(one.finding),
             refiled_over_failure=_held_failed(one.finding, failed),
+            # Read off the finding, which is where the supply recorded it, so a
+            # brief filed from a run-directory artifact hours after the
+            # inspection that supplied its workflow is marked exactly as one
+            # filed straight from the invocation is. Both producers reach
+            # filing through here, so what a filed brief's record says about
+            # this is one fact rather than one per producer.
+            workflow_supplied=_supplied(one.finding),
         ))
     return tuple(filed), dropped
 

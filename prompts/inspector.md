@@ -161,6 +161,20 @@ the body why you chose it and what made it a near thing — the human
 planning the brief can overrule you, and can only overrule a choice whose
 reasoning they can see.
 
+A brief that omits this field is not thrown away. The harness fills in the
+workflow this target's configuration declares, marks the brief as having had
+one supplied rather than chosen — in the brief's own body, in the record of
+what was filed, and in the line the report prints — and files it, so the
+person planning it is told the pick was not yours and can change it. Naming
+one is still your work: a supplied value is a choice nobody made, and this
+is what happens to a brief you would otherwise have lost, not an alternative
+to judging.
+
+A name none of the definitions above carries is refused, and the whole
+finding is dropped with it. That is a wrong answer rather than a missing one,
+and filling in over it would bury a mistake. Name one of them exactly as it
+is spelled above, or leave the field out.
+
 [The slug, and what a brief is filed under]
 Each brief you write carries a `slug`: a short kebab-case name for the
 defect itself. Derive it by this rule, so that two inspections of one defect

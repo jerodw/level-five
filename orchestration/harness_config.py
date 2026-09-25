@@ -314,6 +314,25 @@ def workflow_token_values(config: dict) -> dict[str, str | None]:
     }
 
 
+def configured_workflow(config: dict) -> str:
+    """The workflow a target configuration names, and the fallback where none.
+
+    **The one place the fallback is spelled.** What a target configures when it
+    configures nothing is one fact, and it now has more than one reader: a run
+    resolves it as the last of the three places a workflow can be named, and an
+    inspection supplies it into a finding that named none. Two spellings of one
+    fallback are two spellings that can disagree, and the disagreement would be
+    invisible — a run and a brief filed by the inspection of that same run would
+    simply name different workflows, each correct by its own reading.
+
+    The value is the target's own declared name where it declares one, and is
+    read with no judgement about it: whether a definition of that name exists is
+    `load_workflow`'s question and `workflow_names`' vocabulary, and a name this
+    returns that no definition answers is refused there rather than here.
+    """
+    return config.get("workflow", "story-workflow")
+
+
 def workflow_names(harness_root: Path) -> tuple[str, ...]:
     """The names of the workflow definitions a harness root holds, sorted.
 

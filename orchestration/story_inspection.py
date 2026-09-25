@@ -1312,6 +1312,17 @@ def _report(run_dir: Path, target_root: Path, config: dict, story_id: str,
         if suggestion:
             line += f"; the Inspector says it concerns: {suggestion}"
         _note(run_dir, line)
+    # A brief whose workflow the harness supplied gets a line of its own, on the
+    # terms the area-less line above is written on: the Inspector named no
+    # workflow, the finding was filled in rather than thrown away, and the pick
+    # is the reader's to change when they plan the brief. Where every filed
+    # brief named its own workflow, nothing is said.
+    for brief in report.supplied_workflows:
+        _note(
+            run_dir,
+            f"{label}: the workflow was supplied for {brief.slug} rather than "
+            f"chosen by the Inspector, and may be changed when it is planned",
+        )
     write_problem = _say(
         run_dir,
         _summary(
@@ -2852,6 +2863,17 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
         if suggestion:
             line += f"; the Inspector says it concerns: {suggestion}"
         _note(run_dir, line)
+    # And a brief whose workflow the harness supplied, said here where the brief
+    # reached the queue and on the terms `_report` says it. The mark travelled
+    # with the finding through the artifact it was held in, which is why a brief
+    # filed at the run's completion is marked exactly as one filed straight from
+    # an invocation is.
+    for brief in report.supplied_workflows:
+        _note(
+            run_dir,
+            f"{label}: the workflow was supplied for {brief.slug} rather than "
+            f"chosen by the Inspector, and may be changed when it is planned",
+        )
 
     line = f"{head}; {len(filed)} filed as briefs, {len(dropped)} dropped"
     for reason, count in _drops_by_reason(dropped).items():

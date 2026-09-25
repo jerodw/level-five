@@ -8413,7 +8413,7 @@ def _entry_paths(entry: str) -> list[str]:
 def _names_path(entry_path: str, path: str) -> bool:
     """Whether a do_not_modify entry's path equals `path` or is a directory
     prefix of it: `workflows/` and `workflows` both cover
-    `workflows/story-workflow.json`, and `orchestration/story_coordinator.py`
+    `workflows/refactor-workflow.json`, and `orchestration/story_coordinator.py`
     covers itself alone.
     """
     if not entry_path:
@@ -10423,14 +10423,15 @@ def run_story(
     # resume must load the definition it was executing — amending the artifact
     # between two entries of one run must not change what the second entry
     # runs under. The artifact comes next because the choice belongs to the
-    # work item. The configured default is last and is spelled exactly as it
-    # always was, so an artifact naming no workflow runs precisely what it ran
-    # before this field existed.
+    # work item. The configured default is last, and is read through the one
+    # derivation that spells it — so an artifact naming no workflow runs
+    # precisely what it ran before this field existed, and a second reader of
+    # the same fact cannot come to name a different workflow than a run does.
     declared = (reading.parsed or {}).get("story", {}).get("workflow")
     workflow_name = (
         (state.workflow if state else "")
         or declared
-        or config.get("workflow", "story-workflow")
+        or harness_config.configured_workflow(config)
     )
 
     # The definition may reference the target's configuration, so it is loaded

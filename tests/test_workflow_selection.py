@@ -648,12 +648,28 @@ def test_the_prompt_each_stage_received_carries_the_named_workflows_stages(
             assert name not in prompt, (stage, name)
 
 
-def test_the_configured_default_is_still_resolved_through_the_same_expression():
-    """The story's constraint, and the reason the standing proof that the
-    `workflow` config key is obeyed still bites: the default is spelled as it
-    always was rather than moved behind a helper."""
+def test_the_configured_default_is_resolved_through_the_one_derivation():
+    """The coordinator resolves the configured default through the derivation
+    that spells the fallback, and spells it nowhere itself.
+
+    story-072's constraint was that the default be spelled in the coordinator as
+    it always was rather than moved behind a helper, and story-207 moved it
+    deliberately: a second reader arrived — an inspection supplies the same
+    value into a finding that named none — and two spellings of one fallback are
+    two spellings that can disagree about what a target configures. What that
+    constraint was protecting is that the standing proof the `workflow` key is
+    obeyed still bites, and it does: the read is still a literal
+    `config.get("workflow", …)`, now in `harness_config.configured_workflow`,
+    which is where `tests/test_config_keys_are_obeyed.py` mutates it.
+    """
+    import inspect
+
+    expression = 'config.get("workflow", "story-workflow")'
+    assert expression in inspect.getsource(harness_config.configured_workflow)
+
     source = COORDINATOR_SOURCE.read_text(encoding="utf-8")
-    assert 'config.get("workflow", "story-workflow")' in source
+    assert "harness_config.configured_workflow(config)" in source
+    assert expression not in source
 
 
 # --------------------------------------------------------------------------
