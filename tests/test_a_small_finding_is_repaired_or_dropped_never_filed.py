@@ -88,7 +88,7 @@ import conftest
 import inspection
 import schema_validator
 import story_inspection
-from conftest import BASELINE, function_source_at, repository_file_at
+from conftest import BASELINE, ENDPOINT, function_source_at, repository_file_at
 
 import test_one_defect_found_on_several_attempts_is_filed_once as filed_once
 from test_a_routed_finding_is_repaired_unless_the_verdict_says_why import (
@@ -321,28 +321,38 @@ def test_the_parity_reading_tells_two_triage_paragraphs_apart():
 def test_the_repairable_passage_is_what_it_was_before_this_story(prompt: Path):
     """The story changes which findings reach a route and not what the routes
     are, so the paragraph describing a repairable finding is compared with
-    itself at this module's own story baseline and must not have moved."""
+    itself across this module's own story range and must not have moved.
+
+    Both ends are bounded at that range: the later end is this story's ENDPOINT
+    rather than the working tree, because a story after this one may legitimately
+    add to that paragraph — story-208 makes the do_not_modify bound conditional
+    on a judgement and says so there — and reading the working tree as the after
+    side would make this assertion about whoever edits the prompt next rather
+    than about the story it belongs to. That is the trap the architecture
+    document records under its HEAD-baseline bullets."""
     before = repository_file_at(relative_to_repo(prompt),
                                 validation_file=THIS_MODULE, bound=BASELINE)
-    after = prompt.read_text(encoding="utf-8")
+    after = repository_file_at(relative_to_repo(prompt),
+                               validation_file=THIS_MODULE, bound=ENDPOINT)
     assert paragraph_containing(before, REPAIRABLE_PHRASE) == \
         paragraph_containing(after, REPAIRABLE_PHRASE)
 
 
 def test_the_unchanged_comparison_reports_a_passage_that_moved():
     """Control for the comparison above: the same baseline text with one word
-    of that paragraph changed no longer matches the shipped one, so green
-    there says the paragraph is untouched rather than that the comparison
-    cannot go red."""
+    of that paragraph changed no longer matches the one at this story's
+    endpoint, so green there says the paragraph is untouched rather than that
+    the comparison cannot go red."""
     prompt = verifier_prompts()[0]
     before = repository_file_at(relative_to_repo(prompt),
                                 validation_file=THIS_MODULE, bound=BASELINE)
+    after = repository_file_at(relative_to_repo(prompt),
+                               validation_file=THIS_MODULE, bound=ENDPOINT)
     moved = before.replace("not a licence to revisit", "not a permit to revisit",
                            1)
     assert moved != before
     assert paragraph_containing(moved, REPAIRABLE_PHRASE) != \
-        paragraph_containing(prompt.read_text(encoding="utf-8"),
-                             REPAIRABLE_PHRASE)
+        paragraph_containing(after, REPAIRABLE_PHRASE)
 
 
 # ==========================================================================

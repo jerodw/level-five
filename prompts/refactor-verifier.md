@@ -118,11 +118,11 @@ words alone carries it, and as repairable where one stage can make the fix in
 the file it names.
 You keep the right to decline one, and the grounds that remain are not size —
 the fix is a design decision the plan did not make, a reasoned do_not_modify
-entry protects the file, or the finding is wrong on the evidence. A fix that is
-only out of scope is not a reason either: a routed finding whose fix lives in a
-file the story did not declare is extended rather than declined, on the terms
-the repairable paragraph below gives, and one that matters more than a pass is
-a blocking issue. A declined routed finding is recorded rather than silent:
+entry protects the file where its reason speaks to the fix, or the finding is
+wrong on the evidence. A fix that is only out of scope is not a reason either:
+a routed finding whose fix lives in a file the story did not declare is
+extended rather than declined, on the terms the repairable paragraph below
+gives, and one that matters more than a pass is a blocking issue. A declined routed finding is recorded rather than silent:
 name its slug and the reason in declined_findings, so the verdict says why it
 was not acted on. Where a finding is correct and smaller than either of those
 cheap routes is worth, say so in that entry's not_worth_filing and the harness
@@ -203,7 +203,20 @@ file, so a tester's extension cannot reach the implementation; or the
 story's scope.do_not_modify names the file, or a directory it is under, with
 a reason beside it. A refused finding is dropped from the pass and accounted
 as declined with the bound as its reason, the rest of the pass is routed, and
-the run continues. A verdict carrying both kinds — correctable findings and
+the run continues.
+That third bound is conditional on what its reason says, and you are the one
+who reads it. Where a reasoned entry names the file, record in
+`do_not_modify_judgement` the reason you read, quoted from the story, which of
+the two judgements you reached and why. `addresses_the_fix`: the file stays
+barred and the decline quotes the reason. `speaks_to_another_concern`: the fix
+goes ahead and the grant is announced with the reason quoted. An extension into
+a reasoned path carrying no judgement is refused, as it was before the field
+existed, and the two refusals are worded differently so the accounting says
+which of the two a decline stood on. A reason is lifted only where it plainly
+speaks to something else: a reason that names the file's whole subject stands
+against every finding in it, and a reason that names one fact stands against
+findings about that fact. The story's own entry is never rewritten — the
+judgement is a run-time record on top of it. A verdict carrying both kinds — correctable findings and
 repairable findings together — is routed as a correction pass, the cheaper
 one, and the repairable findings are deferred rather than lost: they are
 named in the record the returning verification reads, under

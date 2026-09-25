@@ -10,6 +10,15 @@ states it. The coordinator decides each such reach against three bounds before
 any pass record is written: a path under a repository-wide blocked path from
 the execution rules, a path the resolved stage's own restriction governs, and a
 path a reasoned `scope.do_not_modify` entry names or is a directory above. A
+reasoned entry is no longer an absolute fence: since story-208 it bars the
+path unless the finding records that the verifier read the reason and judged
+it to speak to something other than this fix. So that bound has three states
+rather than two — no judgement recorded and a judgement that the reason
+addresses the fix both refuse, in two wordings that differ so the accounting
+says which of the two a decline stood on, and a judgement that the reason
+speaks to another concern accepts and puts the entry and the reading into the
+grant announcement. The other two bounds carry no reason for anyone to read
+and decide exactly as they did, with or without a judgement on the finding. A
 refusal drops that finding from the pass, is one event naming the bound, and
 hands the accounting a verdict in which the finding is declined with the
 refusal as its reason, so it is filed as a brief at completion; the rest of the
@@ -46,12 +55,27 @@ Every absence asserted here carries a demonstration that it can fail:
   * "the story artifact is not written to" sits beside a rendering of it with
     the scope block altered, which the same comparison tells apart;
   * "no workflow definition changed" resolves through the shared story range
-    and sits beside constructed histories the same call tells apart.
+    and sits beside constructed histories the same call tells apart;
+  * each refusal the judgement leaves standing — an unreadable record, an
+    entry carrying no reason, a bound asked before the reasoned one — sits
+    beside the one judgement that does lift the entry, accepted by the same
+    call;
+  * "a judgement recorded beside no extension is read and announced by
+    nothing" sits beside the same path under the same judgement carrying the
+    field, which the bound decides on and which writes the announcement;
+  * "a judgement where no reasoned entry bars is read by nothing" sits beside
+    the identical judgement reported against the path the entry does bar,
+    which puts the entry and the reading into the line;
+  * "the shipped prompts state the judgement in one sentence" sits beside a
+    copy of one of them with that sentence reworded, which the same walk
+    reports as two renderings rather than one.
 """
 
 from __future__ import annotations
 
 import ast
+import dataclasses
+import inspect
 import json
 from pathlib import Path
 
@@ -238,6 +262,57 @@ REFUSED = (NOTES_EXTENSION, SEALED_EXTENSION, FROZEN_EXTENSION)
 
 def without_the_field(finding: dict) -> dict:
     return {key: value for key, value in finding.items() if key != EXTENSION}
+
+
+# --------------------------------------------------------------------------
+# The judgement a verdict may record of a reasoned entry's reason
+# --------------------------------------------------------------------------
+#
+# Since this story the reasoned entry bars a path only where its reason speaks
+# to the finding, and who reads the reason is the verifier. The refusal stays
+# the default: the entry bars the path unless the finding records that the
+# reason was read and is about something else. Every name below is read off
+# the coordinator's own constants and off the shape it carries a judgement in,
+# so a rename moves both the code and these cases together.
+
+#: The field a finding records its reading of a reasoned entry under, and the
+#: two readings it may record.
+JUDGEMENT = story_coordinator.DO_NOT_MODIFY_JUDGEMENT
+ADDRESSES = story_coordinator.ADDRESSES_THE_FIX
+SPEAKS_ELSEWHERE = story_coordinator.SPEAKS_TO_ANOTHER_CONCERN
+
+#: The three fields a judgement carries, off the shape the coordinator reads
+#: one into, so the schema below is asserted against the reader's own names.
+JUDGEMENT_FIELDS = tuple(
+    field.name
+    for field in dataclasses.fields(story_coordinator.DoNotModifyJudgement))
+
+#: The verifier's echo of the reason it judged, and its reading of it.
+#: Deliberately not the text the story spells the entry with: the echo is what
+#: the verdict quoted, no check matches it against the story, and a grant
+#: announcement carries it rather than the entry the coordinator found.
+JUDGED_ENTRY = f'MARKER-JUDGED-ENTRY "{FROZEN_REASON}"'
+JUDGED_READING = ("MARKER-READING the reason is about where those pages are "
+                  "published, and this fix is about a rule one of them states")
+
+
+def judging(finding: dict, judgement: str, *, entry: str = JUDGED_ENTRY,
+            reading: str = JUDGED_READING) -> dict:
+    """`finding` with the verifier's reading of a reasoned entry recorded on
+    it, in the shape the coordinator reads a judgement out of."""
+    return {**finding,
+            JUDGEMENT: dict(zip(JUDGEMENT_FIELDS, (entry, judgement, reading)))}
+
+
+#: The reasoned entry's path under each of the three states the bound now has:
+#: no judgement recorded, judged to stand, judged to be about something else.
+FROZEN_STANDING = judging(FROZEN_EXTENSION, ADDRESSES)
+FROZEN_LIFTED = judging(FROZEN_EXTENSION, SPEAKS_ELSEWHERE)
+
+#: A story whose reasoned entry names the prefix the rules block, so the order
+#: the blocked bound and the reasoned bound are asked in has a path both apply
+#: to. The shared fixture's story cannot show it: nothing it bars is blocked.
+SEALED_AND_REASONED = {"scope": {"do_not_modify": [f"{SEALED} ({FROZEN_REASON})"]}}
 
 
 # --------------------------------------------------------------------------
@@ -497,6 +572,277 @@ def test_an_extension_to_either_listed_path_is_refused_naming_the_entry():
     assert check(for_helpers, for_notes, story=stripped).refused == []
 
 
+# --------------------------------------------------------------------------
+# The reasoned entry's three states, as a function
+# --------------------------------------------------------------------------
+
+
+def bound_of(finding: dict, **keywords) -> str:
+    """The one bound a single refused finding is refused on."""
+    decided = check(finding, **keywords)
+    assert decided.accepted == [], finding
+    (refused,) = decided.refused
+    return refused.bound
+
+
+def declined_reason_of(finding: dict) -> str:
+    """What the accounting is handed as the declined reason for one refused
+    finding: the verdict after the refusals, through the same composition the
+    coordinator hands on."""
+    verdict = repairing(finding)
+    decided = check(*verdict[REPAIRABLE])
+    handed = story_coordinator.verdict_after_refusals(verdict, decided)
+    assert handed[REPAIRABLE] == []
+    (declined,) = handed["declined_findings"]
+    assert declined["reason"] == story_coordinator.refusal_reason(
+        decided.refused[0])
+    assert schema_validator.validate(handed, VERDICT_SCHEMA) == []
+    return declined["reason"]
+
+
+def test_a_reasoned_entry_refuses_unjudged_and_judged_to_address_the_fix():
+    """The three states the bound now has, over one path one reasoned entry
+    names. No judgement recorded and a judgement that the reason addresses the
+    fix are both refused, each naming the barring entry and each in its own
+    wording; a judgement that the reason speaks to another concern is
+    accepted. The acceptance is the control for the two refusals: the same
+    finding, the same path, the same entry, differing only in what the verdict
+    recorded about the reason."""
+    unjudged = bound_of(FROZEN_EXTENSION)
+    standing = bound_of(FROZEN_STANDING)
+    for reasoned in (unjudged, standing):
+        assert FROZEN_ENTRY in reasoned
+        assert "do_not_modify" in reasoned
+    assert unjudged != standing
+    assert "no judgement" in unjudged
+    assert "judged to address the fix" not in unjudged
+    assert "judged to address the fix" in standing
+    assert "no judgement" not in standing
+
+    lifted = check(FROZEN_LIFTED)
+    assert lifted.accepted == [FROZEN_LIFTED]
+    assert lifted.refused == []
+
+
+def test_the_two_refusal_wordings_are_what_the_verdict_handed_on_declines():
+    """Each wording reaches the declined entry the accounting reads, so a
+    reader of the accounting can tell which of the two a decline stood on."""
+    without = declined_reason_of(FROZEN_EXTENSION)
+    standing = declined_reason_of(FROZEN_STANDING)
+    assert without != standing
+    for reason in (without, standing):
+        assert reason.startswith("scope extension refused")
+        assert FROZEN_ENTRY in reason
+        assert FROZEN_FILE in reason
+    assert "no judgement" in without
+    assert "judged to address the fix" in standing
+
+
+@pytest.mark.parametrize("recorded", [
+    None,
+    SPEAKS_ELSEWHERE,
+    [JUDGED_ENTRY, SPEAKS_ELSEWHERE, JUDGED_READING],
+    {},
+    {JUDGEMENT_FIELDS[1]: SPEAKS_ELSEWHERE},
+    dict(zip(JUDGEMENT_FIELDS,
+             (JUDGED_ENTRY, "a-reading-the-enum-does-not-declare",
+              JUDGED_READING))),
+    dict(zip(JUDGEMENT_FIELDS, (3, SPEAKS_ELSEWHERE, JUDGED_READING))),
+    dict(zip(JUDGEMENT_FIELDS, (JUDGED_ENTRY, SPEAKS_ELSEWHERE, None))),
+], ids=["null", "a bare string", "a list", "empty", "the judgement alone",
+        "a value outside the enum", "an entry that is not a string",
+        "a reading that is not a string"])
+def test_a_judgement_the_coordinator_cannot_read_refuses_as_none_does(recorded):
+    """The refusing answer is what an unreadable record produces. The schema
+    below refuses every one of these before a run could carry it, so meeting
+    one here is reading it as no judgement rather than as a permission nobody
+    recorded — and the bound it produces is the no-judgement wording itself,
+    not a third one."""
+    unreadable = bound_of({**FROZEN_EXTENSION, JUDGEMENT: recorded})
+    assert unreadable == bound_of(FROZEN_EXTENSION)
+    # Control for the equality: the one readable judgement that lifts is
+    # accepted by the same call, so the refusals above are the record's
+    # unreadability and not a check that never lifts anything.
+    assert check(FROZEN_LIFTED).accepted == [FROZEN_LIFTED]
+
+
+@pytest.mark.parametrize("entry,reading", [
+    ("", JUDGED_READING),
+    (JUDGED_ENTRY, ""),
+    ("   \n ", JUDGED_READING),
+    (JUDGED_ENTRY, "\t"),
+    ("", ""),
+], ids=["no entry", "no reading", "an entry of whitespace",
+        "a reading of whitespace", "neither"])
+def test_a_judgement_recording_no_words_refuses_as_none_does(entry, reading):
+    """A judgement that records no words is read as no judgement, so the
+    stronger of the two permissions is not given for a record that shows a
+    reviewer neither the reason judged nor the reading of it. It is driven with
+    the lifting value, which is the one that would otherwise grant, and the
+    schema is asserted to accept the same record: this validator subset
+    declares no length constraint, so the coordinator is the only thing that
+    can refuse it, and a control that rested on the schema would rest on
+    nothing.
+
+    Its control is the same judgement carrying both texts, which the same call
+    lifts — so the refusals here are the emptiness and not a check that has
+    stopped lifting anything."""
+    blank = judging(FROZEN_EXTENSION, SPEAKS_ELSEWHERE,
+                    entry=entry, reading=reading)
+    assert schema_validator.validate(repairing(blank), VERDICT_SCHEMA) == []
+
+    decided = check(blank)
+    assert decided.accepted == []
+    assert bound_of(blank) == bound_of(FROZEN_EXTENSION)
+    assert "no judgement" in bound_of(blank)
+
+    assert check(FROZEN_LIFTED).accepted == [FROZEN_LIFTED]
+
+
+def test_a_bare_entry_bars_nothing_with_or_without_a_judgement():
+    """An entry carrying no reason bars nothing today and still bars nothing,
+    whatever the verdict records about it: the reason is the whole of what
+    tells a developer's decision from a planner's default, and there is no
+    reason here to read."""
+    for finding in (BARE_EXTENSION, judging(BARE_EXTENSION, ADDRESSES),
+                    judging(BARE_EXTENSION, SPEAKS_ELSEWHERE)):
+        decided = check(finding)
+        assert decided.refused == []
+        assert decided.accepted == [finding]
+    # Control: the same two judgements against the path the reasoned entry
+    # does bar are refused and accepted respectively, so the acceptances above
+    # are the missing reason's doing rather than the judgement's.
+    assert check(judging(FROZEN_EXTENSION, ADDRESSES)).accepted == []
+    assert check(FROZEN_EXTENSION).accepted == []
+
+
+def test_the_blocked_bound_is_asked_before_the_reasoned_one_and_no_judgement_lifts_it():
+    """A path both a blocked prefix and a reasoned entry cover is refused on
+    the prefix, which is asked first, whatever the verdict recorded about the
+    reason — the blocked bound carries no reason for anyone to read. With the
+    prefix taken out of the rules the same path is refused on the entry
+    instead, and there the lifting judgement does lift it: the order and the
+    two bounds' independence are shown by the same pair of calls."""
+    assert story_coordinator.do_not_modify_bound(
+        SEALED_AND_REASONED, SEALED_FILE) == f"{SEALED} ({FROZEN_REASON})"
+    for finding in (SEALED_EXTENSION, judging(SEALED_EXTENSION, ADDRESSES),
+                    judging(SEALED_EXTENSION, SPEAKS_ELSEWHERE)):
+        blocked = bound_of(finding, story=SEALED_AND_REASONED)
+        assert SEALED in blocked
+        assert "execution rules" in blocked
+        assert "do_not_modify" not in blocked
+
+    unsealing = {**RULES, "blocked_paths": [one for one in RULES["blocked_paths"]
+                                            if one != SEALED]}
+    by_entry = bound_of(SEALED_EXTENSION, story=SEALED_AND_REASONED,
+                        rules=unsealing)
+    assert "do_not_modify" in by_entry
+    assert check(judging(SEALED_EXTENSION, SPEAKS_ELSEWHERE),
+                 story=SEALED_AND_REASONED, rules=unsealing).refused == []
+
+
+def test_the_restriction_bound_is_asked_before_the_reasoned_one_and_no_judgement_lifts_it():
+    """The reasoned entry's own path, routed to the confined stage, crosses
+    two bounds; the refusal names the restriction, which is asked first, with
+    or without a judgement. A lifting judgement rescues nothing here — it
+    speaks to the entry and the entry is not what refused."""
+    confined = extending(FROZEN_FILE, BEHAVIOUR_CATEGORY, "FROZEN-CONFINED")
+    assert confinement_of(WRITING).governs(FROZEN_FILE), "the premise"
+    assert story_coordinator.do_not_modify_bound(
+        DECLARED, FROZEN_FILE) == FROZEN_ENTRY, "the premise"
+    for finding in (confined, judging(confined, ADDRESSES),
+                    judging(confined, SPEAKS_ELSEWHERE)):
+        restricted = bound_of(finding)
+        assert confinement_of(WRITING).wording in restricted
+        assert FROZEN_ENTRY not in restricted
+    # Control: the identical path and judgement routed to the stage that
+    # declares no restriction is accepted, so the refusals are the
+    # confinement's and not the path's.
+    assert check(FROZEN_LIFTED).accepted == [FROZEN_LIFTED]
+
+
+def test_the_acceptances_the_other_two_bounds_allow_are_unchanged_by_a_judgement():
+    """The bounds that carry no reason accept what they accepted: a judgement
+    on a finding neither of them refuses changes nothing about either."""
+    for finding in (UNSEALED_EXTENSION, NOTES_UNRESTRICTED_EXTENSION,
+                    HELPERS_EXTENSION):
+        for judgement in (ADDRESSES, SPEAKS_ELSEWHERE):
+            judged = judging(finding, judgement)
+            decided = check(judged)
+            assert decided.refused == [], (finding["path"], judgement)
+            assert decided.accepted == [judged]
+
+
+def test_a_judgement_on_a_path_no_reasoned_entry_bars_decides_as_none_does():
+    """Read by nothing: each accepted and each refused finding of the fixture,
+    judged either way, is decided exactly as it is decided carrying none —
+    save the reasoned entry's own path, which is the one place a judgement is
+    read at all, and which the assertion below holds out as its control."""
+    unbarred = [one for one in (*ACCEPTED, *REFUSED)
+                if story_coordinator.do_not_modify_bound(
+                    DECLARED, one["path"]) is None]
+    assert len(unbarred) == len(ACCEPTED) + len(REFUSED) - 1, unbarred
+    for finding in unbarred:
+        plain = check(finding)
+        for judgement in (ADDRESSES, SPEAKS_ELSEWHERE):
+            judged = judging(finding, judgement)
+            decided = check(judged)
+            assert len(decided.refused) == len(plain.refused), finding["path"]
+            assert [one.bound for one in decided.refused] == \
+                [one.bound for one in plain.refused], finding["path"]
+    # The control for "decided as none does": on the one path a reasoned entry
+    # does bar, the two judgements decide differently from each other and from
+    # none, which is what makes the sameness above a fact about those paths.
+    assert check(FROZEN_LIFTED).refused == []
+    assert bound_of(FROZEN_STANDING) != bound_of(FROZEN_EXTENSION)
+
+
+@pytest.mark.parametrize("judgement", [ADDRESSES, SPEAKS_ELSEWHERE],
+                         ids=["judged standing", "judged lifted"])
+def test_a_judgement_beside_no_extension_asks_the_reasoned_bound_nothing(
+        judgement):
+    """The other half of "meaningful only beside scope_extension", which the
+    schema says of the field and which the reasoned entry's own path is the
+    only place to show: a finding that asks for no extension is accepted
+    before that bound is asked at all, so a judgement recorded on it neither
+    bars the path nor lifts it.
+
+    The finding is the reasoned entry's own path with the field taken off, so
+    what leaves it accepted is the missing request rather than the path. Its
+    control is the same path under the same two judgements carrying the
+    field, where the two decide differently from each other — which is what
+    makes the sameness here a fact about the missing request and not a bound
+    that has stopped reading judgements.
+    """
+    plain = without_the_field(FROZEN_EXTENSION)
+    assert story_coordinator.do_not_modify_bound(
+        DECLARED, plain["path"]) == FROZEN_ENTRY, "the premise"
+    assert check(plain).accepted == [plain]
+
+    judged = judging(plain, judgement)
+    decided = check(judged)
+    assert decided.accepted == [judged]
+    assert decided.refused == []
+
+    asking = judging(FROZEN_EXTENSION, judgement)
+    if judgement == SPEAKS_ELSEWHERE:
+        assert check(asking).accepted == [asking]
+    else:
+        assert FROZEN_ENTRY in bound_of(asking)
+    assert bound_of(FROZEN_STANDING) != bound_of(FROZEN_EXTENSION)
+
+
+def test_the_announcement_reader_must_be_given_the_story_to_read_the_entry_from():
+    """Whether a grant lifted a reasoned entry is a question about the story,
+    so the reader that reports a grant takes the story as a required
+    keyword — a defaulted one would let a call site drop the lifted entry from
+    the announcement by omission."""
+    story = inspect.signature(
+        story_coordinator.repair_pass_extensions).parameters["story"]
+    assert story.kind is inspect.Parameter.KEYWORD_ONLY
+    assert story.default is inspect.Parameter.empty
+
+
 def test_the_blocked_bound_reads_the_rules_it_is_given():
     """With the sealed prefix absent from the rules the same finding is
     accepted, so the refusal is the rules' doing and not the path's."""
@@ -628,12 +974,18 @@ def test_the_announcement_rides_beside_the_grant_that_it_announces(two_stage_run
     state = story_coordinator.load_state(run_dir)
     assert story_coordinator.repair_pass_grants(
         run_dir, WORKFLOW["stages"], state, WRITING, 1) == [HELPERS]
+    # Neither path is named by a reasoned do_not_modify entry, so neither
+    # grant lifted one and each is reported with no judgement — the shape a
+    # grant took before a judgement could be recorded at all.
     assert story_coordinator.repair_pass_extensions(
-        run_dir, WORKFLOW["stages"], state, WRITING, 1) == [
-            (HELPERS, HELPERS_EXTENSION[EXTENSION])]
+        run_dir, WORKFLOW["stages"], state, WRITING, 1, story=DECLARED) == [
+            story_coordinator.GrantedExtension(
+                HELPERS, HELPERS_EXTENSION[EXTENSION])]
     assert story_coordinator.repair_pass_extensions(
-        run_dir, WORKFLOW["stages"], state, DOCUMENTING, 1) == [
-            (OUTSIDE_CONFINEMENT, NOTES_UNRESTRICTED_EXTENSION[EXTENSION])]
+        run_dir, WORKFLOW["stages"], state, DOCUMENTING, 1,
+        story=DECLARED) == [
+            story_coordinator.GrantedExtension(
+                OUTSIDE_CONFINEMENT, NOTES_UNRESTRICTED_EXTENSION[EXTENSION])]
 
 
 def test_the_announcement_is_one_write_rendered_three_ways(
@@ -785,6 +1137,226 @@ def test_the_same_path_against_a_bare_entry_is_not_refused_on_that_ground(
     run = drive(declared_target, harness_root,
                 [repairing(BARE_EXTENSION), PASS])
     assert_accepted(run, BARE_EXTENSION, DOCUMENTING)
+
+
+# ==========================================================================
+# The reasoned entry's three states, driven through whole runs
+# ==========================================================================
+
+
+def granted_line(stage: str, finding: dict, *, lifted: bool) -> str:
+    """The announcement the coordinator writes for a granted extension,
+    composed through its own wording rather than spelled here a second time.
+    `lifted` says whether the grant lifted a reasoned entry, which is what
+    puts the finding's judgement into the line."""
+    judged = (story_coordinator.DoNotModifyJudgement(**finding[JUDGEMENT])
+              if lifted else None)
+    return story_coordinator.scope_extension_grant_line(
+        stage, story_coordinator.GrantedExtension(
+            finding["path"], finding[EXTENSION], judged))
+
+
+def test_a_reasoned_entry_judged_to_address_the_fix_is_refused_naming_both(
+        declared_target, harness_root):
+    """The same path and the same entry as the refusal above, with the verdict
+    saying it read the reason and the reason speaks to this fix: refused, and
+    the refusal names the entry and says the verifier judged it to address the
+    fix — which is what tells this decline from the one above it."""
+    run = drive(declared_target, harness_root, [repairing(FROZEN_STANDING)])
+    refused = assert_refused_and_the_run_went_on(run, FROZEN_STANDING,
+                                                 DOCUMENTING)
+    assert FROZEN_ENTRY in refused["message"]
+    assert "judged to address the fix" in refused["message"]
+    assert "no judgement" not in refused["message"]
+    _, runner, run_dir = run
+    assert runner.calls == STAGE_NAMES
+    assert ROUTED not in events_of(run_dir)
+    assert read_state(run_dir)["repair_pass_count"] == 0
+
+
+def test_the_unjudged_refusal_says_no_judgement_was_recorded_of_the_reason(
+        declared_target, harness_root):
+    """The control the wording above is told apart from, through the run
+    rather than as a function: the identical finding with nothing recorded
+    about the reason is refused in the other wording."""
+    run = drive(declared_target, harness_root, [repairing(FROZEN_EXTENSION)])
+    refused = assert_refused_and_the_run_went_on(run, FROZEN_EXTENSION,
+                                                 DOCUMENTING)
+    assert FROZEN_ENTRY in refused["message"]
+    assert "no judgement" in refused["message"]
+    assert "judged to address the fix" not in refused["message"]
+
+
+@pytest.fixture
+def lifted_run(declared_target, harness_root):
+    """A run whose one repairable finding reaches the reasoned entry's own
+    path and records that the reason speaks to another concern."""
+    return drive(declared_target, harness_root,
+                 [repairing(FROZEN_LIFTED), PASS])
+
+
+def test_a_reasoned_entry_judged_to_speak_elsewhere_is_granted_and_completes(
+        lifted_run):
+    """The fix goes ahead: the pass is routed, the file is granted to the
+    stage the category resolves to, nothing is refused and the run completes."""
+    code, runner, run_dir = lifted_run
+    assert code == 0
+    assert read_state(run_dir)["status"] == "completed"
+    assert read_state(run_dir)["repair_pass_count"] == 1
+    assert read_state(run_dir)["retry_count"] == 0
+    assert refusals(run_dir) == []
+    assert runner.calls == entry_shape(DOCUMENTING)
+    record = record_of(run_dir)
+    assert record["stage"] == DOCUMENTING
+    assert record["findings"] == [{**FROZEN_LIFTED, "stage": DOCUMENTING}]
+    (grant,) = grants_naming(run_dir, FROZEN_FILE)
+    assert grant["stage"] == DOCUMENTING
+    assert (run_dir / "completion-report.md").is_file()
+
+
+def test_the_lifted_grant_is_announced_once_naming_the_entry_and_the_reading(
+        declared_target, harness_root, capsys):
+    """One announcement, on the kind every grant already rides, carrying what
+    the plain announcement carries and, after it, the entry the verifier
+    judged and its reading — one write rendered in events.log, in the history
+    and on the console."""
+    code, _, run_dir = drive(declared_target, harness_root,
+                             [repairing(FROZEN_LIFTED), PASS])
+    assert code == 0
+    (announced,) = announcements(run_dir)
+    message = announced["message"]
+    assert announced["event"] == EXTENSION_GRANT
+    assert announced["stage"] == DOCUMENTING
+    assert message.startswith(announcement_line(DOCUMENTING, FROZEN_LIFTED))
+    assert DOCUMENTING in message
+    assert FROZEN_FILE in message
+    assert FROZEN_LIFTED[EXTENSION] in message
+    assert JUDGED_ENTRY in message
+    assert JUDGED_READING in message
+    assert message == granted_line(DOCUMENTING, FROZEN_LIFTED, lifted=True)
+    assert message in events_log(run_dir)
+    assert message in capsys.readouterr().out
+    assert schema_validator.validate(history_of(run_dir), HISTORY_SCHEMA) == []
+    assert events_of(run_dir).count(EXTENSION_GRANT) == 1
+
+
+def test_the_lifted_grant_is_reported_with_the_judgement_the_finding_carries(
+        lifted_run):
+    """The reader the announcement is composed from: the grant this stage
+    carries names the file, the extension's reason and the judgement, and the
+    entry and reading it reports are the finding's own echo rather than the
+    entry as the story spells it — nothing matches the two against each
+    other."""
+    _, _, run_dir = lifted_run
+    state = story_coordinator.load_state(run_dir)
+    assert story_coordinator.repair_pass_extensions(
+        run_dir, WORKFLOW["stages"], state, DOCUMENTING, 1,
+        story=DECLARED) == [
+            story_coordinator.GrantedExtension(
+                FROZEN_FILE, FROZEN_LIFTED[EXTENSION],
+                story_coordinator.DoNotModifyJudgement(
+                    **FROZEN_LIFTED[JUDGEMENT]))]
+    assert JUDGED_ENTRY != FROZEN_ENTRY
+    assert JUDGED_ENTRY not in DECLARED_STORY
+
+
+def test_an_echo_the_story_does_not_carry_lifts_the_entry_just_the_same():
+    """The entry echo is read by no check: a judgement whose echo quotes
+    nothing in the story lifts the entry exactly as one quoting it does, and a
+    judgement is what lifts it rather than the echo — the same finding with
+    the story's own entry stripped of its reason is accepted with no
+    judgement at all."""
+    quoting_nothing = judging(FROZEN_EXTENSION, SPEAKS_ELSEWHERE,
+                              entry="MARKER-QUOTES-NOTHING-IN-THIS-STORY")
+    assert check(quoting_nothing).accepted == [quoting_nothing]
+    quoting_it = judging(FROZEN_EXTENSION, SPEAKS_ELSEWHERE, entry=FROZEN_ENTRY)
+    assert check(quoting_it).accepted == [quoting_it]
+    # Control: an echo is not what bars or lifts. The same echo beside the
+    # judgement that stands is refused, and the barring is the story's entry —
+    # stripped of its reason, the unjudged finding is accepted.
+    assert check(judging(FROZEN_EXTENSION, ADDRESSES,
+                         entry="MARKER-QUOTES-NOTHING-IN-THIS-STORY")).accepted == []
+    stripped = {"scope": {"do_not_modify": [FROZEN_DIR, BARE_DIR]}}
+    assert check(FROZEN_EXTENSION, story=stripped).refused == []
+
+
+def test_a_judgement_on_a_path_no_reasoned_entry_bars_announces_nothing_of_it(
+        declared_target, harness_root):
+    """The bare entry's path, judged: granted and announced exactly as a
+    finding carrying no judgement is, with neither the echo nor the reading in
+    the line — a judgement where no reasoned entry bars is read by nothing."""
+    judged = judging(BARE_EXTENSION, SPEAKS_ELSEWHERE)
+    code, runner, run_dir = drive(declared_target, harness_root,
+                                  [repairing(judged), PASS])
+    assert code == 0
+    assert refusals(run_dir) == []
+    assert runner.calls == entry_shape(DOCUMENTING)
+    assert record_of(run_dir)["findings"] == [{**judged, "stage": DOCUMENTING}]
+    (announced,) = announcements(run_dir)
+    assert announced["message"] == announcement_line(DOCUMENTING, judged)
+    assert JUDGED_ENTRY not in announced["message"]
+    assert JUDGED_READING not in announced["message"]
+    state = story_coordinator.load_state(run_dir)
+    assert story_coordinator.repair_pass_extensions(
+        run_dir, WORKFLOW["stages"], state, DOCUMENTING, 1,
+        story=DECLARED) == [
+            story_coordinator.GrantedExtension(BARE_FILE, judged[EXTENSION])]
+    # Control for the two absences: the identical judgement reported against
+    # the path the reasoned entry does bar puts both into the line, so the
+    # silence above is the entry's absence and not a wording that never says
+    # them.
+    control = granted_line(DOCUMENTING, FROZEN_LIFTED, lifted=True)
+    assert JUDGED_ENTRY in control
+    assert JUDGED_READING in control
+
+
+def test_a_judgement_beside_no_extension_is_announced_by_nothing(
+        declared_target, harness_root):
+    """The run the case above is the function of: the reasoned entry's own
+    path, asked for by a finding that carries no extension and records a
+    judgement that would lift the entry if one had been asked for. The finding
+    is granted and routed as any repairable finding is, and no scope-extension
+    event of either kind is written — the reader that composes the
+    announcement reports nothing for it, because a grant that asked for no
+    extension is not one.
+
+    Its control is the test beneath it — a separate run because a target that
+    has run a story refuses to run it again: the identical path under the
+    identical judgement, carrying the field, which writes the announcement
+    with the entry and the reading in it. So the silence here is the missing
+    request and not a writer that has stopped firing.
+    """
+    judged = judging(without_the_field(FROZEN_EXTENSION), SPEAKS_ELSEWHERE)
+    assert EXTENSION not in judged
+    code, runner, run_dir = drive(declared_target, harness_root,
+                                  [repairing(judged), PASS])
+    assert code == 0
+    assert runner.calls == entry_shape(DOCUMENTING)
+    assert record_of(run_dir)["findings"] == [{**judged, "stage": DOCUMENTING}]
+    (grant,) = grants_naming(run_dir, FROZEN_FILE)
+    assert grant["stage"] == DOCUMENTING
+    assert announcements(run_dir) == []
+    assert refusals(run_dir) == []
+    assert not any(kind.startswith("scope-extension") for kind in events_of(run_dir))
+    state = story_coordinator.load_state(run_dir)
+    assert story_coordinator.repair_pass_extensions(
+        run_dir, WORKFLOW["stages"], state, DOCUMENTING, 1, story=DECLARED) == []
+
+
+def test_the_same_path_and_judgement_carrying_the_field_are_announced(
+        declared_target, harness_root):
+    """Control for the silence above: the same path, the same judgement and
+    the same routed stage, under a finding that does ask for an extension,
+    writes one announcement carrying the entry the verifier judged and its
+    reading."""
+    assert FROZEN_LIFTED["path"] == without_the_field(FROZEN_EXTENSION)["path"]
+    assert FROZEN_LIFTED[JUDGEMENT] == judging(
+        without_the_field(FROZEN_EXTENSION), SPEAKS_ELSEWHERE)[JUDGEMENT]
+    _, _, run_dir = drive(declared_target, harness_root,
+                          [repairing(FROZEN_LIFTED), PASS])
+    (announced,) = announcements(run_dir)
+    assert JUDGED_ENTRY in announced["message"]
+    assert JUDGED_READING in announced["message"]
 
 
 # ==========================================================================
@@ -1004,6 +1576,126 @@ def test_the_same_finding_accepted_is_acted_on_and_filed_by_nobody(
     assert inspected.events_of_kind(run, EXTENSION_REFUSED) == []
     (announced,) = inspected.events_of_kind(run, EXTENSION_GRANT)
     assert announced["message"] == announcement_line(inspected.WRITING, reaching)
+    recorded = inspected.accounting(run)
+    assert recorded["acted_on_slugs"] == [ROUTED_FINDING["slug"]]
+    assert recorded["remainder_slugs"] == []
+    assert recorded["declined"] == []
+    assert inspected.filings_of(filings, ROUTED_FINDING) == 0
+    assert inspected.routed_markers(run) == []
+
+
+# --------------------------------------------------------------------------
+# The two refusal wordings, each through the accounting that records it
+#
+# The runs above refuse on a prefix the rules block, which no story declares.
+# These need the reasoned entry, so they run the inspection fixture against
+# this module's narrowed story rather than the shared one.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def declared_inspecting_target(inspecting_target):
+    """The inspection fixture's target carrying the narrowed story, committed
+    so the run starts from it — the reasoned entry is what these refusals must
+    stand on."""
+    path = inspecting_target / ".harness" / "stories" / f"{STORY_ID}.yaml"
+    assert SAMPLE_SCOPE in path.read_text(encoding="utf-8")
+    path.write_text(DECLARED_STORY, encoding="utf-8")
+    conftest.commit_setup(inspecting_target,
+                          "narrow the story's scope for these runs")
+    return inspecting_target
+
+
+def refused_into_the_accounting(target: Path, harness: Path, tmp_path: Path,
+                                finding: dict, name: str) -> str:
+    """One run whose only repairable finding reaches the reasoned entry's
+    path, returning what the accounting recorded as the routed finding's
+    declined reason. No pass is taken, the refusal is the reason, and the
+    routed finding is filed at completion."""
+    run = inspected.drive(target, harness, tmp_path, findings=[ROUTED_FINDING],
+                          verdicts=[repairing(finding)], name=name)
+    assert run.code == 0
+    assert run.state["status"] == "completed"
+    assert run.state["repair_pass_count"] == 0
+    (refused,) = inspected.events_of_kind(run, EXTENSION_REFUSED)
+    recorded = inspected.accounting(run)
+    assert recorded["routed"] == 1
+    assert recorded["acted_on"] == 0
+    assert recorded["remainder_slugs"] == [ROUTED_FINDING["slug"]]
+    entry = declined_by_slug(recorded)[ROUTED_FINDING["slug"]]
+    assert entry["reason_given"] is True
+    assert entry["reason"] == refused["message"]
+    assert recorded["declined_with_reason"] == 1
+    assert recorded["declined_without_reason"] == 0
+    (line,) = [one["message"] for one in inspected.accounting_events(run)]
+    assert "1 declined with a reason and 0 declined without one" in line
+    (filed,) = inspected.filed_events(run)
+    assert filed["filed"] == 1
+    assert inspected.routed_markers(run) == [ROUTED_FINDING["body"]]
+    return entry["reason"]
+
+
+#: The routed finding's repair, reaching the reasoned entry's own path. Each
+#: run below drives it in one of the two states that refuse.
+FROZEN_ROUTED = routed_repair(FROZEN_FILE, "FROZEN-ROUTED")
+
+
+def test_the_unjudged_refusal_is_what_the_accounting_records_as_the_reason(
+        declared_inspecting_target, inspecting_harness, tmp_path, filings):
+    """A decline standing on a reasoned entry no verdict judged reaches the
+    accounting saying exactly that, and says nothing about a judgement the
+    verdict did not make — so a reader of the accounting, and of the run whose
+    completion filed the brief, can tell this decline from the one beside
+    it."""
+    assert inspected_check(FROZEN_ROUTED).accepted == [], "the premise"
+    reason = refused_into_the_accounting(
+        declared_inspecting_target, inspecting_harness, tmp_path,
+        FROZEN_ROUTED, "frozen-unjudged")
+    assert reason.startswith("scope extension refused")
+    assert FROZEN_ENTRY in reason
+    assert "no judgement" in reason
+    assert "judged to address the fix" not in reason
+    assert inspected.filings_of(filings, ROUTED_FINDING) == 1
+
+
+def test_the_judged_standing_refusal_is_recorded_in_the_other_wording(
+        declared_inspecting_target, inspecting_harness, tmp_path, filings):
+    """The pair to the run above, identical but for what the verdict recorded
+    about the reason: the accounting's reason says the verifier judged the
+    reason to address the fix, and says nothing about a missing judgement."""
+    standing = judging(FROZEN_ROUTED, ADDRESSES)
+    assert inspected_check(standing).accepted == [], "the premise"
+    reason = refused_into_the_accounting(
+        declared_inspecting_target, inspecting_harness, tmp_path,
+        standing, "frozen-standing")
+    assert reason.startswith("scope extension refused")
+    assert FROZEN_ENTRY in reason
+    assert "judged to address the fix" in reason
+    assert "no judgement" not in reason
+    assert inspected.filings_of(filings, ROUTED_FINDING) == 1
+
+
+def test_the_same_finding_judged_to_speak_elsewhere_is_acted_on_and_not_filed(
+        declared_inspecting_target, inspecting_harness, tmp_path, filings):
+    """The control both declines sit beside: the identical finding recording
+    that the reason speaks to another concern is acted on — the pass is taken,
+    the grant is announced with the entry and the reading, nothing is declined
+    and nothing is filed."""
+    lifted = judging(FROZEN_ROUTED, SPEAKS_ELSEWHERE)
+    assert inspected_check(lifted).refused == [], "the premise"
+    run = inspected.drive(declared_inspecting_target, inspecting_harness,
+                          tmp_path, findings=[ROUTED_FINDING],
+                          verdicts=[repairing(lifted), inspected.PASS],
+                          name="frozen-lifted")
+    assert run.code == 0
+    assert run.state["status"] == "completed"
+    assert run.state["repair_pass_count"] == 1
+    assert inspected.events_of_kind(run, EXTENSION_REFUSED) == []
+    (announced,) = inspected.events_of_kind(run, EXTENSION_GRANT)
+    assert announced["message"] == granted_line(inspected.WRITING, lifted,
+                                                lifted=True)
+    assert JUDGED_ENTRY in announced["message"]
+    assert JUDGED_READING in announced["message"]
     recorded = inspected.accounting(run)
     assert recorded["acted_on_slugs"] == [ROUTED_FINDING["slug"]]
     assert recorded["remainder_slugs"] == []
@@ -1275,6 +1967,128 @@ def test_the_schema_descriptions_say_what_the_field_is_and_what_a_span_is():
     assert "no single stage" not in reason
 
 
+def finding_properties() -> dict:
+    return VERDICT_SCHEMA["properties"][REPAIRABLE]["items"]["properties"]
+
+
+def judgement_schema() -> dict:
+    return finding_properties()[JUDGEMENT]
+
+
+def test_the_verdict_schema_declares_the_judgement_beside_the_extension():
+    """An object with three required fields and an enum of two, declared
+    optional beside the field it is meaningful next to, with its property
+    names those of the shape the coordinator reads a judgement into."""
+    item = VERDICT_SCHEMA["properties"][REPAIRABLE]["items"]
+    assert JUDGEMENT in item["properties"]
+    assert JUDGEMENT not in item["required"]
+    assert set(item["required"]) == REQUIRED_OF_A_FINDING
+    declared = judgement_schema()
+    assert declared["type"] == "object"
+    assert set(declared["required"]) == set(JUDGEMENT_FIELDS)
+    assert set(declared["properties"]) == set(JUDGEMENT_FIELDS)
+    (_, judgement_field, _) = JUDGEMENT_FIELDS
+    assert declared["properties"][judgement_field]["enum"] == [ADDRESSES,
+                                                               SPEAKS_ELSEWHERE]
+    for name in JUDGEMENT_FIELDS:
+        assert declared["properties"][name]["type"] == "string", name
+
+
+def test_the_verdict_schema_validates_a_finding_with_and_without_a_judgement():
+    for finding in (FROZEN_EXTENSION, FROZEN_STANDING, FROZEN_LIFTED,
+                    judging(BEHAVIOUR_FINDING, SPEAKS_ELSEWHERE)):
+        assert schema_validator.validate(repairing(finding),
+                                         VERDICT_SCHEMA) == []
+    assert schema_validator.validate(
+        repairing(FROZEN_LIFTED, BEHAVIOUR_FINDING), VERDICT_SCHEMA) == []
+
+
+@pytest.mark.parametrize("field", JUDGEMENT_FIELDS)
+def test_the_verdict_schema_refuses_a_judgement_missing_any_required_field(field):
+    """Each of the three is required: without it the verdict is refused and
+    the error names the field. The control is the whole judgement beside it,
+    which the same call accepts."""
+    short = {key: value for key, value in FROZEN_LIFTED[JUDGEMENT].items()
+             if key != field}
+    errors = schema_validator.validate(
+        repairing({**FROZEN_EXTENSION, JUDGEMENT: short}), VERDICT_SCHEMA)
+    assert errors
+    assert any(field in error for error in errors), errors
+    assert schema_validator.validate(repairing(FROZEN_LIFTED),
+                                     VERDICT_SCHEMA) == []
+
+
+@pytest.mark.parametrize("wrong", [
+    dict(zip(JUDGEMENT_FIELDS,
+             (JUDGED_ENTRY, "a-reading-the-enum-does-not-declare",
+              JUDGED_READING))),
+    dict(zip(JUDGEMENT_FIELDS, (JUDGED_ENTRY, "", JUDGED_READING))),
+    dict(zip(JUDGEMENT_FIELDS, (JUDGED_ENTRY, ADDRESSES, 3))),
+    "speaks to another concern",
+    [ADDRESSES],
+], ids=["a value outside the enum", "an empty judgement",
+        "a reading that is not a string", "a string", "a list"])
+def test_the_verdict_schema_refuses_a_malformed_judgement(wrong):
+    errors = schema_validator.validate(
+        repairing({**FROZEN_EXTENSION, JUDGEMENT: wrong}), VERDICT_SCHEMA)
+    assert errors
+    assert any(JUDGEMENT in error or ADDRESSES in error for error in errors), \
+        errors
+
+
+def test_the_judgement_descriptions_say_what_it_decides_and_what_no_check_reads():
+    """The descriptions carry what a verifier meeting the field has to know:
+    that the entry bars the path by default, what each value causes, that an
+    absent judgement refuses as before, that the field is meaningful only
+    beside the extension, that a judgement where nothing bars is read by
+    nothing, that the echo and the reading are read by no check, and the rule
+    for when a reason may be lifted at all."""
+    declared = judgement_schema()
+    whole = declared["description"]
+    assert "bars the path by default" in whole
+    assert "the file stays barred and the decline quotes the reason" in whole
+    assert "the fix goes ahead and the grant is announced" in whole
+    assert "An absent judgement refuses" in whole
+    assert "before this field existed" in whole
+    assert "meaningful only beside scope_extension" in whole
+    assert "read by nothing" in whole
+    assert "never rewritten by a run" in whole
+
+    entry_field, judgement_field, reading_field = JUDGEMENT_FIELDS
+    echo = declared["properties"][entry_field]["description"]
+    assert "quoted from the story" in echo
+    assert "No check parses, matches or scores it" in echo
+    # The one thing the coordinator does decide from the two texts, said where
+    # the verifier writing them meets it.
+    assert "read as no judgement at all" in echo
+
+    value = declared["properties"][judgement_field]["description"]
+    for name in (ADDRESSES, SPEAKS_ELSEWHERE):
+        assert name in value, name
+    assert "plainly speaks to something else" in value
+    assert "names the file's whole subject" in value
+
+    reading = declared["properties"][reading_field]["description"]
+    assert "Read by no check" in reading
+
+
+def test_the_extension_and_declined_descriptions_state_the_bound_as_it_decides():
+    """The third bound is no longer absolute in the words the schema uses: the
+    extension's description says the entry bars the path unless the finding
+    records that the reason speaks elsewhere, and the declined reason's ground
+    is qualified the same way."""
+    field = finding_properties()[EXTENSION]["description"]
+    assert JUDGEMENT in field
+    assert "speaks to another concern" in field
+    # The three bounds are still the three bounds, in the words they were in.
+    assert "execution rules block" in field
+    assert "restriction on the stage" in field
+    reason = VERDICT_SCHEMA["properties"]["declined_findings"]["items"][
+        "properties"]["reason"]["description"]
+    assert "protects the file where its reason speaks to the fix" in reason
+    assert "protects the file, or" not in reason
+
+
 def test_the_history_enum_names_both_kinds_and_the_coordinator_emits_both():
     """The closed enum declares the two new kinds, the coordinator's source
     spells both as append_event kinds, and every kind it can pass is in the
@@ -1374,6 +2188,107 @@ def test_the_rewritten_passages_read_identically_between_the_shipped_prompts():
             assert carrying, (prompt.name, needle)
             found.add(tuple(carrying))
         assert len(found) == 1, (needle, found)
+
+
+#: The lifting rule and the qualified ground, by the words each is found at.
+LIFTING_RULE = "plainly speaks to something else"
+PROTECTS_QUALIFIED = "protects the file where its reason speaks to the fix"
+
+#: The three passages the parity assertions walk, as the sibling module names
+#: them — the judgement is stated in the repairable one and the qualification
+#: in the default one.
+PASSAGE_OPENINGS = (DEFAULT_OPENING, CORRECTION_BOUNDS_PHRASE, REPAIRABLE_PHRASE)
+
+
+def sentences_carrying(text: str, needle: str) -> list[str]:
+    """Every sentence of the three passages this story writes in that carries
+    `needle`, flowed, so a clause straddling a newline is still found."""
+    return [one for opening in PASSAGE_OPENINGS
+            for one in sentences(paragraph_containing(text, opening))
+            if needle in one]
+
+
+@pytest.mark.parametrize("prompt", verifier_prompts(), ids=lambda p: p.name)
+def test_each_prompt_states_the_judgement_and_when_a_reason_may_be_lifted(
+        prompt: Path):
+    """What a verifier meeting a reasoned entry has to know, in the paragraph
+    that already states the three bounds: the field to record its reading in,
+    what each of the two readings causes, that an extension into a reasoned
+    path carrying no judgement is refused, that the two refusals are worded
+    differently, and the rule that a reason is lifted only where it plainly
+    speaks to something else."""
+    text = prompt.read_text(encoding="utf-8")
+    repairable = paragraph_containing(text, REPAIRABLE_PHRASE)
+    assert f"`{JUDGEMENT}`" in repairable
+    assert f"`{ADDRESSES}`" in repairable
+    assert f"`{SPEAKS_ELSEWHERE}`" in repairable
+    assert "carrying no judgement is refused" in repairable
+    assert "worded differently" in repairable
+    assert LIFTING_RULE in repairable
+    assert "names the file's whole subject" in repairable
+    assert "names one fact stands against findings about that fact" in repairable
+    assert "never rewritten" in repairable
+    # The three-bound sentence stands as it stood: the judgement is stated
+    # beside it rather than in place of it.
+    (bounds,) = [one for one in sentences(repairable) if "three bounds" in one]
+    assert "with a reason beside it" in repairable
+    for bound in ("execution rules block", "restriction on the stage",
+                  "scope.do_not_modify"):
+        assert bound in bounds, bound
+
+
+@pytest.mark.parametrize("prompt", verifier_prompts(), ids=lambda p: p.name)
+def test_each_prompts_grounds_for_declining_qualifies_the_protected_file(
+        prompt: Path):
+    """The ground is kept and qualified rather than removed: the paragraph
+    still states the right to decline and the wrong-on-the-evidence ground,
+    and the protected file is protected where its reason speaks to the fix.
+    The unqualified form is gone, and the qualified one beside the assertion
+    is what shows the absence is a rewording and not a passage that moved."""
+    default = paragraph_containing(prompt.read_text(encoding="utf-8"),
+                                   DEFAULT_OPENING)
+    assert PROTECTS_QUALIFIED in default
+    assert "protects the file, or" not in default
+    assert RIGHT_TO_DECLINE in default
+    assert "the finding is wrong" in default
+    assert "a design decision the plan did not make" in default
+
+
+def test_the_judgement_reads_identically_between_the_shipped_prompts():
+    """The parity the sibling module holds, restated over the sentences this
+    story added: each is found in every shipped verifier prompt, and every
+    prompt states it in the same sentence."""
+    prompts = verifier_prompts()
+    assert len(prompts) > 1
+    for needle in (f"`{JUDGEMENT}`", f"`{ADDRESSES}`", f"`{SPEAKS_ELSEWHERE}`",
+                   LIFTING_RULE, PROTECTS_QUALIFIED, "worded differently"):
+        found = set()
+        for prompt in prompts:
+            carrying = sentences_carrying(prompt.read_text(encoding="utf-8"),
+                                          needle)
+            assert carrying, (prompt.name, needle)
+            found.add(tuple(carrying))
+        assert len(found) == 1, (needle, found)
+
+
+def test_the_parity_walk_tells_a_prompt_that_drifted_apart(tmp_path):
+    """Control for the parity above: the same comparison over a copy of one
+    shipped prompt whose judgement sentence has been reworded reports more
+    than one rendering, so the equality is about the two files rather than
+    about a walk that finds nothing to compare."""
+    opening = "A reason is lifted only where it"
+    first, second, *_ = verifier_prompts()
+    original = second.read_text(encoding="utf-8")
+    # One word rather than the whole clause: the shipped text wraps mid-rule,
+    # so only a flowed reading finds the clause and only a word finds the file.
+    assert "plainly" in original
+    drifted = tmp_path / second.name
+    drifted.write_text(original.replace("plainly", "obviously"),
+                       encoding="utf-8")
+    assert sentences_carrying(drifted.read_text(encoding="utf-8"), opening)
+    found = {tuple(sentences_carrying(path.read_text(encoding="utf-8"), opening))
+             for path in (first, drifted)}
+    assert len(found) == 2, found
 
 
 # ==========================================================================

@@ -8313,7 +8313,18 @@ def _repair_pass_recorded(
 # refuses one that crosses any, naming the bound. The blocked-path bound is
 # asked of every finding, with or without a scope_extension, because a grant
 # can reach no blocked path whatever the finding says; the other two bounds
-# are an extension's. The restriction bound asks the question the enforcement
+# are an extension's.
+#
+# The reasoned entry bars the path unless the finding records that the verifier
+# read the reason and it speaks elsewhere. The reading belongs with the stage
+# that reviews the work, so the refusal is the default and the finding's
+# do_not_modify_judgement is what lifts it: absent, or judged to address the
+# fix, the extension is refused and the two wordings differ so the accounting
+# says which of the two a decline stood on; judged to speak to another
+# concern, the extension is accepted and the grant announcement quotes the
+# entry the verifier judged and its reading. The other two bounds carry no
+# reason for anyone to read, so neither has a judgement to consult and both
+# refuse and accept exactly as they did. The restriction bound asks the question the enforcement
 # asks: a confinement governs a change whether or not the file exists, and a
 # create restriction governs only a creation, so an implementer's reach into
 # an existing test is accepted and its reach to a test that is not there is
@@ -8327,6 +8338,65 @@ def _repair_pass_recorded(
 
 #: The field a repairable finding carries to ask for an extension.
 SCOPE_EXTENSION = "scope_extension"
+
+#: The field a repairable finding carries to record that the verifier read a
+#: reasoned do_not_modify entry's reason and judged what it speaks to.
+DO_NOT_MODIFY_JUDGEMENT = "do_not_modify_judgement"
+
+#: The judgement that the reason speaks to the finding, so the entry stands.
+ADDRESSES_THE_FIX = "addresses_the_fix"
+
+#: The judgement that the reason speaks elsewhere, so the entry is lifted.
+SPEAKS_TO_ANOTHER_CONCERN = "speaks_to_another_concern"
+
+
+@dataclass(frozen=True)
+class DoNotModifyJudgement:
+    """One verdict's judgement of one reasoned do_not_modify entry: the reason
+    text the verifier quoted from the story, which of the two judgements it
+    reached, and why.
+
+    `entry` is a judgement written for a human reviewer, on the terms
+    stage_exceptions.reason and technical_plan's reverting_breaks_the_suite
+    already sit on: no check parses, matches or scores it, and it is what makes
+    the record say which reason the verifier had in front of it.
+    """
+
+    entry: str
+    judgement: str
+    reading: str
+
+
+def _do_not_modify_judgement(finding: dict) -> DoNotModifyJudgement | None:
+    """The judgement a repairable finding records, or None where it records
+    none the coordinator can read.
+
+    Defensive in the shape every other reader of a verdict here is: a value
+    that is not a mapping, a judgement outside the two the schema's enum
+    declares, and a field of any other type each answer None, which is the
+    refusing answer — the schema refuses such a verdict before the coordinator
+    is asked, so meeting one here means reading it as no judgement rather than
+    as a permission nobody recorded.
+
+    An entry or a reading that records no words answers None for the same
+    reason, on the truthiness terms `scope_extension` beside it is read on: the
+    two text fields exist so a reviewer meeting the refusal or the grant can
+    see which reason was judged and how, and the stronger of the two
+    permissions may not be given for a record that says neither. The schema
+    cannot refuse it from its side — this validator subset declares no length
+    constraint — so it is refused here.
+    """
+    recorded = finding.get(DO_NOT_MODIFY_JUDGEMENT)
+    if not isinstance(recorded, dict):
+        return None
+    entry, judgement, reading = (
+        recorded.get("entry"), recorded.get("judgement"), recorded.get("reading")
+    )
+    if judgement not in (ADDRESSES_THE_FIX, SPEAKS_TO_ANOTHER_CONCERN):
+        return None
+    if not all(isinstance(one, str) and one.strip() for one in (entry, reading)):
+        return None
+    return DoNotModifyJudgement(entry, judgement, reading)
 
 
 def _closing_parenthetical_start(entry: str) -> int | None:
@@ -8434,6 +8504,10 @@ def do_not_modify_bound(story: dict | None, path: str) -> str | None:
     default rather than a developer's decision, which is the distinction the
     reason exists to draw. An area-style entry naming no path bars nothing
     either, since no piece of it equals or prefixes a repository path.
+
+    This finds the barring entry and decides nothing about a judgement: whether
+    the entry's reason speaks to a finding is read off that finding by
+    `scope_extension_check`, which asks this for the entry to judge against.
     """
     # Bound to `declared` rather than `scope`: the standing scan in
     # tests/test_suite_run_scope.py reports a decision under orchestration/
@@ -8497,9 +8571,20 @@ def scope_extension_check(
     run at the blocked-path check. The other two bounds are asked of a
     finding carrying an extension alone: the stage its category resolves to
     declares a restriction that governs the extension, or a reasoned
-    scope.do_not_modify entry names the path or a directory it is under. The
-    bounds are asked in that order and the first that applies is the one
-    named.
+    scope.do_not_modify entry names the path or a directory it is under and the
+    finding records no judgement lifting it. The bounds are asked in that order
+    and the first that applies is the one named.
+
+    The reasoned entry is found by `do_not_modify_bound` and judged here. A
+    finding recording no readable do_not_modify_judgement, and one recording
+    ADDRESSES_THE_FIX, are both refused, in two wordings that differ — so the
+    reason the accounting records and the line the completion filing writes say
+    which of the two a decline stood on. One recording
+    SPEAKS_TO_ANOTHER_CONCERN is accepted, and the grant announcement quotes
+    the entry the verifier judged and its reading. The refusal is the default,
+    so an extension into a reasoned path is refused unless the verifier has
+    written down that it read the reason and the reason is about something
+    else; a judgement on a path no reasoned entry bars is read by nothing.
 
     A restriction governs an extension when `StageRestriction.governs` is
     true of the path and either the restriction's sense governs
@@ -8569,7 +8654,17 @@ def scope_extension_check(
         if bound is None:
             entry = do_not_modify_bound(story, path)
             if entry is not None:
-                bound = f"the story's scope.do_not_modify names it with a reason: {entry}"
+                judged = _do_not_modify_judgement(finding)
+                if judged is None:
+                    bound = (
+                        f"the story's scope.do_not_modify names it with a reason "
+                        f"and the verdict recorded no judgement of that reason: {entry}"
+                    )
+                elif judged.judgement == ADDRESSES_THE_FIX:
+                    bound = (
+                        f"the story's scope.do_not_modify names it with a reason "
+                        f"the verifier judged to address the fix: {entry}"
+                    )
         if bound is None:
             accepted.append(finding)
         else:
@@ -8664,18 +8759,71 @@ def _scope_extension_refused(
     )
 
 
-def repair_pass_extensions(
-    run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int
-) -> list[tuple[str, str]]:
-    """The (path, reason) of each granted extension this stage carries on
-    this attempt, read off the pass record exactly as `repair_pass_grants`
-    reads the paths, so the announcement and the grant cannot disagree.
+@dataclass(frozen=True)
+class GrantedExtension:
+    """One granted extension as the announcement reports it: the file, the
+    scope_extension reason, and — where the grant lifted a reasoned
+    do_not_modify entry — the entry the verifier judged and its reading.
+
+    `judgement` is None where no reasoned entry barred the path, which is what
+    keeps a judgement on such a path read by nothing: the finding is decided
+    exactly as one carrying none, and the announcement says nothing about it.
     """
-    return [
-        (finding["path"], finding[SCOPE_EXTENSION])
-        for finding in _repair_pass_findings(run_dir, stages, state, stage_name, attempt)
-        if finding.get(SCOPE_EXTENSION)
-    ]
+
+    path: str
+    reason: str
+    judgement: DoNotModifyJudgement | None = None
+
+
+def repair_pass_extensions(
+    run_dir: Path, stages: list[dict], state: RunState, stage_name: str, attempt: int,
+    *, story: dict | None,
+) -> list[GrantedExtension]:
+    """Each granted extension this stage carries on this attempt, read off the
+    pass record exactly as `repair_pass_grants` reads the paths, so the
+    announcement and the grant cannot disagree.
+
+    `story` is required and keyword-only because whether a grant *lifted* a
+    reasoned entry is a question about the story rather than about the record: a
+    defaulted argument would let a call site drop the lifted entry from the
+    announcement by omission. Whether one was lifted is `do_not_modify_bound`,
+    the same finder the check asked, and the entry echo and the reading come off
+    the finding's own judgement — the reason the verifier quoted rather than the
+    entry as the story spells it.
+    """
+    granted: list[GrantedExtension] = []
+    for finding in _repair_pass_findings(
+        run_dir, stages, state, stage_name, attempt
+    ):
+        reason = finding.get(SCOPE_EXTENSION)
+        if not reason:
+            continue
+        lifted = (
+            _do_not_modify_judgement(finding)
+            if do_not_modify_bound(story, finding["path"]) is not None
+            else None
+        )
+        granted.append(GrantedExtension(finding["path"], reason, lifted))
+    return granted
+
+
+def scope_extension_grant_line(stage_name: str, granted: GrantedExtension) -> str:
+    """The one wording of a grant announcement: the stage, the file and the
+    scope_extension reason, and where the grant lifted a reasoned
+    do_not_modify entry, the entry the verifier judged and its reading — so a
+    reader of the run can see which reason was judged and how.
+    """
+    line = (
+        f"scope-extension grant applied: {stage_name} may change "
+        f"{granted.path}: {granted.reason}"
+    )
+    if granted.judgement is None:
+        return line
+    return (
+        f"{line}; a reasoned do_not_modify entry names it and the verifier "
+        f"judged that reason to speak to another concern: "
+        f"{granted.judgement.entry} — {granted.judgement.reading}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -11810,14 +11958,16 @@ def run_story(
             # is added is the announcement, one per extension, in the form
             # the grant lines take and through the same writer, so
             # events.log, execution-history.json and the console stay
-            # renderings of one write.
-            for granted, reason in repair_pass_extensions(
-                run_dir, stages, state, name, attempt
+            # renderings of one write. Where the grant lifted a reasoned
+            # do_not_modify entry the line names the entry the verifier judged
+            # and its reading, on the existing kind: the clause is what makes
+            # the act greppable, so the history contract is unchanged.
+            for granted in repair_pass_extensions(
+                run_dir, stages, state, name, attempt, story=reading.parsed
             ):
                 append_event(
                     run_dir,
-                    f"scope-extension grant applied: {name} may change "
-                    f"{granted}: {reason}",
+                    scope_extension_grant_line(name, granted),
                     kind="scope-extension-grant-applied",
                     stage=name,
                 )
