@@ -1,0 +1,199 @@
+story:
+  id: story-209
+  title: Each stage declares how hard its agent thinks, and every stage of both workflows says what it is set to and why
+  description: |
+    Every agent this harness runs currently thinks as hard as the developer's
+    own editor happens to be set to think. The harness says nothing about it,
+    so the most consequential judgement in a run and the shortest prose edit
+    run at the same setting, that setting comes from a personal preference file
+    outside the repository, and changing it for one unrelated piece of work
+    silently changes how every story is built. There is no way to spend more
+    where being wrong is expensive and less where it is cheap.
+
+    This story lets each stage of a workflow say how hard its agent thinks,
+    has the harness hand that value to the agent when it invokes one, and sets
+    a considered value for every stage of both shipped workflows with the
+    reason recorded beside it — the same way every money ceiling in those
+    definitions already carries the judgement behind it. The review the harness
+    makes of a story's own work before the stage that judges it gets a value
+    too, on its own existing declaration, because it is a large spend and pure
+    judgement.
+
+    It deliberately leaves alone what the planning conversation and the
+    standalone whole-tree inspection run at: those are separate invocations on
+    separate paths, neither is a workflow stage, and what they run at is
+    written up separately. It changes no money ceiling, no retry or routing
+    rule, no stage's scope, and which model anything runs on. It adds no
+    configuration key at all: the value is declared per stage in the workflow
+    definition, which is what lets the stages differ from each other.
+
+    This story was planned from the brief filed under 345.
+
+    Concretely: `orchestration/agent_runner.py`'s `run_agent` gains one
+    keyword-only `effort`, appended to the command as `--effort` in exactly the
+    place `--model` is appended, so an invocation given none builds the command
+    it builds today. `orchestration/story_coordinator.py` reads `effort` off
+    the stage about to be entered and passes the keyword only where the stage
+    declares one — the shape `max_execution_cost_usd` already has, so a stage
+    under no declaration is invoked with exactly the arguments it is invoked
+    with now and a runner with today's signature still drives a workflow that
+    declares none. A pre-flight check beside `cost_ceiling_problems` reports a
+    declared value that is not one of the levels the CLI accepts, so a typo
+    refuses the run rather than failing every invocation in it. The review's
+    value is declared inside the verifier stage's existing `inspection` block
+    and threaded through `story_inspection.inspect_before_stage` and
+    `inspection.inspect_scope` to the one invocation the pre-stage inspection
+    makes; the broad `l5-inspect` mode supplies none and is unchanged.
+
+    The values, and the reasoning recorded beside each in the definitions:
+    the verifier at `max`, because it is the gate the whole run passes through,
+    its misjudgements are the expensive kind, and at 8% of a run it is the
+    cheapest place in the system to buy better judgement — and it matters more
+    in the refactor workflow, which declares no tester stage and rests its
+    entire claim that behaviour is unchanged on this one judgement. The tester
+    at `xhigh`, because validation defects are silent in a way implementation
+    defects are not: a control that cannot fail leaves the suite green and
+    wrong. The implementer at `xhigh`, the only stage where raising further
+    costs real money, and declaring it also pins it so it stops moving when a
+    personal setting changes. The inspection at `xhigh`, the second-largest
+    judgement spend in a run, whose output a person reads, so both its misses
+    and its false alarms cost something. The documenter at `high`: the
+    narrowest scope in the workflow, prose and never behaviour, and 6% of a
+    run. The cost shares are the mean of stories 206, 207 and 208, completed
+    2026-09-24, whose runs cost $48.45, $48.44 and $55.49.
+
+    One trap worth naming for whoever writes the validation: `high` is a
+    substring of `xhigh`, so a check that a reason states its own declared
+    level must match the level as a word and not as a substring, or a reason
+    that says `xhigh` will satisfy a check for `high`.
+
+  workflow: story-workflow
+
+tasks:
+  - Give `run_agent` in orchestration/agent_runner.py a keyword-only `effort` parameter, appended to the command as `--effort <level>` where it is given, in the same place and on the same terms as `--model`, and absent from the command entirely where it is not.
+  - Have the coordinator's stage invocation read the stage's declared `effort` and pass the keyword to the runner only where the stage declares one, so a stage declaring none is invoked with exactly the arguments it is invoked with today.
+  - Add a pre-flight check beside `cost_ceiling_problems` that reports a declared effort — on a stage or on a stage's `inspection` declaration — that is not one of the levels the invoked CLI accepts, and call it where the ceiling check is called so a bad value refuses the run before a stage is spent on it.
+  - Thread a declared inspection effort from the verifier stage's `inspection` block through `story_inspection.inspect_before_stage` and `inspection.inspect_scope` to the one invocation the pre-stage inspection makes, leaving the broad `l5-inspect` mode supplying none and invoking exactly as it does today.
+  - Declare `effort` and a sibling `effort_reason` on every stage of workflows/story-workflow.json and workflows/refactor-workflow.json, and on each definition's verifier `inspection` declaration, at the values and for the reasons the description records.
+  - Write the standing validation for all of the above as a new module under tests/, and adapt the fake runner signatures in the existing modules that drive a shipped definition so they accept the new keyword.
+  - Record the new argument and the new stage declaration in .harness/docs/ARCHITECTURE.md where the agent runner's keywords and the workflow's per-stage declarations are already described.
+
+acceptance_criteria:
+  - A test invokes `run_agent` with an effort level through a fake subprocess seam and shows `--effort <level>` in the command it built, adjacent to the model argument.
+  - A test invokes `run_agent` with no effort level and shows that no `--effort` argument appears anywhere in the command it built.
+  - A run over a workflow whose stages declare different effort values shows each stage's agent invoked with that stage's declared value and no other.
+  - A run over a workflow whose stages declare no effort at all shows the runner called without the `effort` keyword, driven by a fake runner whose signature has no `effort` parameter, so a caller that predates this story still works.
+  - A run over a workflow whose verifier declares an inspection effort shows the pre-stage inspection's invocation carrying that value, and shows it is the value from the `inspection` declaration rather than the value the verifier stage itself declares.
+  - A broad-mode inspection, the shape `scripts/l5-inspect` drives, shows its invocation carrying no effort value, so the standalone sweep is unchanged.
+  - The new pre-flight check reports nothing for each of the levels the CLI accepts, reports a declared value that is not one of them, and reports one declared on a stage's `inspection` block as well as one declared on the stage, each held against a workflow the test builds and against a control that breaks exactly that rule.
+  - A test shows that a workflow carrying an unusable effort value refuses the run at pre-flight, on the terms an unusable cost ceiling already refuses it, rather than reaching an invocation.
+  - Every effort a shipped definition declares carries an `effort_reason` that states the level it explains, matched as a word rather than as a substring so that a reason saying `xhigh` does not satisfy a check for `high`; the reading is held against a definition the test builds, against controls whose reason is absent, blank, or silent about its own level, and against both shipped definitions.
+  - Both shipped definitions declare an effort on every stage they define and on their verifier's `inspection` declaration, with nothing left undeclared.
+  - The existing suite passes unchanged, with no assertion weakened, and no existing test's expectation about a command, an invocation or a workflow key removed rather than extended.
+
+technical_plan:
+  implementation_steps:
+    - Add the keyword-only `effort` parameter to `run_agent`, appending `["--effort", effort]` beside the `--model` branch, and say in the docstring what an unset value means — the command this built before the parameter existed — on the terms the `max_budget_usd` and `suite_command` paragraphs there are written on.
+    - Name the accepted levels once, in the module that talks to the CLI, since that is where the CLI's own vocabulary already lives, and have the coordinator's pre-flight check read that set rather than restating it.
+    - In the coordinator's stage invocation, build the keyword conditionally the way the execution ceiling is built — absent where the stage declares nothing — and pass it in the same call.
+    - Add `effort_problems(workflow)` beside `cost_ceiling_problems`, covering each stage's own declaration and each stage's `inspection` declaration, and call it where the ceiling problems are gathered so its findings join the same refusal.
+    - Thread the inspection's value: the coordinator reads it off the `inspection` declaration it already reads the artifact name from, hands it to `inspect_before_stage`, which hands it to `_invoke`, which hands it to `inspect_scope`, which hands it to `_one_invocation`, which passes it to the runner. Every layer defaults to none, so the post-story and broad modes are unchanged.
+    - Declare the values on both definitions, each with an `effort_reason` recording the judgement where a reader of the definition meets the value, in the register the `max_execution_cost_usd_reason` strings beside them are written in.
+    - Write the new test module, then adapt the fake runner signatures the new keyword reaches.
+    - Write the change up in the architecture document.
+  likely_file_changes:
+    - file: orchestration/agent_runner.py
+      stage: implementer
+      reason: The one module that talks to the CLI; the `effort` parameter, the `--effort` argument and the set of accepted levels belong here.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Reads the stage's declared effort and passes it to the runner, threads the inspection's value to the pre-stage inspection, and gains the pre-flight check that refuses an unusable value.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Carries a declared effort from the coordinator through to the one invocation the pre-stage inspection makes.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: Passes an effort value it is given on to the runner, defaulting to none so the broad mode is unchanged.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Declares the effort and the reason for each of its four stages and for its verifier's inspection.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: Declares the effort and the reason for each of its three stages and for its verifier's inspection.
+    - file: tests/test_a_stage_declares_how_hard_its_agent_thinks.py
+      stage: tester
+      reason: The standing validation for the whole change — the command argument, the per-stage pass-through, the inspection's own value, the pre-flight check, and the reason-states-its-level reading over both shipped definitions.
+    - file: tests/test_changed_files_records.py
+      stage: tester
+      reason: Its fake runner drives a shipped definition with an explicit signature, so it must accept the new keyword; a prediction, and the tester adapts whichever modules actually need it.
+    - file: tests/test_artifact_schemas.py
+      stage: tester
+      reason: Same forced signature adaptation, predicted on the same grounds.
+    - file: tests/test_configured_test_location.py
+      stage: tester
+      reason: Same forced signature adaptation, predicted on the same grounds.
+    - file: tests/test_config_keys_are_obeyed.py
+      stage: tester
+      reason: Same forced signature adaptation, predicted on the same grounds; it also records what each configuration key's proof is, and this story adds no configuration key, so nothing else there changes.
+    - file: tests/test_a_stage_can_check_its_own_outputs.py
+      stage: tester
+      reason: Same forced signature adaptation, predicted on the same grounds.
+    - file: tests/test_a_completed_story_is_inspected.py
+      stage: tester
+      reason: Its fake runner records the keywords an inspection invocation carries, so it meets the new keyword on the inspection path.
+    - file: tests/test_refactor_workflow.py
+      stage: tester
+      reason: Drives the refactor definition end to end, so its fake runner meets the new keyword; its declared-ceiling reading is the model the new reason reading is built from.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the agent runner's keywords and the workflow's per-stage declarations, so the new argument, the new stage key and the pre-flight refusal are written down there.
+
+scope:
+  modify:
+    - orchestration/agent_runner.py
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - orchestration/inspection.py
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - scripts/l5-plan (the planning conversation is a separate invocation on a separate path; what it thinks at was deliberately left out of this story and is written up separately)
+    - orchestration/workflow_selection.py (the workflow proposer is a separate invocation and no stage of any workflow, so it has no stage declaration to carry a value; leaving it is the same decision as leaving the planning conversation)
+    - scripts/l5-inspect (a standalone whole-tree inspection is not a workflow stage; it keeps running at whatever the developer's own setting is, and giving it a value would be a configuration key this story deliberately does not add)
+    - schemas/harness-config.schema.json (no configuration key is added: the value is declared per stage in the workflow, which is what lets the stages differ from each other, so the config schema and its key-coverage proofs have nothing to say about it)
+    - every max_run_cost_usd, max_execution_cost_usd, max_self_routes and max_bookkeeping_self_routes declaration and reason in both workflow definitions (the brief changes no budget; how hard a stage thinks and what it may spend are separate judgements and are being decided separately)
+    - every retry_routing table, correction_pass, repair_pass, clean_clone, revert_check, suite_run, suite_census and claim_support declaration in both workflow definitions (the brief changes no routing and no check; only the new key is added beside them)
+    - every may_not_create and may_only_change declaration in both workflow definitions (no stage's scope changes, so the ownership and revert checks govern exactly what they govern today)
+    - the model key in .harness/config.yaml and every site that reads it (which model a stage runs on is explicitly out of this story; only how hard it thinks is added, and it follows the same path without disturbing it)
+    - prompts/ (no stage is told anything new: the value reaches the CLI on the command line and nothing in a prompt depends on it)
+
+verification_requirements:
+  - Confirm that an invocation given no effort value builds the command it built before this story — no `--effort` argument anywhere — and that a runner whose signature has no `effort` parameter still drives a workflow declaring none.
+  - Confirm that each stage of a run is invoked with the value its own stage declares, and that the pre-stage inspection is invoked with the value its `inspection` declaration carries rather than the verifier's.
+  - Confirm that a broad-mode inspection's invocation carries no effort value, so the standalone sweep is untouched.
+  - Confirm that a workflow declaring an effort that is not an accepted level is refused at pre-flight, and that the refusal names the stage and the value.
+  - Confirm that every effort declared in both shipped definitions carries a reason stating its own level, that the reading matching it does so as a word rather than as a substring, and that a control whose reason is absent, blank or silent is reported.
+  - Confirm that both shipped definitions declare an effort on every stage and on each verifier's inspection, and that no money ceiling, routing rule, check declaration or scope restriction in either definition changed.
+  - Confirm that no configuration key was added and that no site in orchestration or scripts reads an effort value out of the target's configuration.
+  - Confirm the whole suite passes and that no existing assertion was weakened, deleted or narrowed to accommodate the new keyword — a fake runner may gain a parameter and may not lose an expectation.
+
+constraints:
+  - An invocation given no effort value must build exactly the command it builds today, argument for argument, so a target under no declaration is unaffected.
+  - The keyword is passed to the runner only where a stage declares a value, so a stage declaring none calls the runner with the arguments it calls it with today and no existing caller's signature is required to change on that account.
+  - The set of accepted levels is named once, in the module that talks to the CLI, and no second copy of that vocabulary appears in the coordinator.
+  - No configuration key is added: the value is declared per stage in the workflow definition and nowhere else.
+  - The coordinator stays deterministic and makes no model call; it reads a declared value and hands it on.
+  - The pre-stage inspection stays total — it supplies and does not decide — so nothing about the new value may give it a way to fail a run, and an absent or unusable value there is caught at pre-flight rather than mid-inspection.
+  - Both definitions keep every money ceiling, budget, routing table, check declaration and path restriction exactly as they are; the new key is added beside them and replaces nothing.
+  - No prompt changes, and no stage is told about the value it is running under.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-25 23:53:54
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 345
