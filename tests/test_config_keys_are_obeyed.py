@@ -1124,7 +1124,7 @@ class RecordingRunner:
         self.calls: list[dict] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None, effort=None):
         self.calls.append({
             "stage": stage, "prompt": prompt, "cwd": Path(cwd),
             "log_path": Path(log_path), "permission_mode": permission_mode,
@@ -2370,7 +2370,7 @@ class InspectingRunner:
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode,
                  model, allowed_tools=None, max_budget_usd=None,
-                 suite_command=None, run_dir=None):
+                 suite_command=None, run_dir=None, effort=None):
         first = not self.calls
         self.calls.append({"stage": stage, "prompt": prompt,
                            "max_budget_usd": max_budget_usd})
@@ -2533,7 +2533,7 @@ class PostStoryInspector:
         self.calls: list[dict] = []
 
     def __call__(self, prompt, *, stage, cwd, log_path, permission_mode, model,
-                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None):
+                 allowed_tools=None, max_budget_usd=None, suite_command=None, run_dir=None, effort=None):
         self.calls.append({"prompt": prompt, "stage": stage, "cwd": Path(cwd)})
         artifact, _ = inspection.findings_paths(
             Path(cwd), harness_config.load_config(Path(cwd)))

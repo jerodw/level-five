@@ -1512,16 +1512,53 @@ def test_each_statement_extends_the_one_the_base_commit_carried(name):
     assert isinstance(after, str)
 
 
+#: The keys story-209 declared on every stage of both definitions, and on each
+#: verifier's inspection block, so that every agent this harness runs says how
+#: hard it thinks. The comparisons below read the stages with these removed
+#: rather than dropping the stages from the comparison: what each assertion is
+#: about is that nothing *else* about a stage moved, and stripping exactly the
+#: two keys this story added leaves every other key of every stage still held
+#: byte for byte against the revision it is being compared with.
+EFFORT_KEYS = ("effort", "effort_reason")
+
+
+def without_effort(definition: dict) -> dict:
+    """`definition` with the effort declarations story-209 added removed."""
+    stripped = dict(definition)
+    stages = []
+    for stage in definition.get("stages", []):
+        stage = {k: v for k, v in stage.items() if k not in EFFORT_KEYS}
+        inspection = stage.get("inspection")
+        if isinstance(inspection, dict):
+            stage["inspection"] = {
+                k: v for k, v in inspection.items() if k not in EFFORT_KEYS}
+        stages.append(stage)
+    stripped["stages"] = stages
+    return stripped
+
+
 @pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
 def test_everything_but_the_statement_is_byte_identical_to_the_base_commit(name):
     before = baseline_definition(name)
-    after = raw_definition(name)
+    after = without_effort(raw_definition(name))
     assert set(before) == set(after)
     for key in ("stages", "escalation_rules", "max_run_cost_usd",
                 "max_run_cost_usd_reason", "name"):
         assert key in before
         assert after[key] == before[key], key
     assert {key for key in after if after[key] != before[key]} == {"applies_when"}
+
+
+@pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
+def test_the_effort_keys_are_the_only_thing_the_stripping_removes(name):
+    """Control for the two comparisons that read a stripped definition: the
+    unstripped text really does differ from the revisions above, so a stripping
+    that had quietly removed nothing would not make them pass."""
+    shipped = raw_definition(name)
+    assert without_effort(shipped) != shipped
+    for stage, bare in zip(shipped["stages"],
+                           without_effort(shipped)["stages"]):
+        assert set(stage) - set(bare) == set(EFFORT_KEYS)
 
 
 def definition_where_story_172_started(name: str) -> str:
@@ -1546,7 +1583,7 @@ def test_since_story_172_started_only_the_two_statements_changed():
     claim its sibling was already held to."""
     for name in SHIPPED_DEFINITIONS:
         started = json.loads(definition_where_story_172_started(name))
-        after = raw_definition(name)
+        after = without_effort(raw_definition(name))
         assert set(started) == set(after), name
         assert {key for key in after if after[key] != started[key]} == {
             "applies_when"}, name

@@ -13,6 +13,8 @@
       "max_self_routes": 1,
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=30, p50 $4.36, p90 $13.09, max $18.78. $30 is above the worst ever seen with room to spare, and the allowance is per invocation rather than cumulative, so a self-route that must redo the work is handed the whole allowance again rather than a remainder that would invite it to fail for a new reason. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "xhigh",
+      "effort_reason": "xhigh. The stage that writes the code, and the only stage where raising further costs real money: it is the largest agent spend in a run, so the ceiling here would be paid on every story rather than only where judgement is scarcest. Declaring it at all is the other half of the value. Before this key a stage thought as hard as the developer's own editor happened to be set to think, so changing that setting for one unrelated piece of work silently changed how every story was built; a declared level pins it. The cost shares in this definition are the mean of stories 206, 207 and 208, completed 2026-09-24, whose runs cost $48.45, $48.44 and $55.49. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "revert_check": {
         "result": "revert-check-result.json",
         "baseline": "stage-baseline",
@@ -38,6 +40,8 @@
       "max_bookkeeping_self_routes": 2,
       "max_execution_cost_usd": 75,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=35, p50 $3.27, p90 $12.99, max $52.56. This one is the deliberate one. The tester's expensive invocations are story-053's single legitimate $52.56 conversion and four from story-048's failing run, and no cap distinguishes them, so $75 leaves the legitimate one alone while stopping a call at well past the worst ever seen. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "xhigh",
+      "effort_reason": "xhigh. Validation defects are silent in a way implementation defects are not: a control that cannot fail leaves the suite green and wrong, and nothing downstream reports it, where a defect in the code under test is what the suite exists to find. So this stage is bought up rather than left at whatever the default happens to be. It stops one level short of the ceiling because it is a large spend in its own right and because what it writes is read by a verifier that is at the ceiling. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "suite_run": {
         "result": "suite-run-result.json"
       },
@@ -63,6 +67,8 @@
       "max_self_routes": 1,
       "max_execution_cost_usd": 10,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=34, p50 $1.30, p90 $2.07, max $3.10. The tightest distribution of the four and the tightest ceiling, at better than three times the worst ever seen. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "high",
+      "effort_reason": "high. The narrowest scope of any stage in this workflow -- confined to the configured architecture documents, writing prose and never behaviour, with no test asserting anything about what it produces -- and about 6% of a run's cost. Its mistakes are cheap and are corrected by a correction pass rather than by a retry, so it is the one stage here that is not bought up. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "claim_support": {
         "result": "claim-support-result.json"
       },
@@ -77,6 +83,8 @@
       "max_self_routes": 1,
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "Per invocation across 23 runs, story-040 through story-062: n=40, p50 $1.76, p90 $6.26, max $19.07. The observed maxima, $19.07 and $18.99, were both story-059 and both caused by the verifier starting a full suite run it could not wait for, which prompts/verifier.md now prevents; its real distribution is likely tighter and $30 is generous on purpose. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "max",
+      "effort_reason": "max. The gate the whole run passes through, and its misjudgements are the expensive kind: a verdict that passes broken work ships it, and a verdict that fails sound work spends a retry on nothing. At about 8% of a run's cost it is also the cheapest place in the system to buy better judgement -- taking one stage from the default to the ceiling costs a fraction of what one avoided retry costs. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "outputs": ["verification-result.json"],
       "schemas": {
         "verification-result.json": "verification-result",
@@ -88,7 +96,9 @@
       },
       "inspection": {
         "result": "story-inspection-findings.json",
-        "result_reason": "The run-directory artifact the pre-stage inspection writes for this stage to read: the Inspector's findings about the files this story itself changed. Shaped like the clean_clone, correction_pass and suite_run declarations beside it -- the key's absence disables the mechanism for the workflow with no code change, and the artifact name lives here rather than in orchestration. A finding about a file the story did not touch is filed as a brief exactly as it was before this key existed; only a finding about the change itself is written here, because a review comment on a change belongs to the change that produced it. It is evidence and not a verdict: no coordinator branch reads it, and the verifier's existing triage decides what it is worth."
+        "result_reason": "The run-directory artifact the pre-stage inspection writes for this stage to read: the Inspector's findings about the files this story itself changed. Shaped like the clean_clone, correction_pass and suite_run declarations beside it -- the key's absence disables the mechanism for the workflow with no code change, and the artifact name lives here rather than in orchestration. A finding about a file the story did not touch is filed as a brief exactly as it was before this key existed; only a finding about the change itself is written here, because a review comment on a change belongs to the change that produced it. It is evidence and not a verdict: no coordinator branch reads it, and the verifier's existing triage decides what it is worth.",
+        "effort": "xhigh",
+        "effort_reason": "xhigh. The pre-stage inspection is the second-largest judgement spend in a run, and what it writes is read by a person as well as by the stage that judges the story -- so both a miss and a false alarm cost something, the miss silently and the false alarm in the reading. It stops one level short of the ceiling because it is a large spend and because it supplies rather than decides: nothing it reports can fail a run. It is declared here rather than on the stage because the inspection is a separate invocation the stage does not make, so the level the stage itself runs at says nothing about it. Nothing reads this key; it records the judgement where a reader of the definition meets the value."
       },
       "correction_pass": {
         "result": "correction-pass.json",

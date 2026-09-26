@@ -2400,6 +2400,22 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "this repository configures in .harness/config.yaml, because the "
         "claim is that this deployment's own story directory is the one the "
         "shipped rule set blocks, which a fixture's directory cannot say",
+    "test_a_stage_declares_how_hard_its_agent_thinks.py":
+        "every run it drives goes through a workflow it builds against a "
+        "target it constructs, because how a declared effort reaches an "
+        "invocation is a mechanism and the stage list, the levels and the "
+        "inspection declaration are inputs to it. The one family it resolves "
+        "live is the subject of two of the story's criteria and could be "
+        "nothing else: the definitions under workflows/, because the claim is "
+        "that this repository declares an effort on every stage it ships and "
+        "on each verifier's inspection, and that each of those declarations "
+        "carries a reason stating the level it explains. A definition the "
+        "module built could only say back what the module wrote into it. Both "
+        "of those are absence assertions and both are controlled against "
+        "definitions built here — one declaring nothing, and one whose reason "
+        "is absent, blank, silent, or about the level whose name contains the "
+        "declared one — so neither depends on the shipped text staying silent "
+        "for a reason nobody checked",
     "test_a_worktree_is_named_for_its_story.py":
         "the one thing it resolves live is the subject of one criterion and "
         "could be nothing else: schemas/harness-config.schema.json's "

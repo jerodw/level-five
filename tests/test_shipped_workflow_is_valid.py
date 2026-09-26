@@ -25,6 +25,8 @@ pre-flight, before a run spends a stage on a definition that cannot work:
     defines, and one that sits before the stage declaring the route;
   * `cost_ceiling_problems` — every declared cost ceiling, at the workflow
     level and on each stage, is a non-negative number that is not a bool;
+  * `effort_problems` — every declared effort, on a stage and on a stage's
+    inspection block, is one of the levels the invoked CLI accepts;
   * `stage_exception_problems` — a story's stage exceptions mean something
     against the workflow the run loaded.
 
@@ -359,16 +361,26 @@ def test_the_configured_definition_is_among_the_definitions_swept():
 @pytest.mark.parametrize("name", sorted(shipped_definitions()))
 def test_every_shipped_definition_is_well_formed(name):
     """The same validators the pre-flight runs, over every definition that
-    ships. Their controls are the built definitions above: each of these three
-    is shown reporting a violation there, so a clean sweep here is a statement
+    ships. Their controls are the built definitions above: each of these is
+    shown reporting a violation there, so a clean sweep here is a statement
     about these definitions rather than about a validator that stopped
-    looking."""
+    looking.
+
+    `effort_problems` is swept here on the same terms as the ceiling check
+    beside it, and for the same reason: a level outside the CLI's vocabulary in
+    a definition this repository ships refuses every run of it, so the sweep
+    that catches it belongs where the shipped definition is the subject. Its
+    controls live in the module that owns that check, where a value the CLI does
+    not accept — on a stage and on a stage's inspection block — is shown
+    reported against definitions built there.
+    """
     definition = shipped_definitions()[name]
     stages = definition["stages"]
     assert stages, name
     assert story_coordinator.self_route_problems(stages) == [], name
     assert story_coordinator.retry_routing_problems(stages) == [], name
     assert story_coordinator.cost_ceiling_problems(definition) == [], name
+    assert story_coordinator.effort_problems(definition) == [], name
     assert definition["name"] == name
 
 

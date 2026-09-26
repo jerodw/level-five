@@ -33,6 +33,14 @@ STOP_PLACEHOLDER = "{stop_path}"
 STOP_ARGUMENTS_PLACEHOLDER = "{stop_arguments}"
 
 
+#: The levels the invoked CLI accepts for how hard an agent thinks, in
+#: increasing order. Named here rather than in the coordinator because this is
+#: the one module that talks to the CLI and so the one module that may know the
+#: CLI's own vocabulary — the same reason `CAPACITY_SIGNALS` below is here. The
+#: coordinator's pre-flight check reads this set rather than restating it, so a
+#: level the CLI gains later is admitted in one place.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
 #: What the CLI says when an invocation stopped because capacity ran out
 #: rather than because anything about the work was wrong: a provider rate
 #: limit, or a plan quota that has been used up. One constant, in the one
@@ -212,6 +220,7 @@ def run_agent(
     max_budget_usd: float | None = None,
     suite_command: str | None = None,
     run_dir: Path | None = None,
+    effort: str | None = None,
 ) -> AgentResult:
     """Run `claude -p` with the rendered prompt on stdin.
 
@@ -220,6 +229,20 @@ def run_agent(
     returned to the coordinator, along with what the invocation reported
     spending and whether it stopped because capacity ran out. All three come
     off the one result event the loop below already reads.
+
+    `effort` is how hard this invocation thinks, one of `EFFORT_LEVELS`. It is
+    appended to the command beside the model, because it is the same kind of
+    fact: a property of the invocation the caller decides and this module only
+    passes on. It is last in the signature rather than beside `model` there, so
+    that the standing pin on this signature is satisfied by appending one name
+    to its list of what was added since — which is the deliberate edit that pin
+    asks a widening to cost. Unset, no effort argument appears in the command at
+    all and it is
+    exactly the command this built before the parameter existed — so an
+    invocation under no declaration thinks as hard as the CLI's own default,
+    which is what every invocation did before. Nothing here validates the
+    level: a value the CLI does not accept is refused at pre-flight, so a typo
+    costs a refused run rather than every invocation in one.
 
     `max_budget_usd` is the allowance this one invocation may spend. It is
     handed to the CLI, so the invocation stops itself rather than being stopped
@@ -250,6 +273,8 @@ def run_agent(
     ]
     if model:
         cmd += ["--model", model]
+    if effort:
+        cmd += ["--effort", effort]
     if allowed_tools:
         cmd += ["--allowedTools", *allowed_tools]
     # `is not None` rather than truthiness: zero is a deliberate refusal to

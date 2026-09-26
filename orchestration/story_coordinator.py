@@ -872,6 +872,43 @@ def cost_ceiling_problems(workflow: dict) -> list[str]:
     return problems
 
 
+def effort_problems(workflow: dict) -> list[str]:
+    """Check every declared effort against the levels the CLI accepts.
+
+    Beside `cost_ceiling_problems`, and for its reason: a level the CLI does
+    not accept is a defect every invocation under that definition carries, so a
+    typo is refused before a stage is spent on it rather than failing each
+    invocation in turn. A definition declaring no effort anywhere is not
+    checked at all — absent means the CLI's own default, which is what every
+    invocation did before the key existed.
+
+    Two places declare one: a stage's own `effort`, and the `effort` on a
+    stage's `inspection` block, which is the pre-stage inspection's rather than
+    that stage's. Both are held to the same set, and the acceptable levels come
+    from `agent_runner.EFFORT_LEVELS` rather than being restated here — that
+    module is the one that talks to the CLI, so the vocabulary has one home and
+    this check reads it.
+
+    The sibling `effort_reason` keys are not read here or anywhere else; they
+    record the judgement where a reader of the definition meets the value.
+    """
+    accepted = agent_runner.EFFORT_LEVELS
+    problems = []
+    for stage in workflow.get("stages", []):
+        declared = [("effort", stage.get("effort"))] if "effort" in stage else []
+        inspection = stage.get("inspection")
+        if isinstance(inspection, dict) and "effort" in inspection:
+            declared.append(("inspection effort", inspection["effort"]))
+        for what, level in declared:
+            if level not in accepted:
+                problems.append(
+                    f"stage '{stage.get('name')}' declares {what} {level!r}, "
+                    f"which is not one of the levels the CLI accepts: "
+                    f"{', '.join(accepted)}"
+                )
+    return problems
+
+
 #: What a target that configures no pause wait waits: nothing. Zero is the
 #: default here because here zero means "do not wait". The other default
 #: durations in harness source — `SUITE_TURN_WAIT_FALLBACK_SECONDS` below and
@@ -9720,6 +9757,23 @@ def _refuse_bad_cost_ceilings(workflow: dict, problems: list[str]) -> int:
     )
 
 
+def _refuse_bad_effort(workflow: dict, problems: list[str]) -> int:
+    """Refuse a workflow declaring an effort the CLI does not accept.
+
+    Thin, like every other caller of `refuse`, and beside
+    `_refuse_bad_cost_ceilings` for its reason: the definition is wrong, not the
+    story and not the tree, so the guidance points at the file that has to
+    change.
+    """
+    return refuse(
+        f"Workflow '{workflow['name']}' declares an effort that cannot be "
+        f"applied:",
+        problems,
+        "Fix the workflow definition's effort declarations before running a "
+        "story under it.",
+    )
+
+
 def _refuse_bad_applies_when(workflow: dict, problems: list[str]) -> int:
     """Refuse a workflow that does not say when it is the one to plan under.
 
@@ -10655,6 +10709,15 @@ def run_story(
     if ceiling_problems:
         return _refuse_bad_cost_ceilings(workflow, ceiling_problems)
 
+    # And the same pre-flight for every declared effort. A level the CLI does
+    # not accept cannot be handed to an invocation, so a typo refuses the run
+    # here rather than failing every invocation in it. A definition declaring no
+    # effort anywhere is not checked and runs exactly as it did before the key
+    # existed.
+    bad_effort = effort_problems(workflow)
+    if bad_effort:
+        return _refuse_bad_effort(workflow, bad_effort)
+
     # And the same pre-flight for what the definition says it is for. A
     # definition that cannot say when it applies cannot be chosen between at
     # planning time, and discovering that at the first stage has already spent
@@ -11362,7 +11425,8 @@ def run_story(
         # raises on no path, and what it wrote is read only to be rendered: the
         # verifier decides and the inspection supplies.
         inspection_findings = None
-        declared_inspection = (stage.get("inspection") or {}).get("result")
+        declaration = stage.get("inspection") or {}
+        declared_inspection = declaration.get("result")
         if declared_inspection:
             record = run_dir / story_inspection.findings_artifact_file(
                 declared_inspection, attempt
@@ -11372,6 +11436,13 @@ def run_story(
                     run_dir, target_root, config or {}, harness_root,
                     state.story_id, stages,
                     artifact=declared_inspection, attempt=attempt,
+                    # How hard the inspection thinks, read off the same
+                    # declaration the artifact name is read off — so it is the
+                    # inspection's own value and not the value the stage that
+                    # carries the declaration runs at. A declaration carrying
+                    # none threads None, and the invocation is made exactly as
+                    # it was before the key existed.
+                    effort=declaration.get("effort"),
                 )
             if record.is_file():
                 inspection_findings = record.read_text(encoding="utf-8")
@@ -11616,6 +11687,18 @@ def run_story(
             {} if execution_ceiling is None else {"max_budget_usd": execution_ceiling}
         )
 
+        # How hard this stage's agent thinks, read off the stage about to be
+        # invoked. Built the way the ceiling above is and for its reason: the
+        # keyword is passed only where the stage declares a value, so a stage
+        # under no declaration calls the runner with exactly the arguments it
+        # called it with before this existed and a runner whose signature has
+        # no `effort` parameter still drives a workflow declaring none. The
+        # value is handed on and never decided here — the coordinator reads a
+        # declaration, and a level the CLI would refuse was refused at
+        # pre-flight.
+        declared_effort = stage.get("effort")
+        thinking = {} if declared_effort is None else {"effort": declared_effort}
+
         # The configured test command, handed to the stage's Bash guard so a
         # run of it inside the turn is denied. Built the way the ceiling above
         # is: present only for a stage whose workflow entry declares that it
@@ -11645,6 +11728,7 @@ def run_story(
             model=config.get("model"),
             allowed_tools=stage_tools,
             run_dir=run_dir,
+            **thinking,
             **budget,
             **no_suite,
         )

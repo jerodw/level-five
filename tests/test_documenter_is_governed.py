@@ -387,7 +387,7 @@ class Runner:
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None,
-                 max_budget_usd=None, suite_command=None, run_dir=None):
+                 max_budget_usd=None, suite_command=None, run_dir=None, effort=None):
         self.calls.append(stage)
         self.prompts.setdefault(stage, []).append(prompt)
         declaration = next(s for s in self.stages if s["name"] == stage)

@@ -239,7 +239,7 @@ class Runner:
 
     def __call__(self, prompt, *, stage, cwd=None, log_path=None,
                  permission_mode=None, model=None, allowed_tools=None,
-                 max_budget_usd=None, suite_command=None, run_dir=None):
+                 max_budget_usd=None, suite_command=None, run_dir=None, effort=None):
         self.calls.append(stage)
         # Every edit goes in the tree the coordinator handed this stage, which
         # since story-117 is the worktree the run works in rather than the

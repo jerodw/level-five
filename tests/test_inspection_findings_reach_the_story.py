@@ -1442,12 +1442,17 @@ def test_the_entry_point_offers_no_way_to_stop_a_run(driven):
         story_inspection.inspect_after_story).parameters
     assert list(parameters) == [
         "run_dir", "target_root", "config", "harness_root", "story_id",
-        "stages", "artifact", "attempt", "runner"]
+        "stages", "artifact", "attempt", "effort", "runner"]
     # Everything the post-story entry point takes, and nothing beyond what this
-    # mode needs to name its artifact: no parameter by which a caller could be
-    # told to stop.
+    # mode needs to name its artifact and to say how hard its one invocation
+    # thinks: no parameter by which a caller could be told to stop. `effort` is
+    # named here rather than the comparison being relaxed, and it is not a way
+    # to stop — it carries a level down to the runner, every value of it makes
+    # the invocation, and an unusable one is refused at pre-flight rather than
+    # reaching this function. Both comparisons stay exact, so a parameter added
+    # later is still reported.
     assert set(sibling) <= set(parameters)
-    assert set(parameters) - set(sibling) == {"artifact", "attempt"}
+    assert set(parameters) - set(sibling) == {"artifact", "attempt", "effort"}
 
     run = driven(findings=[OWN_FINDING])
     config = harness_config.load_config(run.tree)

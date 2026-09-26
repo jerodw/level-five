@@ -1276,7 +1276,8 @@ def _severity(finding) -> int | None:
 
 def _one_invocation(scope: Scope, target_root: Path, config: dict,
                     harness_root: Path, bound: Bounds, paths: tuple[str, ...],
-                    answer, artifact: Path, log_path: Path, runner):
+                    answer, artifact: Path, log_path: Path, runner,
+                    effort: str | None = None):
     """Invoke the Inspector once and read back what it wrote.
 
     Returns `(document, problem, cost)`: the envelope the invocation wrote and
@@ -1298,6 +1299,10 @@ def _one_invocation(scope: Scope, target_root: Path, config: dict,
     invocation gets its own — the shape a self-route already has, where a
     stage that runs again in place is handed its stage ceiling rather than
     what the failed invocation left of it.
+
+    `effort` is passed to the runner only where one was given, so an invocation
+    under no declaration — every broad-mode one — is made with exactly the
+    arguments it was made with before the keyword existed.
     """
     artifact.unlink(missing_ok=True)
     try:
@@ -1317,6 +1322,9 @@ def _one_invocation(scope: Scope, target_root: Path, config: dict,
             # invocation stops itself. The ceiling is per invocation, which is
             # per scope; the report says how many invocations were made.
             max_budget_usd=bound.max_cost_usd,
+            # Present only where a level was declared, so the broad mode's
+            # invocation is built exactly as it was before this keyword existed.
+            **({} if effort is None else {"effort": effort}),
         )
         # The figure the invocation itself reported, kept rather than dropped
         # on the floor. It is read off the result the runner already returns —
@@ -1333,7 +1341,7 @@ def _one_invocation(scope: Scope, target_root: Path, config: dict,
 def inspect_scope(scope: Scope, target_root: Path, config: dict,
                   harness_root: Path, bound: Bounds, blocked: tuple[str, ...],
                   runner, index: LocalIndex = LocalIndex(),
-                  announce=None) -> _ScopeResult:
+                  announce=None, effort: str | None = None) -> _ScopeResult:
     """One scope: ask what is filed, invoke once, and read what was written.
 
     The order is the point. What is already filed against this scope's paths is
@@ -1372,6 +1380,12 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
     failure in it may escape, is its own: the narrow modes hand over a guarded
     one, so announcing cannot become the thing that stops an inspection, and
     guarding it a second time here would be a second answer to that question.
+
+    `effort` is how hard the invocation thinks, threaded from the workflow
+    declaration that carries it down to the one runner call and decided nowhere
+    here. Defaulted so a caller that supplies none — every broad-mode path —
+    invokes with exactly the arguments it invoked with before the key existed,
+    and so a retry is handed the same level the first invocation was.
     """
     result = _ScopeResult()
     paths = scope.paths or scope_paths(target_root, scope, blocked)
@@ -1393,7 +1407,7 @@ def inspect_scope(scope: Scope, target_root: Path, config: dict,
     artifact, log_path = findings_paths(target_root, config)
     artifact.parent.mkdir(parents=True, exist_ok=True)
     invoke = (scope, target_root, config, harness_root, bound, paths, answer,
-              artifact, log_path, runner)
+              artifact, log_path, runner, effort)
 
     document, first_problem, first_cost = _one_invocation(*invoke)
     costs = [first_cost]

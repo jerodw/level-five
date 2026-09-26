@@ -12,6 +12,8 @@
       "max_self_routes": 1,
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's implementer ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "xhigh",
+      "effort_reason": "xhigh. The stage that writes the code, and the only stage where raising further costs real money: it carries the largest execution ceiling this definition declares, so the spend here would be paid on every refactor rather than only where judgement is scarcest. Declaring it at all is the other half of the value. Before this key a stage thought as hard as the developer's own editor happened to be set to think, so changing that setting for one unrelated piece of work silently changed how every story was built; a declared level pins it. The spend ordering this rests on is story-workflow's rather than this definition's: it was measured on stories 206, 207 and 208, completed 2026-09-24, each of which ran under story-workflow, and that definition's reason string carries the derivation. This workflow has no cost corpus of its own yet, and its shares will differ in any case, because it declares three stages and no tester where story-workflow declares four. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "suite_census": {
         "result": "census-result.json",
         "baseline": "stage-baseline",
@@ -39,6 +41,8 @@
       "max_self_routes": 1,
       "max_execution_cost_usd": 10,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's documenter ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "high",
+      "effort_reason": "high. The narrowest scope of any stage in this workflow -- confined to the configured architecture documents, writing prose and never behaviour, with no test asserting anything about what it produces -- and the smallest execution ceiling this definition declares. Its mistakes are cheap and are corrected by a correction pass rather than by a retry, so it is the one stage here that is not bought up. The share story-workflow's reason cites for its own documenter was measured on runs of that definition, which declares a tester stage this one does not, so it is not this definition's share, and this workflow has no cost corpus of its own yet to put in its place. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "claim_support": {
         "result": "claim-support-result.json"
       },
@@ -53,6 +57,8 @@
       "max_self_routes": 1,
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's verifier ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
+      "effort": "max",
+      "effort_reason": "max. The gate the whole run passes through, and its misjudgements are the expensive kind: a verdict that passes broken work ships it, and a verdict that fails sound work spends a retry on nothing. It is also the cheapest place in the system to buy better judgement: taking one stage of three from the default to the ceiling costs a fraction of what one avoided retry costs. It matters more here than under story-workflow, because this definition declares no tester stage: its entire claim that behaviour is unchanged rests on the suite census and on this one judgement, so there is no second reading of the work to catch what this stage misses. That same absence is why the share story-workflow's reason cites for its own verifier is not this definition's -- it was measured on runs that included the tester this one does not declare -- and this workflow has no cost corpus of its own yet to put in its place. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
       "outputs": ["verification-result.json"],
       "schemas": {
         "verification-result.json": "verification-result",
@@ -64,6 +70,8 @@
       },
       "inspection": {
         "result": "story-inspection-findings.json",
+        "effort": "xhigh",
+        "effort_reason": "xhigh. The pre-stage inspection is a large judgement spend of its own, and what it writes is read by a person as well as by the stage that judges the story -- so both a miss and a false alarm cost something, the miss silently and the false alarm in the reading. It stops one level short of the ceiling because it is a large spend and because it supplies rather than decides: nothing it reports can fail a run. It is declared here rather than on the stage because the inspection is a separate invocation the stage does not make, so the level the stage itself runs at says nothing about it. The ranking story-workflow's reason gives the same invocation was measured on runs of that definition, which declares a stage this one does not, so it does not carry across; this workflow has no cost corpus of its own yet to rank against. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
         "result_reason": "The run-directory artifact the pre-stage inspection writes for this stage to read: the Inspector's findings about the files this refactor itself changed. Shaped like the clean_clone and correction_pass declarations beside it -- the key's absence disables the mechanism for the workflow with no code change, and the artifact name lives here rather than in orchestration. A refactor answers its own review for the reason a story does: a review comment on a change belongs to the change that produced it, and only a finding about a file the change did not touch is a backlog item. It is evidence and not a verdict: no coordinator branch reads it, and the verifier's existing triage decides what it is worth."
       },
       "correction_pass": {

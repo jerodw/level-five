@@ -1193,12 +1193,16 @@ def _prepare(run_dir: Path, target_root: Path, config: dict,
 
 def _invoke(prepared: _Preparation, run_dir: Path, target_root: Path,
             config: dict, harness_root: Path, story_id: str, framing: str,
-            runner):
+            runner, effort: str | None = None):
     """Make the one invocation, returning the scope and what it produced.
 
     One invocation whatever mix of source and tests files the story changed:
     the change is one subject, and splitting it by which half of the tree a
     file sits in would ask two agents about one change.
+
+    `effort` is how hard that invocation thinks, handed on to `inspect_scope`
+    and defaulted so the post-story mode — which has no declaration to read one
+    off — invokes exactly as it did before the key existed.
     """
     scope = inspection.Scope(
         path="",
@@ -1234,6 +1238,7 @@ def _invoke(prepared: _Preparation, run_dir: Path, target_root: Path,
         # inspection.
         announce=lambda: _announce(run_dir, story_id, len(prepared.paths),
                                    retrying=True),
+        effort=effort,
     )
     # Timed around both invocations where two were made: what the duration log
     # records is how long the inspection took, and an inspection that was made
@@ -1501,6 +1506,7 @@ def _inspect_after_story(run_dir: Path, target_root: Path, config: dict,
 def inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
                          harness_root: Path, story_id: str, stages,
                          *, artifact: str, attempt: int,
+                         effort: str | None = None,
                          runner=None) -> None:
     """Inspect this attempt's change, ahead of the stage that judges it.
 
@@ -1529,12 +1535,19 @@ def inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
     run's completion, escalation or pause commit, and an inspection commit at
     HEAD here would sit where `_complete` reads HEAD to recognise a resumed
     escalation.
+
+    `effort` is how hard the one invocation thinks, threaded down to it from the
+    workflow's own `inspection` declaration and decided nowhere here. It is
+    defaulted so a caller that supplies none — the broad mode, and every caller
+    that predates the key — invokes exactly as it did before, and it is the
+    inspection's own value rather than the value the stage carrying the
+    declaration runs at.
     """
     label = f"inspection of the change made by {story_id}"
     try:
         _inspect_before_stage(
             run_dir, target_root, config, harness_root, story_id, stages,
-            artifact=artifact, attempt=attempt, runner=runner,
+            artifact=artifact, attempt=attempt, effort=effort, runner=runner,
         )
     except Exception as error:  # noqa: BLE001 - the totality is the guarantee
         print(
@@ -1566,7 +1579,8 @@ def inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
 
 def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
                           harness_root: Path, story_id: str, stages,
-                          *, artifact: str, attempt: int, runner) -> None:
+                          *, artifact: str, attempt: int,
+                          effort: str | None, runner) -> None:
     """The body of the above, so the guard has one thing to guard."""
     label = f"inspection of the change made by {story_id}"
     prepared = _prepare(
@@ -1591,7 +1605,7 @@ def _inspect_before_stage(run_dir: Path, target_root: Path, config: dict,
 
     scope, result, took = _invoke(
         prepared, run_dir, target_root, config, harness_root, story_id,
-        PRE_STAGE_FRAMING, runner,
+        PRE_STAGE_FRAMING, runner, effort=effort,
     )
 
     own, others = about_the_change(result.found, prepared.found.changed)
