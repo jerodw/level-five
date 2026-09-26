@@ -1,0 +1,140 @@
+story:
+  id: story-210
+  title: Planning states how hard it thinks, at the ceiling for the interview
+  description: |
+    Planning is the cheapest thing this system does and the most
+    consequential. A story run costs around fifty dollars and the planning
+    conversation before it costs a small fraction of that, yet a consequence
+    the plan fails to foresee is paid for by the whole run and often by a
+    second story afterwards. Today the harness tells the planning session
+    nothing about how hard to think: it launches the session and lets it
+    inherit whatever the developer's own tool happens to be set to. The
+    developer therefore cannot raise planning's thinking without raising it
+    for all their unrelated work, and a change to their personal settings
+    silently changes how the harness plans.
+
+    This story has the harness state the level for both invocations planning
+    makes, so neither inherits anything. The long interview -- the session
+    that produces the story -- runs at the maximum, the setting for work where
+    being right matters more than what it costs, which describes planning
+    better than anything else here. The short classifying turn that runs first
+    when no workflow is named, which reads the request, picks a workflow and
+    asks the developer to confirm its choice, runs at medium: it has a small
+    answer set and its mistake is the one a human reviews before anything
+    happens. Each level is written down beside a sentence saying why it was
+    chosen, so a later reader meets the judgement where they meet the value.
+
+    It deliberately leaves alone how hard any workflow stage thinks. That is a
+    separate judgement about a different kind of invocation -- a stage is
+    invoked many times per run and repeatedly on retries, so the arithmetic is
+    not the planner's -- and it was settled by story-209 two days before this
+    one. Also left alone: which model planning runs on, what the planner asks
+    about, and the developer's own settings, which stop reaching planning but
+    are otherwise untouched. Planned from brief 346.
+
+    The mechanism. `scripts/l5-plan` launches `claude` at two places: the
+    planning interview, the `subprocess.run` at line 339, and the
+    workflow-selection turn, the `subprocess.run` at line 632. Each gains an
+    `--effort <level>` argument taken from a module-level constant in that
+    script, with the reason for the level in a comment beside the constant, in
+    the shape the `effort_reason` strings in the workflow definitions already
+    have. No configuration key is added: story-209 recorded deliberately in
+    `.harness/docs/ARCHITECTURE.md` that it added none and that no site in
+    `orchestration/` or `scripts/` reads an effort out of a target's
+    configuration, and a key here would let planning's level drift again by a
+    different route. `orchestration/agent_runner.py` already passes `--effort`
+    for workflow stage invocations; planning is not a stage in any workflow,
+    so it declares its own level rather than reaching through that path, and
+    nothing in `orchestration/` changes.
+
+    What the sweep found. `tests/test_planner_injection.py` and
+    `tests/test_workflow_proposal.py` both read the captured argument list by
+    membership rather than by comparing it to an exact list, so neither is
+    expected to need adapting -- which is why this story declares no
+    `reverting_breaks_the_suite` entry and no `stage_exceptions` grant.
+    `.harness/docs/ARCHITECTURE.md` line 53 carries story-209's effort
+    paragraph, which currently reads as though a workflow definition is the
+    only place an effort is declared; it is widened to say that planning
+    declares its own and why the two planning levels differ from each other.
+    The section at lines 1025 to 1027, which describes the classifying turn,
+    gains that turn's level.
+  workflow: story-workflow
+
+tasks:
+  - Declare the planning interview's effort level as a named constant in scripts/l5-plan, set to max, with a comment beside it giving the reason the level was chosen.
+  - Declare the workflow-selection turn's effort level as a second named constant in the same script, set to medium, with its own reason comment saying why it differs from the interview's.
+  - Pass each constant to its own invocation as an `--effort <level>` argument on the `claude` command line, leaving every other argument of both invocations byte for byte what it was.
+  - Write a standing test module asserting that both invocations carry their declared level, held against the levels the CLI accepts rather than against a list retyped in the test.
+  - Widen the effort paragraph in .harness/docs/ARCHITECTURE.md to record that planning declares its own levels outside any workflow definition, why the interview is at the ceiling and the classifier is not, and that no configuration key was added here either.
+
+acceptance_criteria:
+  - The `claude` argument list of the planning interview launched by scripts/l5-plan contains `--effort` immediately followed by `max`.
+  - The `claude` argument list of the workflow-selection turn launched by scripts/l5-plan contains `--effort` immediately followed by `medium`.
+  - Each level passed by scripts/l5-plan is a member of `agent_runner.EFFORT_LEVELS`, read from that module rather than restated as a literal list in the test.
+  - Each of the two levels is a module-level named constant in scripts/l5-plan, and each carries an adjacent comment stating why that level was chosen for that invocation.
+  - Every other argument of both invocations is unchanged: the permission mode, the rendered system prompt, the request, and for the classifying turn its `-p`, its `--allowedTools Write` grant and its `/dev/null` stdin.
+  - Nothing under orchestration/ changes, and no key is added to schemas/harness-config.schema.json or to any config.yaml.
+  - No `effort` or `effort_reason` value in workflows/story-workflow.json or workflows/refactor-workflow.json changes.
+  - The effort paragraph in .harness/docs/ARCHITECTURE.md states that planning declares its own effort levels outside any workflow definition, gives both levels, and says why the interview is at the ceiling while the classifying turn is not.
+  - The existing suite passes with no assertion weakened, removed or skipped.
+
+technical_plan:
+  implementation_steps:
+    - Read the two `subprocess.run` launches in scripts/l5-plan, at lines 339 and 632, and the comment blocks above each, so the new constants can be worded against what those comments already say about each invocation.
+    - Add two module-level constants near the top of scripts/l5-plan, one for the interview at `max` and one for the workflow-selection turn at `medium`, each with a comment giving the reason in the shape the `effort_reason` strings in workflows/story-workflow.json already use - what the invocation is, what its mistakes cost, and why that buys this level.
+    - Insert `--effort` and the constant into each argument list, before the `--append-system-prompt` argument so the request stays last in both lists.
+    - Write tests/test_planning_declares_how_hard_it_thinks.py, capturing each invocation's argument list with a fake `claude` on PATH the way tests/test_planner_injection.py and tests/test_workflow_proposal.py already do, asserting the level each invocation carries, asserting that neither invocation is launched without the flag at all, and asserting each captured level is in `agent_runner.EFFORT_LEVELS`.
+    - Widen the effort paragraph at .harness/docs/ARCHITECTURE.md line 53 and the phase-one description at lines 1025 to 1027.
+  likely_file_changes:
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: The two constants with their reason comments, and the `--effort` argument on each of the two `claude` launches.
+    - file: tests/test_planning_declares_how_hard_it_thinks.py
+      stage: tester
+      reason: The standing module holding both invocations to their declared levels, and holding those levels to the set the CLI accepts.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: story-209's effort paragraph reads as though a workflow definition is the only place an effort is declared; it is widened for planning's own declaration, and the phase-one description gains the classifying turn's level.
+
+scope:
+  modify:
+    - scripts/l5-plan
+    - tests/test_planning_declares_how_hard_it_thinks.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/agent_runner.py (it passes `--effort` for workflow stage invocations, and planning is not a stage; its EFFORT_LEVELS is read by the new test and nothing about it needs to change for planning to declare a level of its own)
+    - workflows/story-workflow.json (how hard a workflow stage thinks was decided by story-209 against a different kind of invocation, one made many times per run and again on every retry, and reopening it here would decide it by accident)
+    - workflows/refactor-workflow.json (the same judgement, for the same reason)
+    - schemas/harness-config.schema.json (story-209 recorded that it added no configuration key for effort and that no site reads one out of a target's configuration; a key here would let planning's level drift by the same route the developer's personal settings drift today, which is what this story removes)
+    - .harness/config.yaml (no configuration key is added, so there is nothing for a target's own config to declare)
+    - templates/config.yaml (what a newly initialized target declares is unchanged for the same reason)
+    - scripts/l5-assist (it launches a session too, but it is an assistant rather than planning, and what it runs at is a judgement nobody has made yet)
+    - prompts/ (what the planner and the workflow selector are asked is separate work, named in the brief as deliberately left alone)
+    - tests/test_planner_injection.py (its argument-list assertions read by membership, so they are expected to pass unchanged; if that expectation is wrong the tester adapts it, and predicting an edit that should not be needed would invite one)
+    - tests/test_workflow_proposal.py (the same expectation, for the classifying turn's argument list)
+
+verification_requirements:
+  - Confirm the two `--effort` arguments reach the real `claude` argument lists that scripts/l5-plan builds, rather than only that the two constants exist in the file.
+  - Confirm the interview carries `max` and the classifying turn carries `medium`, and that the two are not transposed.
+  - Confirm each constant carries an adjacent comment saying why that level was chosen for that invocation, and that the two reasons are different from each other rather than one sentence repeated.
+  - Confirm no configuration key was added: nothing under schemas/ gained an effort key and no config.yaml declares one.
+  - Confirm nothing under orchestration/ changed, and that no `effort` or `effort_reason` value in either workflow definition changed.
+  - Confirm the new test module fails if either level is changed or either flag removed, so it is a control that can fail rather than one that cannot.
+  - Confirm the existing suite passes with no assertion weakened, removed or skipped.
+
+constraints:
+  - Every other argument of both `claude` invocations stays byte for byte what it is today, including the classifying turn's `-p`, its `--allowedTools Write` grant, its `/dev/null` stdin and its captured stdout.
+  - The request stays the last argument of both argument lists, as the existing tests assert.
+  - No third-party dependency, and no import added to scripts/l5-plan beyond what it already imports; the script stays a thin entry point and the levels are literals declared in it rather than computed.
+  - Nothing reads either constant back out at run time to decide anything; like the workflow definitions' effort_reason strings, the reasons are recorded for a human reader.
+  - The planning interview keeps inheriting the developer's terminal for stdin, stdout and stderr, and the classifying turn keeps having its output captured and kept.
+  - The new test module is named for what it checks rather than for this story's number.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-26 08:21:03
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 346
