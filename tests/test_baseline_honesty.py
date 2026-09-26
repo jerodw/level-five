@@ -3468,6 +3468,23 @@ DECLARED_HISTORY_READERS = {
         "about this repository's own change, which no constructed repository "
         "can answer; the control that the resolution still reports a story "
         "that touched those prompts is built under tmp_path",
+    "test_planning_declares_how_hard_it_thinks.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story stating how hard planning thinks left "
+        "orchestration/ alone, left both workflow definitions' declared levels "
+        "and recorded reasons alone, and added no configuration key to the "
+        "harness config schema or to either config.yaml. Each is a statement "
+        "about what was *not* edited, which no reading of the shipped files can "
+        "make — the levels and the keys those files carry today are the same "
+        "whether this story changed them or never touched them. The comparison "
+        "is made through conftest.story_diff over the story's own range rather "
+        "than against HEAD, which would go vacuously green the moment the "
+        "working tree is committed, and its control is a pair of histories the "
+        "module builds with conftest.constructed_story — one story respecting "
+        "those paths and one editing them — so an empty diff here is the story "
+        "having left them alone rather than a range bounded at the wrong "
+        "commits. Everything else in the module reads the shipped entry point "
+        "as its subject or drives it against repositories built under tmp_path",
     "test_refactor_workflow.py":
         "its subject includes what story-070 itself changed and left alone: "
         "that no prompt which existed before it was touched, that "

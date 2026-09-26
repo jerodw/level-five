@@ -107,8 +107,15 @@ STORY_ID = conftest.SAMPLE_STORY_ID
 LEVELS = agent_runner.EFFORT_LEVELS
 
 #: The argument the command carries the level as. The CLI's own spelling, which
-#: is what an assertion about a built command has to look for; it is written
-#: once, here.
+#: is what an assertion about a built command has to look for. This is where
+#: *this* module writes it, and no longer the only place the suite does: the
+#: story that had planning state how hard it thinks declares the spelling again
+#: in tests/test_planning_declares_how_hard_it_thinks.py, for planning's own
+#: levels, and tests/test_plan_commit.py writes it as a literal where it
+#: subtracts the argument from a whole captured argument list before comparing
+#: what is left. Giving the spelling one home across the suite was weighed when
+#: that happened and declined, so a reader changing it looks for the others
+#: rather than trusting this constant to be the whole of it.
 EFFORT_ARGUMENT = "--effort"
 #: The argument it must sit beside, on the same terms.
 MODEL_ARGUMENT = "--model"

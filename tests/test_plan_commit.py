@@ -1277,6 +1277,22 @@ def test_the_argument_list_handed_to_claude_is_what_the_exec_passed(
         .replace(f".harness/stories/{reserved.group(1)}.yaml",
                  ".harness/stories/None.yaml")
     )
+    # story-210 states how hard this session thinks, which the old script does
+    # not: it passed no `--effort` argument at all and the session inherited
+    # whatever the developer's own tool was set to. This is the first of these
+    # subtractions that is of an *argument* rather than of a placeholder the
+    # prompt renders, so the flag and its level are removed from the copy of
+    # the list rather than replaced inside the prompt — every other argument,
+    # and every other byte of the prompt, is still held to equality below, and
+    # anything else that changed still fails. The level is read off the
+    # script's own constant rather than written down, through the shared
+    # loader, so what is removed is the argument the script declares and not
+    # whatever happens to follow the flag.
+    effort_at = without_prose.index("--effort")
+    assert without_prose[effort_at + 1] == conftest.load_script(
+        "l5-plan", name="l5_plan_for_the_effort_argument"
+    ).PLANNING_INTERVIEW_EFFORT
+    del without_prose[effort_at:effort_at + 2]
     assert without_prose == before["argv"]
     assert after["argv"] != before["argv"]  # the partial really did reach it
     # The working directory is the planning worktree since story-117, which is

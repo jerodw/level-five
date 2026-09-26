@@ -125,6 +125,39 @@ import worktrees  # noqa: E402
 #: that is not a shell — is told the same thing the shell is told.
 INTERRUPTED_EXIT_CODE = 130
 
+#: How hard the planning interview thinks — the long session below that
+#: interviews the developer and writes the story artifact. At the ceiling,
+#: because planning is the cheapest thing this system does and the most
+#: consequential: a story run costs around fifty dollars — the mean of the
+#: three run costs recorded in the effort_reason strings of the story
+#: workflow's own definition under workflows/ — while this conversation costs a
+#: small fraction of one, and a consequence the plan fails to foresee is paid
+#: for by the whole of that run and often by a second story afterwards. max is
+#: the setting for work where being right matters more than what it costs,
+#: which describes planning better than anything else here. That definition is
+#: named rather than spelled as a filename because the name of the workflow a
+#: target falls back to may appear in exactly one file under orchestration/ and
+#: scripts/, and that file is orchestration/harness_config.py.
+#:
+#: Declared rather than inherited, which is the other half of the value: before
+#: this constant the session thought as hard as the developer's own tool
+#: happened to be set to think, so planning's thinking could not be raised
+#: without raising it for every unrelated piece of work the developer does, and
+#: a change to their personal settings silently changed how the harness plans.
+PLANNING_INTERVIEW_EFFORT = "max"
+
+#: How hard the workflow-selection turn thinks — the short classifying turn
+#: that runs first when no workflow is named, reads the request, picks one of
+#: the definitions under workflows/ and asks the developer to confirm it. Below
+#: the interview above, and for that reason read backwards: it chooses from a
+#: small bounded set rather than composing a plan, and its mistake is the one a
+#: human reviews before anything happens — the developer is shown the reasoning
+#: and accepts, names another or aborts, and nothing is invoked, written or
+#: committed until they answer. A wrong proposal therefore costs a word at the
+#: confirmation, where a wrong plan costs a run. Declared rather than inherited
+#: for the interview's reason.
+WORKFLOW_SELECTION_EFFORT = "medium"
+
 
 def main() -> None:
     argv = sys.argv[1:]
@@ -341,6 +374,8 @@ def main() -> None:
                 "claude",
                 "--permission-mode",
                 "acceptEdits",
+                "--effort",
+                PLANNING_INTERVIEW_EFFORT,
                 "--append-system-prompt",
                 planner_prompt,
                 f"Story request: {request}",
@@ -637,6 +672,8 @@ def choose_workflow(
                     "acceptEdits",
                     "--allowedTools",
                     "Write",
+                    "--effort",
+                    WORKFLOW_SELECTION_EFFORT,
                     "--append-system-prompt",
                     context_assembler.render(template, context),
                     f"Story request: {request}",
