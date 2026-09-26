@@ -1,0 +1,207 @@
+story:
+  id: story-206
+  title: A negative control that cannot fail is reported by a check rather than left to a rule
+  description: |
+    A test that asserts something is absent can pass for two very different
+    reasons: because the thing really is absent, or because the test has
+    stopped looking. This repository already tells whoever writes tests to
+    guard against the second by writing a negative control beside every
+    absence — deliberately break the thing, and show that the same check
+    notices. That instruction works, in the sense that controls do get
+    written. What nothing checks is whether a control that got written is
+    capable of noticing anything. Several have shipped that were not: each
+    one plants a phrase into some text and then asserts that the planting
+    happened, which is a fact about Python rather than about the code the
+    test was supposed to be watching. Every one of them was green, and every
+    assertion they were written to vouch for was unvouched for as long as
+    they stood.
+
+    This story adds a mechanical check for one narrow, unmistakable version
+    of that mistake: a test that builds a value by planting a phrase into it,
+    and then asserts that same phrase against that same value, without ever
+    handing the result to the check it claims to be demonstrating. Adding a
+    phrase and then finding it, or deleting a phrase and then not finding it,
+    proves only that string concatenation and string replacement work. The
+    check reads what a test does rather than what it calls itself, so a
+    control that never uses the word "control" is caught anyway, and so is
+    one written by someone who has never heard the term. Three tests in the
+    suite have this defect today, and the story repairs all three, so the
+    check ships with the suite clean rather than with a list of known
+    exceptions beside it.
+
+    What it deliberately does not do is judge whether a test is meaningful in
+    general. No scan can decide that, and the file this check joins already
+    says so in its own opening and goes on saying so. It also leaves the
+    instruction in the tester's prompt exactly as written: because the check
+    reads the shape of a test rather than any label on it, nothing about how
+    authors announce a control has to change. Planned from the brief filed
+    under 326.
+
+    Concretely: a fifth rule joins the four already in
+    tests/test_baseline_honesty.py, in the same shape as its neighbours — a
+    comment block stating what the rule is about and what it does not cover, a
+    scan function returning Flag records, a live-suite assertion over every
+    module under tests/, planted sources the scan is shown reporting, and
+    benign sources it is shown leaving alone. A new module is not an option
+    here: the implementer may not create files under tests/, and a rule of
+    this kind belongs beside the four it joins in any case.
+
+    The rule reports a test function in which a local name is bound to a plant
+    — `<value> + <needle>` or `<value>.replace(<needle>, ...)` — and an assert
+    in the same function compares that same needle against that same name,
+    with `in` for the concatenation form or `not in` for the removal form,
+    provided the planted name is handed to no call the module defines or
+    imports from outside the standard library anywhere in that function. That
+    last clause is what separates a sound control from a vacuous one and is
+    not an afterthought: tests/test_mutation_controls.py:634 writes exactly
+    this plant-and-assert pair and is sound, because the stripped source then
+    goes back through `assert_states_its_limits`, and the rule must leave it
+    alone.
+
+    The population is the shape and not a declaration, and that is a
+    deliberate departure from how the brief words it. The negative-control
+    rule at prompts/story-tester.md:58-74 asks the author to say in the test
+    what it is controlling for, but the wording varies — "The negative
+    control:", "The control for the searches above", and in one case no
+    declaration at all — so keying on the words finds about 26 functions under
+    the strict spelling or well over a thousand under the loose one, while
+    still missing a known case. Keying on the shape finds every known case, is
+    how the four rules already in that module work, and leaves
+    prompts/story-tester.md untouched, so the assertions in
+    tests/test_shared_baseline_resolution.py that hold its wording stay green.
+
+    Three sites in the working tree are reported by the rule as it will be
+    written and are repaired here: the plant in
+    tests/test_opportunistic_sweep.py:1100, the mutant expression in
+    tests/test_a_run_stands_on_its_branch_first.py:957, and the removed
+    sentence in tests/test_turn_ending_instructions.py:225. Each repair routes
+    the planted text back through the reading the assertion it vouches for
+    actually uses, so the control is decided by that reading rather than by
+    the plant. With those three repaired the live-suite assertion compares the
+    reported set against the empty set, and needs no register of known
+    violations.
+
+    The evidence that the rule catches the defect it was written for, rather
+    than only the sources its own author composed, is recovered from this
+    repository's history: the four controls that brief 325 carried are
+    reported at the revision before story-203 repaired them — in
+    tests/test_a_merge_closes_the_brief.py,
+    tests/test_a_question_to_the_developer_is_about_consequences.py and
+    tests/test_the_assist_agent_files_a_brief.py — and unreported in the
+    working tree. The history is reached only through the shared readers in
+    tests/conftest.py, and the revision is found by searching for the text
+    rather than by writing a commit sha into the suite.
+
+    One shape stays outside the rule and the comment block says so: an
+    assertion about the interpreter or the standard library over a file the
+    test itself wrote — the `int("")` case brief 325 carried in
+    tests/test_command_transport.py, since repaired — is the same defect by a
+    different route, and catching it mechanically means deciding that every
+    operand of an assertion traces to a test-constructed literal, which does
+    not come out cleanly over a suite this size.
+  workflow: story-workflow
+
+tasks:
+  - Add a fifth rule to tests/test_baseline_honesty.py that reports a test function planting a needle into a value and then asserting that same needle against that same value, where the planted value is handed to no call the module defines or imports from outside the standard library.
+  - Give the new rule the comment block its four neighbours each have, stating what it is about, why it is its own rule rather than an extension of another, and what it does not cover - including the assertion-against-the-interpreter shape and why that is left out.
+  - Write the live-suite assertion for the new rule over every module under tests/, discovered by globbing rather than by naming, with the companion assertion the glob needs.
+  - Repair the control in tests/test_opportunistic_sweep.py so that its assertion is decided by the reading of the shipped file rather than by the plant the test performed.
+  - Repair the control in tests/test_a_run_stands_on_its_branch_first.py so that its assertion is decided by the reads it protects rather than by the replacement the test performed.
+  - Repair the control in tests/test_turn_ending_instructions.py so that its assertion is decided by the placement checks it protects rather than by the removal the test performed.
+  - Update the module docstring of tests/test_baseline_honesty.py where it states what the module's scans cover and what it leaves to the negative-control rule in the tester prompt, so that it accounts for the fifth rule.
+  - Author an independent validation module holding this story's acceptance criteria against the delivered scan.
+  - Record the fifth rule in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A function in tests/test_baseline_honesty.py takes a module's source and its name and returns Flag records for every plant-then-assert-the-plant pair in it, in the same shape as flagged_calls, module_construction, git_text_reads and mutation_controls, each Flag naming the module, the line and the reason.
+  - The scan reports the concatenation form - a name bound to `<value> + <needle>` followed by `assert <needle> in <name>` - demonstrated against a source composed for the test.
+  - The scan reports the removal form - a name bound to `<value>.replace(<needle>, ...)` followed by `assert <needle> not in <name>` - demonstrated against a source composed for the test.
+  - The scan leaves alone a source in which the planted value is handed to a call the module defines, demonstrated as a pair against the same source with that call removed, which it reports.
+  - The scan leaves tests/test_mutation_controls.py unreported as it stands in the working tree, which is the sound control of the same written shape, and reports a rendering of that same module with its call to the real check taken out.
+  - The scan reports tests/test_a_merge_closes_the_brief.py, tests/test_a_question_to_the_developer_is_about_consequences.py and tests/test_the_assist_agent_files_a_brief.py at the revision before story-203 repaired them, and reports none of the three in the working tree, which is the evidence that the rule catches the defect it was written for rather than only the sources its author composed.
+  - That revision is found by searching the history for the text of a repaired control rather than by a commit sha written into the suite, and the history is reached only through the shared readers in tests/conftest.py.
+  - A live-suite assertion runs the scan over every module under tests/, discovered by globbing rather than by naming, and reports nothing; a companion assertion establishes that the glob found modules, so a scan over zero files cannot pass for the wrong reason.
+  - The scan reports no site in tests/test_opportunistic_sweep.py, tests/test_a_run_stands_on_its_branch_first.py or tests/test_turn_ending_instructions.py, and the new rule names no register of known outstanding violations, because there are none to name.
+  - The control in tests/test_opportunistic_sweep.py still demonstrates that the search for a retired sentence can find one, and its assertion is decided by a reading of a file rather than by the text the test concatenated.
+  - The control in tests/test_a_run_stands_on_its_branch_first.py still demonstrates that the reads it protects report the mutant expression, and its assertion is decided by those reads rather than by the replacement the test performed.
+  - The control in tests/test_turn_ending_instructions.py still demonstrates that the placement checks report a rendering without the sentence, and its assertion is decided by those checks rather than by the removal the test performed.
+  - The comment block above the new rule states what the rule does not cover, and names the assertion-against-the-interpreter shape as outside it with the reason.
+  - The module docstring of tests/test_baseline_honesty.py accounts for the fifth rule where it states what the module covers and what it leaves to the negative-control rule in the tester prompt, and goes on disclaiming the general class of vacuous assertions.
+  - Every demonstration that the new scan reports something is made by calling the scan, so no assertion holding this story is decided by a property of the standard library - which is the defect the story exists to catch.
+  - The four scans already in tests/test_baseline_honesty.py report exactly what they reported before, and the assertions in tests/test_mutation_controls.py that read that module's source and structure pass unchanged.
+
+technical_plan:
+  implementation_steps:
+    - Read the four existing rules in tests/test_baseline_honesty.py, in particular mutation_controls and its comment block, and follow their shape - a comment block stating the rule and its limits, a scan function returning Flag records, a live-suite assertion, planted cases and benign cases.
+    - Write the scan over one module's AST - for each function definition, collect the local names bound to a concatenation or to a `.replace(...)` call together with the needle each was planted with, then find the asserts comparing that needle against that name with the matching operator, and drop a pair when that name appears as an argument to a call whose root name the module defines at top level or imports from outside the standard library.
+    - Write the live-suite assertion as a comparison against the empty set, with the companion assertion the glob needs, exactly as the four rules beside it do.
+    - Repair the three reported controls, routing the planted text back through the reading each assertion it vouches for actually uses, so that each control is decided by that reading.
+    - Extend the module docstring where it states the module's coverage.
+  likely_file_changes:
+    - file: tests/test_baseline_honesty.py
+      stage: implementer
+      reason: The fifth rule, its comment block, its scan, its live-suite assertion, its planted and benign cases, and the coverage paragraph in the module docstring.
+      reverting_breaks_the_suite: The validation module the tester writes for this story asserts against the scan defined here, so reverting this file leaves that module unable to import it and the suite red.
+    - file: tests/test_opportunistic_sweep.py
+      stage: implementer
+      reason: Repair of the control at :1100, whose assertion is decided by the text the test concatenated rather than by any reading of the file it is about.
+      reverting_breaks_the_suite: The fifth rule's live-suite assertion, added in the same story, reports this site and carries no register, so reverting the repair turns that assertion red.
+    - file: tests/test_a_run_stands_on_its_branch_first.py
+      stage: implementer
+      reason: Repair of the control at :957, whose assertion is decided by the replacement the test performed rather than by the reads it protects.
+      reverting_breaks_the_suite: The fifth rule's live-suite assertion, added in the same story, reports this site and carries no register, so reverting the repair turns that assertion red.
+    - file: tests/test_turn_ending_instructions.py
+      stage: implementer
+      reason: Repair of the control at :225, whose assertion is decided by the removal the test performed rather than by the placement checks it protects.
+      reverting_breaks_the_suite: The fifth rule's live-suite assertion, added in the same story, reports this site and carries no register, so reverting the repair turns that assertion red.
+    - file: tests/test_a_control_is_decided_by_its_subject.py
+      stage: tester
+      reason: This story's own validation, holding the acceptance criteria against the delivered scan independently of the module that defines it, as tests/test_mutation_controls.py does for the fourth rule.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that a negative control which cannot fail is now held by a fifth mechanical rule rather than by the tester prompt alone, and what that rule does not cover.
+
+scope:
+  modify:
+    - tests/test_baseline_honesty.py
+    - tests/test_opportunistic_sweep.py
+    - tests/test_a_run_stands_on_its_branch_first.py
+    - tests/test_turn_ending_instructions.py
+    - tests/test_a_control_is_decided_by_its_subject.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-tester.md (the negative-control rule stands as written: the new check reads the shape of a test rather than its declaration, so nothing in the rule needs restating, and the wording varies too much between authors for a declaration to be worth keying on)
+    - tests/test_shared_baseline_resolution.py (asserts the negative-control rule reaches the rendered tester prompt, and that prompt is unchanged here, so this file has nothing to say about the story)
+    - tests/test_mutation_controls.py (the fourth rule's own validation, and the sound control this story's rule must be shown to leave alone - editing it would make that demonstration something this story arranged rather than something it found)
+    - tests/test_a_merge_closes_the_brief.py (one of the four controls story-203 already repaired; it is this story's committed regression evidence at the revision before that repair, and an edit to it would move what that evidence reads)
+    - tests/test_a_question_to_the_developer_is_about_consequences.py (the same, for the second of the four)
+    - tests/test_the_assist_agent_files_a_brief.py (the same, for the two remaining of the four)
+    - tests/test_command_transport.py (carried the interpreter-property control story-203 repaired, which is the shape this story's rule deliberately does not cover; nothing here is this story's subject)
+    - tests/conftest.py (the shared readers are adequate as they stand, and a second route to the history beside them is the duplication the third rule in the scanned module exists to prevent)
+    - orchestration/ (the defect and the check are both in the test suite; no coordinator behaviour changes)
+
+verification_requirements:
+  - Confirm the new scan is invoked in every assertion that claims it reports or does not report something, so no assertion holding this story is decided by a property of the standard library - which is the defect the story exists to catch.
+  - Confirm the scan reports the three modules named in the acceptance criteria at the revision before story-203 repaired them, read through the shared readers, and reports none of them in the working tree.
+  - Confirm that revision is resolved by searching the history for text rather than by a commit sha written into the suite.
+  - Confirm the scan leaves tests/test_mutation_controls.py unreported while reporting the same source with its call to the real check removed, so the clause that distinguishes a sound control from a vacuous one is shown to be load-bearing.
+  - Confirm the live-suite assertion runs over modules discovered by globbing and compares against the empty set, and that the companion assertion establishes the glob found modules.
+  - Confirm the three repaired controls still demonstrate what they were written to demonstrate, and that each is now decided by the check it vouches for.
+  - Confirm the comment block above the new rule states its limits, including the assertion-against-the-interpreter shape it does not cover.
+  - Confirm the four existing scans in tests/test_baseline_honesty.py report exactly what they reported before and that tests/test_mutation_controls.py passes unchanged.
+
+constraints:
+  - The new rule is its own rule - it calls no other scan in the module for enforcement and no other scan calls it, as the four existing rules keep to.
+  - The scan reads what a module's source states and never evaluates it, follows no value and builds no module, which is the rule the module's second scan holds every module under tests/ to.
+  - No existing assertion is weakened, skipped or deleted, and the three repaired controls keep every claim they made that was not decided by the plant.
+  - The check decides one mechanical question and claims nothing about the general class of vacuous assertions, which the module docstring already disclaims and must go on disclaiming.
+  - No commit sha is written into the suite; the history is reached only through the shared readers in tests/conftest.py, at a revision found by searching for text.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-23 18:46:00
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 326

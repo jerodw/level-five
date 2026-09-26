@@ -180,6 +180,21 @@ def report(found, dry_run: bool) -> int:
             if suggestion:
                 print(f"      the Inspector says it concerns: {suggestion}")
 
+    # A brief whose workflow the harness supplied, on its own lines and in the
+    # shape the area-less briefs above are printed in. The Inspector named no
+    # workflow for these and the finding was filled in rather than thrown away,
+    # so what this says is that the pick between named options was not the
+    # Inspector's and is the reader's to change when they plan the brief. Where
+    # every filed brief named its own workflow there is nothing here to say and
+    # nothing is said.
+    supplied = found.supplied_workflows
+    if supplied:
+        print("the brief(s) below were filed under the workflow this target "
+              "configures, which the Inspector did not choose; change it when "
+              "you plan one:")
+        for brief in supplied:
+            print(f"  {brief.slug}")
+
     verb = "would file" if dry_run else "filed"
     print(f"{verb} {len(found.filed)} brief(s):")
     for brief in found.filed:

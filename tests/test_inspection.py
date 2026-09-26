@@ -896,14 +896,34 @@ def test_an_artifact_left_by_an_earlier_invocation_is_not_read_as_this_ones(
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("missing", sorted(BRIEF_REQUIRED))
+#: The one required field a finding may omit and still be filed. Since
+#: story-207 a finding that names no workflow has the one the target's
+#: configuration declares supplied into it before the shape is checked, and is
+#: filed with the supply marked — so it never reaches the drop below. Every
+#: other required field is absent exactly as it always was, and a finding
+#: missing the workflow *and* one of them is still dropped as malformed;
+#: `tests/test_a_finding_missing_only_its_workflow_is_filed.py` holds both.
+SUPPLIED_WHEN_ABSENT = "workflow"
+DROPPED_WHEN_ABSENT = [name for name in sorted(BRIEF_REQUIRED)
+                       if name != SUPPLIED_WHEN_ABSENT]
+
+
+def test_the_field_a_value_is_supplied_for_is_one_the_shape_requires():
+    """What the exclusion above rests on, so a rename is a failing assertion
+    rather than a parametrization that quietly stops excluding anything."""
+    assert SUPPLIED_WHEN_ABSENT in BRIEF_REQUIRED
+    assert SUPPLIED_WHEN_ABSENT not in DROPPED_WHEN_ABSENT
+    assert len(DROPPED_WHEN_ABSENT) == len(BRIEF_REQUIRED) - 1
+
+
+@pytest.mark.parametrize("missing", DROPPED_WHEN_ABSENT)
 def test_a_finding_missing_a_required_field_is_dropped_and_named(missing,
                                                                  tmp_path):
     """Named with the field that failed, and the finding beside it is filed.
 
-    Parametrized over every required field rather than over one of them,
-    because a validator that checked eight of nine would pass a sampled
-    assertion.
+    Parametrized over every required field a value is not supplied for, rather
+    than over one of them, because a validator that checked eight of nine would
+    pass a sampled assertion.
     """
     conforming = brief(slug="the-one-that-conforms")
     broken = {key: value for key, value in brief().items() if key != missing}

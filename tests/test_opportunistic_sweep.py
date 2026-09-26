@@ -1082,9 +1082,15 @@ RETIRED_SENTENCES = {
 }
 
 
+def shipped_text(path: Path) -> str:
+    """One shipped file's text, read the way the assertion below and its
+    control are both decided by."""
+    return path.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("relative", sorted(RETIRED_SENTENCES))
 def test_the_docstrings_this_story_makes_false_no_longer_say_it(relative):
-    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    source = shipped_text(REPO_ROOT / relative)
     assert RETIRED_SENTENCES[relative] not in source
     # And the successor is there rather than the paragraph merely having been
     # deleted: each of them now names the seam the sweeps go through.
@@ -1092,12 +1098,21 @@ def test_the_docstrings_this_story_makes_false_no_longer_say_it(relative):
 
 
 @pytest.mark.parametrize("relative", sorted(RETIRED_SENTENCES))
-def test_the_search_for_the_retired_sentence_can_find_it(relative):
+def test_the_search_for_the_retired_sentence_can_find_it(relative, tmp_path):
     """Control: the absence above is a fact about the file rather than about a
-    search that no longer matches anything."""
-    source = (REPO_ROOT / relative).read_text(encoding="utf-8")
-    planted = f'"""{RETIRED_SENTENCES[relative]}."""\n' + source
-    assert RETIRED_SENTENCES[relative] in planted
+    search that no longer matches anything.
+
+    A copy of the shipped file carrying the retired sentence is written to
+    disk and then *read back* through `shipped_text`, which is the reading the
+    assertion above is decided by. A control that searched the text it had
+    just concatenated would report that concatenation works and would stay
+    green over a reading that had stopped returning anything.
+    """
+    copy = tmp_path / Path(relative).name
+    copy.write_text(f'"""{RETIRED_SENTENCES[relative]}."""\n'
+                    + shipped_text(REPO_ROOT / relative), encoding="utf-8")
+
+    assert RETIRED_SENTENCES[relative] in shipped_text(copy)
 
 
 # ==========================================================================

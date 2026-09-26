@@ -1,0 +1,168 @@
+story:
+  id: story-207
+  title: A finding complete but for the workflow it should be planned under is filed with one supplied
+  description: |
+    When the Inspector reviews a story and writes up what it found, each
+    finding is checked against a fixed shape before it can be filed. One of
+    the required parts is a note saying which of the harness's two workflows
+    the work should be planned under. A finding that leaves that out is thrown
+    away whole — the defect, the evidence, the severity, the file paths, all
+    of it. That happened twice in one review: two real problems with a story's
+    own change were destroyed over one missing word, and the story merged
+    without them.
+
+    This story makes a finding that is complete in every other respect reach
+    the work it is about. Where such a finding names no workflow, the harness
+    supplies the one this repository is configured to use, marks the finding
+    as having been supplied rather than chosen, and files it. The mark is
+    visible in three places: on the finding's own text, so the person planning
+    it sees it on the board; on the record of what was filed; and on the line
+    every report prints about briefs that came in incomplete. That person can
+    change the choice, which is the whole reason this is safe to do — a
+    workflow is a pick between two named options that a human reviews anyway,
+    and it is far cheaper to correct than a lost review finding is to recover.
+
+    It deliberately leaves several things as they are. A finding naming a
+    workflow the harness does not define is still refused: that is a wrong
+    answer rather than a missing one, and supplying over it would bury a real
+    mistake. Nothing else the shape requires becomes optional, and a finding
+    missing anything else is dropped exactly as it is today. A brief a
+    developer files by hand, and a brief fetched for planning, both go on
+    refusing an absent workflow, because in both cases a person is present to
+    be asked. And the separate problem of a dropped finding leaving no trace a
+    reader can act on is filed as its own work and is not touched here.
+
+    This story was planned from the brief filed under 338.
+
+    Concretely: `orchestration/inspection.py` supplies the configured workflow
+    into a finding that carries none, before that finding is validated against
+    `schemas/story-brief.schema.json`, and records on the resulting `Filed`
+    entry that it did. The value is the target's own configured workflow, read
+    through one shared derivation in `orchestration/harness_config.py` so the
+    fallback spelling that `orchestration/story_coordinator.py` already
+    carries is not written a second time; the run's own workflow is
+    deliberately not used, because a broad inspection has no run and because a
+    finding about a refactor run's change is not thereby refactor work.
+    `prompts/inspector.md` says that an omitted workflow is supplied and
+    marked, so the Inspector is not told something untrue about what becomes
+    of its output, and the `workflow` property's description in
+    `schemas/story-brief.schema.json` records which path supplies an absent
+    value and which paths refuse one. The report surfaces —
+    `scripts/l5-inspect` and both in `orchestration/story_inspection.py` —
+    print the supplied briefs on their own line, in the shape they already
+    print briefs that named no area.
+  workflow: story-workflow
+
+tasks:
+  - Add one derivation to orchestration/harness_config.py reporting the workflow a target configuration names, with the fallback spelling story_coordinator.py carries today, and read it from story_coordinator.py in place of that inline spelling so the fallback is stated once.
+  - In orchestration/inspection.py, supply that configured workflow into a finding whose workflow field is absent, before the finding is validated against the brief schema, leaving every other validation and the existing unknown-workflow drop exactly as they are.
+  - Append to the supplied finding's body a sentence saying the workflow was supplied by the harness rather than chosen by the Inspector, and that the person planning it may change it.
+  - Carry on the Filed record whether that brief's workflow was supplied, and expose from Report the filed briefs whose workflow was supplied, in the shape Report.unnamed_areas already has.
+  - Print those briefs on their own line in scripts/l5-inspect and in both report surfaces in orchestration/story_inspection.py.
+  - State in prompts/inspector.md that a finding omitting the workflow field has one supplied and marked rather than being dropped, and that a finding naming a workflow the harness does not define is still refused.
+  - Record in the workflow property's description in schemas/story-brief.schema.json that the Inspector path supplies an absent value and marks it, while the hand-filed and fetched paths refuse one, leaving the property in the schema's required list.
+  - Write the standing test module holding this behaviour, and adapt any existing test whose fixtures or expectations the change moves.
+  - Record the behaviour in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A finding that satisfies the brief schema in every respect except that it carries no workflow field is filed rather than dropped, and the brief that reaches the queue names the workflow the target configuration declares.
+  - The body of a brief filed that way carries a sentence saying the workflow was supplied rather than chosen and that it may be changed when the brief is planned; the body of a brief whose finding named its own workflow is filed unchanged.
+  - A finding that names a workflow the harness does not define is still dropped, with the same unknown-workflow reason and the same detail naming the workflows the harness does define.
+  - A finding missing any other required field of the brief schema is still dropped as malformed, and a finding missing both that field and its workflow is dropped as malformed rather than filed.
+  - The filed record says whether that brief's workflow was supplied, and a brief whose finding named one is not marked.
+  - scripts/l5-inspect and both report surfaces in orchestration/story_inspection.py print the briefs whose workflow was supplied, naming them, and print nothing about it on an inspection where no brief had one supplied.
+  - The value supplied is read through one derivation in orchestration/harness_config.py, and the fallback spelling for a configuration naming no workflow appears in that derivation and nowhere else in orchestration/ or scripts/.
+  - The identity a supplied brief is filed under is the identity it would have had with the workflow named in the finding, so supplying changes no dedupe key.
+  - prompts/inspector.md states that an omitted workflow is supplied and marked, and that a workflow the harness does not define is refused.
+  - The workflow property in schemas/story-brief.schema.json remains in the schema's required list, and its description states which path supplies an absent value and which paths refuse one.
+  - A brief a developer files by hand through orchestration/brief_filing.py, and a brief fetched through orchestration/brief_fetch.py, are both still refused when they name no workflow.
+
+technical_plan:
+  implementation_steps:
+    - Add configured_workflow(config) to orchestration/harness_config.py, returning the workflow the target configuration names and the fallback where it names none, with a docstring saying it is the one place that fallback is spelled.
+    - Replace the inline fallback expression at orchestration/story_coordinator.py:10433 with a call to it, leaving the precedence order above it untouched.
+    - In inspection.py's per-finding loop, before schema_validator.validate, build the finding the loop works with: where "workflow" is absent, set it to the configured workflow and append the supplied-workflow sentence to the body, recording that this finding was supplied.
+    - Leave the validate call, the malformed drop, the unknown-workflow check and every drop below it exactly as they are, so a supplied value that does not resolve is refused on the existing path.
+    - Add a workflow_supplied field to Filed, defaulted so every existing construction stays valid, and set it where the finding is filed.
+    - Add a Report property reporting the filed briefs whose workflow was supplied, shaped as unnamed_areas is.
+    - Print those briefs in scripts/l5-inspect beside the no-area line, and in both places in orchestration/story_inspection.py that print report.unnamed_areas.
+    - Write the paragraph in prompts/inspector.md under the workflow section, and the sentences in the workflow property's description in schemas/story-brief.schema.json.
+    - Write tests/test_a_finding_missing_only_its_workflow_is_filed.py holding the acceptance criteria, and adapt existing inspection tests whose expectations the change moves.
+    - Record the behaviour in .harness/docs/ARCHITECTURE.md.
+  likely_file_changes:
+    - file: orchestration/harness_config.py
+      stage: implementer
+      reason: Holds the one derivation reporting the workflow a target configuration names, including the fallback.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: Reads that derivation in place of the inline fallback spelling it carries today.
+    - file: orchestration/inspection.py
+      stage: implementer
+      reason: Supplies the workflow into a finding that carries none, marks it, and carries the mark on Filed and Report.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: Both post-story report surfaces print the briefs whose workflow was supplied.
+    - file: scripts/l5-inspect
+      stage: implementer
+      reason: The broad-inspection report surface prints the same line.
+    - file: prompts/inspector.md
+      stage: implementer
+      reason: Tells the Inspector what becomes of a finding that omits the field, and that a wrong name is still refused.
+    - file: schemas/story-brief.schema.json
+      stage: implementer
+      reason: The workflow property's description records which path supplies an absent value and which refuse one.
+    - file: tests/test_a_finding_missing_only_its_workflow_is_filed.py
+      stage: tester
+      reason: The standing module holding that an otherwise complete finding is filed, marked and deduped unchanged, while a wrong name and any other missing field are still refused.
+    - file: tests/test_inspection.py
+      stage: tester
+      reason: Existing inspection tests whose fixtures or drop expectations the supply moves.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records that the Inspector path supplies and marks an absent workflow while the other brief paths refuse one.
+
+scope:
+  modify:
+    - orchestration/inspection.py
+    - orchestration/harness_config.py
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - scripts/l5-inspect
+    - prompts/inspector.md
+    - schemas/story-brief.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/brief_filing.py (a developer or the assist agent files through this path with a person present to be asked, so an absent workflow is refused there rather than guessed at, and the developer chose to keep that)
+    - orchestration/brief_fetch.py (a fetched brief is a plan-time input read with the developer in the session, so l5-plan refusing an absent workflow is the behaviour the developer wants kept)
+    - The unknown-workflow drop in orchestration/inspection.py (a name the harness does not define is a wrong answer rather than an absent one, and supplying over it would bury a mistake the Inspector made)
+    - The required list in schemas/story-brief.schema.json (the field stays required; the supply happens before validation, so loosening the shape would let a genuinely incomplete brief through every other path too)
+    - orchestration/story_brief.py and what a brief's identity is derived from (workflow is not part of identity today, and the developer wants supplying to change no dedupe key)
+    - Reporting what a dropped finding was, wherever it lives (already filed as separate work, and doing it here would mix two changes in one story)
+    - orchestration/outbox.py and the queue's filing mechanics (this story changes what reaches the queue, not how anything is queued)
+
+verification_requirements:
+  - Confirm that a finding complete but for its workflow is filed with the configured workflow named, and that the brief body carries the supplied-workflow sentence.
+  - Confirm that a finding naming an undefined workflow is still dropped for that reason, and that a finding missing any other required field is still dropped as malformed.
+  - Confirm that the fallback spelling for a configuration naming no workflow appears in exactly one place under orchestration/ and scripts/.
+  - Confirm that the brief filed after a supply carries the same identity key it would have carried had the finding named the workflow itself.
+  - Confirm that every report surface that prints filed briefs says which of them had a workflow supplied, and says nothing where none did.
+  - Confirm that orchestration/brief_filing.py and orchestration/brief_fetch.py still refuse a brief naming no workflow.
+  - Confirm the full suite passes, including the tests that existed before this story.
+
+constraints:
+  - No brief schema field becomes optional, and no validation is weakened for any path.
+  - The drop reasons that exist today keep their names and their details; this story adds behaviour before validation rather than changing what a drop says.
+  - Supplying a workflow must not change a brief's identity, so no brief filed before this story would refile under a different key.
+  - Nothing infers the workflow from the finding's content, its paths, its category or the run it came from; the value is the target's configured workflow and nothing else.
+  - A target whose configuration names a workflow the harness does not define is not rescued: the supplied value goes through the existing unknown-workflow check and is refused there.
+  - The mark on a filed brief is reported and routed on by nothing; it exists so a human reviewing the brief knows the choice was not the Inspector's.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-24 21:49:45
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 338

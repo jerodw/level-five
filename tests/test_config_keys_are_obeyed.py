@@ -947,8 +947,15 @@ MUTATIONS: dict[str, tuple[tuple[str, str, str], ...]] = {
          'config.get("verification_runner")',
          "None"),
     ),
+    # story-207 moved this read out of the coordinator: what a target
+    # configures when it configures no workflow is one fact with a second
+    # reader now — an inspection supplies it into a finding that named none —
+    # so it is derived in `harness_config.configured_workflow` and the
+    # coordinator calls that. The anchor follows the read; the proof is
+    # unmoved, because it asserts what a run executes and not where the value
+    # was read.
     "workflow": (
-        ("orchestration/story_coordinator.py",
+        ("orchestration/harness_config.py",
          'config.get("workflow", "story-workflow")',
          '"story-workflow"'),
     ),
@@ -1564,7 +1571,8 @@ def test_the_scan_does_not_count_a_subscript_through_a_variable(tmp_path):
     # reads keys by name: exactly the named reads are counted, and neither of
     # the two variables the mapping is built through joins them.
     read = keys_read_in(REPO_ROOT / "orchestration" / "harness_config.py")
-    assert read == {"tests_dir", "architecture_docs", "history_dir", "logs_dir"}
+    assert read == {"tests_dir", "architecture_docs", "history_dir", "logs_dir",
+                    "workflow"}
     assert not read & {"key", "current_list"}
 
 

@@ -938,21 +938,30 @@ def test_the_guard_compares_the_story_branch_rather_than_where_it_was_invoked(
         harness_root) == []                                          # control
 
 
-def test_the_comparison_names_the_branch_and_no_longer_names_head():
+def guard_source(coordinator: str) -> str:
+    """The guard's own text, taken out of a coordinator by the one extraction
+    both halves of the check below are decided by."""
+    return conftest.function_source(coordinator, "unchanged_since_escalation")
+
+
+def test_the_comparison_names_the_branch_and_no_longer_names_head(tmp_path):
     """The same fact in the source, since a guard that established sameness for
     some other reason would satisfy the behavioural test above.
 
-    The control is the mutant expression, which the same reads report: HEAD
-    found and the branch absent.
+    The control is the mutant coordinator the test above drives, put through
+    the same two reads: the guard is extracted out of the file `load_mutant`
+    wrote and searched there, so what reports the mutant expression is that
+    extraction and that search rather than a replacement this test performed
+    on a string of its own.
     """
-    guard = conftest.function_source(
-        COORDINATOR_PATH.read_text(encoding="utf-8"),
-        "unchanged_since_escalation")
+    guard = guard_source(COORDINATOR_PATH.read_text(encoding="utf-8"))
 
     assert BRANCH_COMPARISON in guard
     assert HEAD_COMPARISON not in guard
 
-    pointed_at_head = guard.replace(BRANCH_COMPARISON, HEAD_COMPARISON)
+    mutant = guard_pointed_at_head(tmp_path)
+    pointed_at_head = guard_source(
+        Path(mutant.__file__).read_text(encoding="utf-8"))
     assert HEAD_COMPARISON in pointed_at_head                          # control
     assert BRANCH_COMPARISON not in pointed_at_head
 
