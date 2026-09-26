@@ -1,0 +1,180 @@
+story:
+  id: story-208
+  title: A reasoned do_not_modify entry bars an extension only where its reason speaks to the finding, and the verifier says which reason it judged
+  description: |
+    When a plan says "leave this file alone" and gives a reason, the harness
+    today treats that as an absolute fence. Any later fix the reviewing stage
+    wants to make in that file is refused, whatever the reason actually said.
+    Twice in two batches that has turned a small defect in the story's own
+    change into a whole new story: in both cases the developer's reason was
+    about a different concern than the fix, and the reviewer could see that it
+    was — its own decline for the second one quoted a scope that never
+    mentioned the thing the fix touched.
+
+    This story makes the fence conditional on what its reason says, and puts
+    the reading where the judgement already lives: with the stage that reviews
+    the work. The harness still refuses by default — a barred file stays
+    barred unless the reviewer has written down, on the finding itself, that
+    it read the reason and the reason is about something else. Where the
+    reviewer says the reason does speak to the fix, the file stays barred and
+    the decline quotes the reason. Where it says the reason speaks elsewhere,
+    the fix goes ahead and the grant is announced with the reason quoted, the
+    way every other out-of-scope grant already is. The developer's plan is
+    never rewritten: this is a run-time grant recorded on top of it, and a
+    reader of the run can see which reason was judged and how.
+
+    It deliberately leaves alone the two bounds that carry no reason to read —
+    the repository-wide blocked paths and the stage restrictions — which refuse
+    exactly as they do now. The rule that every left-alone entry must carry a
+    reason when a plan is written is untouched, and an entry with no reason
+    bars nothing today and still bars nothing. This story was planned from the
+    brief filed under key 310.
+
+    The mechanics. scope_extension_check in orchestration/story_coordinator.py
+    keeps do_not_modify_bound as the finder of the barring entry and stops
+    treating a hit as final. A repairable finding gains an optional
+    do_not_modify_judgement object in schemas/verification-result.schema.json,
+    beside scope_extension, with three required fields: entry, the reason text
+    the verifier judged, quoted from the story; judgement, an enum of
+    addresses_the_fix and speaks_to_another_concern; and reading, why the
+    reason does or does not speak to the finding. An object with an enum
+    rather than the presence-as-signal shape its sibling fields take, because
+    three states are needed — no judgement recorded, judged standing, judged
+    lifted — and presence-as-signal carries two. The entry echo is a
+    judgement written for a human reviewer, on the terms stage_exceptions.reason
+    and technical_plan's reverting_breaks_the_suite already sit on: no check
+    parses, matches or scores it, and it is what makes the record say which
+    reason the verifier had in front of it.
+
+    Absent, or addresses_the_fix: the extension is refused as it is today, and
+    the two refusal wordings differ, so the reason the accounting records and
+    the line the completion filing writes say which of the two it was.
+    speaks_to_another_concern: the extension is accepted, and
+    repair_pass_extensions carries the judgement into the existing
+    scope-extension-grant-applied announcement, so events.log,
+    execution-history.json and the console quote the entry the verifier judged
+    and its reading. No new event kind: the clause makes the act greppable, and
+    schemas/execution-history.schema.json is untouched. A judgement on a path
+    no reasoned entry bars is read by nothing, and the field is meaningful only
+    beside scope_extension, which is the only finding shape the bound is asked
+    of.
+
+    The prompts. prompts/story-verifier.md and prompts/refactor-verifier.md
+    keep the three-bound sentence as it stands and gain the judgement beside
+    it, with the rule that a reason is lifted only where it plainly speaks to
+    something else: a reason that names the file's whole subject stands against
+    every finding in it, and a reason that names one fact stands against
+    findings about that fact. The paragraph listing the grounds that remain for
+    declining a routed finding has its "a reasoned do_not_modify entry protects
+    the file" qualified with where its reason speaks to the fix, and the same
+    qualification goes on the declined_findings.reason description in the
+    verdict schema.
+  workflow: story-workflow
+
+tasks:
+  - Add the do_not_modify_judgement object to the repairable finding in schemas/verification-result.schema.json — required entry, judgement (enum addresses_the_fix, speaks_to_another_concern) and reading — and state in its description what each field is, that the entry echo is read by no check, that it is meaningful only beside scope_extension, that an absent judgement refuses as before, and what each enum value causes.
+  - Extend the scope_extension description in the same schema so the third bound says the entry bars the path unless the finding records a judgement that the reason speaks to another concern, and qualify declined_findings.reason's "a reasoned scope.do_not_modify entry protects the file" with where its reason speaks to the fix.
+  - Change scope_extension_check in orchestration/story_coordinator.py so that a reasoned entry naming the path refuses the extension when the finding records no judgement or records addresses_the_fix, and accepts it when the finding records speaks_to_another_concern, leaving do_not_modify_bound's contract as it is.
+  - Give the two refusals distinct wordings — one saying the verdict recorded no judgement of the reason, one saying the verifier judged the reason to address the fix — each quoting the barring entry, so refusal_reason and therefore the accounting's declined reason tell them apart.
+  - Carry the judgement through repair_pass_extensions into the scope-extension-grant-applied announcement, so a grant that lifted a reasoned entry names the entry the verifier judged and its reading, on the existing event kind and through the existing writer.
+  - State the judgement in prompts/story-verifier.md and prompts/refactor-verifier.md in identical sentences: what the judgement is, that an extension into a reasoned path without one is refused, and the rule that a reason is lifted only where it plainly speaks to something else; and qualify the "protects the file" ground in each.
+  - Extend tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py so its declared story's reasoned entry is driven by all three cases — no judgement, addresses_the_fix, speaks_to_another_concern — with the schema shapes, the announcement, the accounting's two wordings and the rendered prompts asserted.
+  - Adapt whatever the reword reddens in tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py and tests/test_a_listed_path_refuses_an_extension_and_an_unknown_category_escalates.py, weakening no assertion either module holds.
+  - Record the change in .harness/docs/ARCHITECTURE.md where story-183's extension bounds are described.
+
+acceptance_criteria:
+  - A repairable finding carrying scope_extension, whose path a reasoned do_not_modify entry names, and carrying no do_not_modify_judgement, is refused exactly as it is today, and the refusal names the barring entry.
+  - The same finding carrying a do_not_modify_judgement whose judgement is addresses_the_fix is refused, and the refusal names both the barring entry and that the verifier judged the reason to address the fix.
+  - The same finding carrying a do_not_modify_judgement whose judgement is speaks_to_another_concern is accepted, the repair pass is routed, and the run completes.
+  - The refusal wording for a missing judgement and the refusal wording for addresses_the_fix differ, and each reaches the accounting as the declined finding's reason, so a reader of the accounting and of the completion line can tell which of the two a decline stood on.
+  - A grant that lifted a reasoned entry is announced once, on the existing scope-extension-grant-applied kind, naming the stage, the file, the scope_extension reason, the entry the verifier judged and its reading; the announcement is one write rendered in events.log, execution-history.json and on the console.
+  - A repairable finding carrying a do_not_modify_judgement whose path no reasoned entry bars is decided exactly as one carrying none, and nothing is announced about the judgement.
+  - The verdict schema validates a repairable finding with no do_not_modify_judgement, one carrying all three required fields, and refuses one missing any of the three or carrying a judgement value outside the two the enum declares.
+  - The blocked-path bound and the stage-restriction bound refuse and accept exactly as they do today, including their orderings against the do_not_modify bound, with or without a judgement on the finding.
+  - A do_not_modify entry carrying no reason bars nothing, with or without a judgement on the finding.
+  - Both shipped verifier prompts state the judgement and the lifting rule, and the sentences stating them read identically between the two.
+  - Each prompt's grounds-for-declining paragraph says a reasoned do_not_modify entry protects the file where its reason speaks to the fix, and keeps the right to decline and the wrong-on-the-evidence ground it states today.
+  - Every assertion the three touched test modules hold today either still holds or is restated over the new behaviour; none is deleted or weakened, and the suite census does not fall.
+
+technical_plan:
+  implementation_steps:
+    - In schemas/verification-result.schema.json, add do_not_modify_judgement to the repairable finding's properties as an object with required entry, judgement and reading, judgement carrying the two-value enum, and write each description to say what the field is for and what no check does with the entry echo.
+    - In the same file, extend the scope_extension description's third bound and qualify declined_findings.reason.
+    - In orchestration/story_coordinator.py, read the judgement off the finding where do_not_modify_bound returns an entry, and set the bound only where the judgement is absent or addresses_the_fix, composing the two wordings so refusal_reason carries the distinction.
+    - Update the section comment above the bounds and the docstrings of scope_extension_check and do_not_modify_bound so the reasoned bound is described as it now decides, and so do_not_modify_bound is described as the finder it remains.
+    - In the same file, have repair_pass_extensions report the judgement beside the path and the reason, and extend the scope-extension-grant-applied wording at the announcement site to name the lifted entry and its reading where one was lifted.
+    - Write the judgement and the lifting rule into both verifier prompts as identical sentences, and qualify the protects-the-file ground in each.
+    - Extend the story-183 test module over the three cases, the schema shapes, the announcement, the two accounting wordings and the rendered prompts; then adapt the two sibling modules to whatever the reword changed.
+    - Record the change in .harness/docs/ARCHITECTURE.md beside story-183's account of the bounds.
+  likely_file_changes:
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: The repairable finding gains do_not_modify_judgement, and the scope_extension and declined_findings.reason descriptions state the bound as it now decides.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: scope_extension_check consults the judgement, the two refusal wordings are composed here, and repair_pass_extensions carries the judgement into the grant announcement.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The verifier is told what the judgement is, that an extension into a reasoned path without one is refused, and when a reason may be lifted.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same sentences, so the two shipped verifier prompts keep their parity.
+    - file: tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+      stage: tester
+      reason: The module that already drives this bound with a declared story carrying a reasoned entry gains the three cases, the schema shapes, the announcement, the two accounting wordings and the prompt rule.
+    - file: tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+      stage: tester
+      reason: It drives the same bounds and their orderings, and its assertions are restated where the reword changed the wording they read.
+    - file: tests/test_a_listed_path_refuses_an_extension_and_an_unknown_category_escalates.py
+      stage: tester
+      reason: It drives a reasoned entry listing several paths against the same refusal, and is adapted where the reword changed what it reads.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The account of story-183's extension bounds records that the reasoned bound is now conditional on a judgement the verdict carries.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - schemas/verification-result.schema.json
+    - tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+    - tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+    - tests/test_a_listed_path_refuses_an_extension_and_an_unknown_category_escalates.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/planner.md (it states the plan-time rule that a left-alone entry carries a reason, which this story leaves exactly as it is; nothing about how a reason is read at run time belongs in the planner's instructions)
+    - schemas/story.schema.json (its scope.do_not_modify description states the same plan-time rule and the form an entry takes, and this story changes neither the form nor the rule)
+    - orchestration/plan_validation.py (it enforces that plan-time rule, and carries_a_reason stays the one shape predicate both readers share; this story changes what a reason bars at run time, not what a plan must carry)
+    - schemas/execution-history.schema.json (the lifted grant rides the existing scope-extension-grant-applied kind, so the closed enum of event kinds needs no entry and the history contract is unchanged)
+    - workflows/ (no stage, restriction, routing table or budget changes: the judgement travels on the verdict the workflow already declares)
+    - the blocked-path bound and the stage-restriction bound in scope_extension_check (neither carries a reason for anyone to read, so neither has a judgement to consult; they must refuse and accept exactly as they do now, and the story's value depends on their being untouched)
+    - the behaviour of a do_not_modify entry carrying no reason (it bars nothing today, which is the distinction the reason exists to draw, and it still bars nothing)
+
+verification_requirements:
+  - Confirm from the run's own evidence that a finding into a reasoned path with no judgement is refused, one judged addresses_the_fix is refused, and one judged speaks_to_another_concern is granted and its pass routed.
+  - Confirm the two refusal wordings differ and that each is what the accounting records as the declined finding's reason, so the completion line says which of the two a decline stood on.
+  - Confirm the lifted grant is announced once on the existing event kind, naming the entry the verifier judged and its reading, and rendered identically in events.log, execution-history.json and on the console.
+  - Confirm the blocked-path and stage-restriction bounds decide as they did, including the order in which the bounds are asked and which one a refusal names.
+  - Confirm the verdict schema accepts a finding with and without the judgement and refuses a malformed one, including a judgement value the enum does not declare.
+  - Confirm both shipped verifier prompts carry the judgement and the lifting rule in sentences that read identically between them.
+  - Confirm no assertion in the three touched test modules was deleted or weakened, and that the census did not fall.
+  - Confirm the paths listed under do_not_modify are unchanged by the run.
+
+constraints:
+  - do_not_modify_bound keeps its present contract: it finds the reasoned entry naming a path and decides nothing about a judgement.
+  - carries_a_reason stays one definition, shared by the plan-time check and the run-time bound, and reads shape alone.
+  - A refused extension never escalates the run: the finding is dropped from the pass, recorded as declined with the bound as its reason, and filed as a brief at completion, exactly as today.
+  - No model is called from coordinator logic, and no stage name, category or artifact name is written into the bounds.
+  - The approved story artifact is not rewritten by a run: a lifted entry is a run-time grant recorded on top of it.
+  - The judgement decides no stage, no retry, no budget and no run status; it decides only whether one reasoned entry bars one path for one pass.
+  - No new event kind and no change to the history contract.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-24 21:55:05
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 310
