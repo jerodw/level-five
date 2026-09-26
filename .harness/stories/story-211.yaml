@@ -1,0 +1,184 @@
+story:
+  id: story-211
+  title: A board read that failed on a dropped connection is tried again before the update is given up
+  description: |
+    When a story finishes, the harness asks the project board to move that
+    story's item into its ready-to-merge column, and before it can do that it
+    has to read the board. Today a single failed read abandons the whole update
+    and nothing tries again. That is the right answer when the board is
+    genuinely misconfigured -- no project, no permission, a renamed field --
+    because a second attempt would fail in exactly the same way. It is the
+    wrong answer when the connection simply dropped, which looks identical from
+    the outside and is what actually happened: on 2026-09-26 a run that had
+    finished all of its work left the board showing story-210 still in
+    progress, because one socket was reset at the moment of the first board
+    call made after a long sleep. The project, the credentials and the field
+    were all present the whole time, and an immediate retry by hand minutes
+    later answered fine.
+
+    This story makes a failed read try again a small number of times before the
+    update is given up, and keeps the words it gives up with exactly as they
+    are today. Repeating a read is safe because it changes nothing on the
+    tracker: a second attempt either answers or confirms the first failure.
+    Every call in the tracker script that only reads gets this, on all three of
+    the jobs that script answers, because the argument for it is the same
+    wherever a read is made. Every call that writes keeps making exactly one
+    attempt.
+
+    It deliberately leaves the writes alone. Whether a failed write should be
+    retried is a different question carrying a different risk, and this story
+    does not ask it -- including the one write that would be defensible,
+    because the board add already reports an item that is there rather than
+    adding a second one. It adds no configuration key and changes nothing in
+    the harness's own code: the retry lives inside the tracker command, because
+    by the time that command runs the story has already completed and there is
+    nothing behind it that could retry on its behalf. This story was planned
+    from the brief filed under 357.
+
+    The reads that gain the retry are all of the pure reads in the tracker
+    script. On the item branch: the read of the item's body before the
+    projection is written, the read of the item's URL before it is moved, and
+    the two project reads under read_the_project -- `gh project view` and
+    `gh project field-list`, at .harness/scripts/github.sh:470 and :474, which
+    are the two the failure was observed at. On the sync branch: the read of
+    one item's own field values through `gh api graphql` (:493) and the
+    idempotency search that runs before an issue is created (:658). On the
+    query branch: the batched dedupe search and its per-path fallback (:833,
+    :858) and the brief fetch that `l5-plan --brief` reads a brief through
+    (:891). The item branch and the query branch are where this buys the most,
+    because nothing retries behind either of them: a failed item update leaves
+    the board wrong, and a failed dedupe search is read by the harness as
+    knowing nothing, so it files anyway and the board collects duplicate
+    briefs. The sync branch gains it for consistency rather than for benefit,
+    since a later sweep already re-runs that whole command.
+
+    The writes keep one attempt each and are named here so that leaving them
+    alone is visible rather than implied: `gh issue create` (:669),
+    `gh label create` (:690), `gh issue edit --add-label` (:695),
+    `gh project item-add` (:707, :1099), `gh project item-edit` (:738, :777,
+    :1126) and `gh issue edit --body-file` (:1058).
+
+    Both copies of the script carry the identical edit.
+    `templates/scripts/github.sh` is the reference the harness ships and
+    `.harness/scripts/github.sh` is this repository's own instance; they differ
+    today only in the constant assignments at the top, which
+    `test_this_repository_runs_the_copy_it_ships` in
+    tests/test_a_planned_story_is_published_onto_its_item.py holds, together
+    with a control that plants a non-constant difference and requires it
+    reported. An edit to a shipped script is an edit to two files.
+
+    Nothing that states "nothing retries behind the item command" becomes
+    false, so nothing that states it is touched. The statements in
+    orchestration/item_update.py, in both config.yaml comments and in
+    schemas/harness-config.schema.json are about the harness never
+    re-invoking the command and never reading an exit code as a retry; this
+    retry happens inside the command before it exits, and the harness's side
+    of the contract is unchanged. The script's own comment at :425-427 stays
+    true for the same reason and is where the new rule is written down.
+  workflow: story-workflow
+
+tasks:
+  - Add a retry to the tracker script that runs a failed read again a bounded number of times before answering with the last attempt's failure, in both .harness/scripts/github.sh and templates/scripts/github.sh.
+  - Apply that retry to every pure read in the script and to no write - the four reads on the item branch, the two on the sync branch, and the three on the query branch, leaving every write making exactly one attempt.
+  - Declare the attempt count and the wait between attempts as constants at the top of the file, overridable by environment variable, in the shape LIMIT and BATCH already have.
+  - State the rule in the script's own comments, beside the failure vocabularies where the asymmetry between the three branches is already explained.
+  - Extend the fake gh so that a named call can be refused a given number of times and then answer, which nothing can express today.
+  - Write the standing module that holds the retry, driving the reference script end to end, with a control that shows the same drive fails against a copy with the retry removed.
+  - Turn the wait off in the environment the fake gh is driven under, so that no existing test pays it and no test measures it.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A read that is refused once and answers on a later attempt completes the work it was part of - the item branch moves the item to the column the status names, and the board records it.
+  - A read that is refused on every attempt exits with the same exit code and the same message it gives today, so the failure a developer reads is unchanged.
+  - A read that succeeds and answers with nothing is not retried - the board is not misconfigured-then-retried, and the "named no id", "named no fields" and "named no URL" paths still give up on the first answer.
+  - Every write in the script makes exactly one attempt - a refused `gh issue create`, `gh label create`, `gh issue edit`, `gh project item-add` or `gh project item-edit` is not repeated.
+  - On the path where nothing fails, the script makes the same gh calls it makes today and the same number of them - the existing assertion that view, field-list and the item read are each made exactly once per invocation stays green unchanged.
+  - The retry applies on all three jobs - a refused read is tried again whether it was made by `github.sh sync`, `github.sh query` or `github.sh item`.
+  - The attempt count and the wait are read from constants at the top of the file and from environment variables overriding them, so neither is written into a call site and the suite can set the wait to zero.
+  - The two copies of the script differ in nothing but constant assignments after the change, held by the existing comparison and its planted-difference control.
+  - The standing module carries a control - the same drive against a rendered copy of the script with the retry removed must fail, so a passing assertion cannot be a test that stopped looking.
+  - The suite's derived sweep of `gh project` subcommands still finds field-list, item-add, item-edit and view, because the reads are still written as literal `gh project <subcommand>` invocations.
+  - No test asserts how long a retry took or how long an invocation carrying one took.
+
+technical_plan:
+  implementation_steps:
+    - Declare two constants beside LIMIT and BATCH at the top of the script - how many attempts a read is given, and the wait between them - each read from its own L5_ environment variable with a default written in the file, exactly as LIMIT reads L5_QUERY_LIMIT. They are not target-specific, so both copies carry the same defaults and the copies still differ only in the assignments they already differ in.
+    - Add one helper beside the failure vocabularies that runs a read and, on a non-zero exit, waits and runs it again up to the declared count, then answers with the last attempt's output and exit status. The current reads are pipelines of gh into jq under `set -o pipefail`, so the cleanest shape is a small named function per read that the helper is handed, rather than a string the helper evals.
+    - Route every pure read through it - `gh project view` and `gh project field-list` in read_the_project, `gh api graphql` in read_the_item, the idempotency search in do_sync, the batched search and per-path fallback in do_query, the brief fetch in do_query, and the two `gh issue view` calls in do_item. Leave the emptiness checks that follow each read exactly where they are - they test the answer rather than the call, and an empty answer is a misconfigured board rather than a dropped connection.
+    - Leave every write untouched, including `gh project item-add`. It is idempotent in the sense the sync branch's sweep depends on, so it would be defensible, but the brief scoped the writes out and the remaining writes are not safe to repeat blind.
+    - Extend the comment block at the head of the file and the note beside the failure vocabularies at :425-427 to say the rule - a read is repeated because repeating it changes nothing, a write is not, and the retry is inside the command because nothing retries behind the query or the item branch.
+    - Pick the default wait with the suite in hand. tests/test_a_filed_query_scales_with_its_scope.py drives one invocation in which more than twenty consecutive searches are refused, under a 120-second subprocess bound and the query command's own 30-second bound. The suite is run against the changed script before the wait has been turned off anywhere, so the default wait times the attempt count must leave that invocation comfortably inside both bounds on its own. The brief's evidence is that an immediate retry answered, so a short wait is what the observed failure needs.
+    - In the fake gh, let a test name how many times a call is refused before it answers. FAIL_VARIABLE today names calls that are refused every time, which cannot express "refused once, then answers" - the case the whole story is about. Keep the existing spelling working so the modules that use it are unchanged.
+    - Set the wait to zero in the environment stub_tracker hands back, so every module that drives the scripts against the fake gh inherits it and no existing failing-read test pays the wait. The new module overrides the attempt count where it wants to observe a give-up.
+    - Write the standing module against the reference copy, driving a read refused once and then answering, a read refused every time, a read that answers with nothing, and a write that is refused - with the control rendered from the template into tmp_path, the way the verbatim-field-name control in tests/test_a_planned_story_is_published_onto_its_item.py is rendered rather than recovered from history.
+  likely_file_changes:
+    - file: .harness/scripts/github.sh
+      stage: implementer
+      reason: This repository's own instance of the tracker script - where the retry, the two constants and the comments are added.
+    - file: templates/scripts/github.sh
+      stage: implementer
+      reason: The reference copy the harness ships and l5-init installs. It carries the identical edit; an edit to a shipped script is an edit to two files.
+    - file: tests/test_filed_query.py
+      stage: tester
+      reason: Holds the fake gh and stub_tracker, which every module driving the scripts imports. The stub gains a way to refuse a call a given number of times and then answer, and stub_tracker's environment turns the wait off.
+    - file: tests/test_a_failed_board_read_is_tried_again.py
+      stage: tester
+      reason: The standing module for the claim - a refused read is tried again, a read refused throughout gives up as it does today, an empty answer is not retried, and a write is not repeated - each with its control.
+    - file: tests/test_a_filed_query_scales_with_its_scope.py
+      stage: tester
+      reason: Drives the query branch with every search refused, so it is the module the wait would cost the most; it inherits the zero wait through stub_tracker and may need its own assertion about how many searches were made re-read against the retried count.
+    - file: tests/test_a_planned_story_is_published_onto_its_item.py
+      stage: tester
+      reason: Drives the item branch, including a publish onto an item that cannot be read; the same inheritance applies, and the retry's effect on that path is asserted where that path is already driven.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records the change beside the existing sections on the tracker commands and the three moments that move an item.
+
+scope:
+  modify:
+    - .harness/scripts/github.sh
+    - templates/scripts/github.sh
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - orchestration/item_update.py (the retry belongs inside the command - by the time this module invokes it the story has completed and there is nothing behind it to retry on, so the brief asks that the harness not reinterpret the exit code, and nothing here changes)
+    - orchestration/command_transport.py (its exit-75 convention is what the sync branch already uses and is untouched; the item path still reads no exit code as a retry)
+    - orchestration/filed_query.py (a query failure still reads as knowing nothing and still files anyway; the retry reduces how often that happens without changing what the harness does when it does)
+    - schemas/harness-config.schema.json (no configuration key is added - the attempt count and the wait are script constants overridden by environment variable, in the shape LIMIT and BATCH already have, so nothing a target declares changes)
+    - .harness/config.yaml (this repository configures nothing new; the item command's 60-second bound and the query command's 30-second default are the budgets the retry must fit inside rather than budgets to raise)
+    - templates/config.yaml (the same, for the copy a fresh target is initialized with)
+    - the give-up message and exit code of every read in both copies of the script (the brief asks that the command give up with the message it gives today, and the existing tests assert on those words)
+    - every write in both copies of the script - gh issue create, gh label create, gh issue edit, gh project item-add and gh project item-edit (retrying a write carries a different risk, which this brief deliberately does not ask; item-add would be defensible and is still left alone, so that the writes are one rule rather than a rule with an exception)
+    - the sync branch's failure vocabulary and its exit codes (a board failure there is still transient, the entry still stays pending, and the sweep behind it still re-runs the whole command; only the moment it gives up moves)
+    - the search-before-create in do_sync (it is what makes re-running the sync command safe and is the reason the writes need no retry; the retry on its read does not replace it)
+    - .github/ (this story changes no workflow and CI is deliberately not what gates it)
+
+verification_requirements:
+  - Confirm by reading both copies that the same retry is present in each and that the files differ in nothing but the constant assignments they already differed in, and that the existing comparison test and its planted-difference control still hold that.
+  - Confirm that every pure read named in the description is routed through the retry and that no write is - by reading the script rather than by inference, since the two are adjacent in the same functions.
+  - Confirm the standing module drives a real invocation of the reference script rather than asserting on its text, and that each of its claims carries a control that fails when the behaviour is removed.
+  - Confirm the give-up message and exit code for a read refused on every attempt are the ones the script gives today.
+  - Confirm that no new test, and no test the story changed, asserts a wall-clock duration - the wait is turned off in the suite rather than measured.
+  - Confirm the existing assertion that view, field-list and the item read are each made exactly once on the path where nothing fails is unchanged and still passes.
+  - Confirm the derived sweep in tests/test_filed_query.py still finds the same `gh project` subcommands, which is what keeps the existing board-failure parametrization covering what it covers today.
+  - Confirm no file under orchestration/ or schemas/ changed, and that no configuration key was added to either config.yaml.
+
+constraints:
+  - The reads must stay written as literal `gh project <subcommand>` and `gh issue <subcommand>` invocations. tests/test_filed_query.py builds its sweep of board calls by regexing `gh project ([a-z-]+)` out of the template, so a subcommand passed through a variable silently shrinks that sweep and stops it covering calls it covers today.
+  - The message and exit code a read gives up with are unchanged, on every branch.
+  - Only a non-zero exit from a read is retried. A read that succeeded and answered with nothing is a misconfigured board, and it still gives up at once.
+  - The attempt count and the wait are constants at the top of the file overridden by environment variables, never written into a call site, and identical in both copies.
+  - Bash, POSIX-portable within what the script already uses. The script runs under `set -uo pipefail` and its reads are pipelines whose exit status matters; the retry must not swallow a jq failure or turn a failed pipeline into a successful one.
+  - The script still commits nothing and still reaches no part of the repository.
+  - The fake gh must stay a fake tracker rather than becoming a second implementation - it still exits non-zero on an invocation the reference scripts do not make.
+  - Existing tests keep their assertions. The wait is turned off for them rather than their claims being weakened, and none of them may be made to pass by dropping an assertion.
+  - The suite must not gain a test that bounds how slow the machine is allowed to be. Where a retry has to be observed, it is observed by what the fake gh was asked for and answered, not by how long it took.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-26 19:44:51
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 357
