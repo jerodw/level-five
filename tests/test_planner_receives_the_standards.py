@@ -56,6 +56,19 @@ wording, the placeholder on the prompt l5-plan hands the session, and the
 None case, with the baseline template — which carried none of it — as the
 control.
 
+story-212 gave the same process list a step between the sweep and the
+questions. Before it writes tasks and criteria the planner works through a
+standing set of questions about what the change breaks, answers every one of
+them — saying so, together, where some found nothing — records the answers in
+the draft the developer approves and in the artifact's description, and reads
+the criteria it is about to write against the rule that naming a spelling, a
+text match or a fixed enumeration in place of the property wanted binds the
+work to the stand-in. The section "story-212: the consequence questions, and
+the rule against a stand-in" holds that step on the prompt l5-plan hands the
+session and the story schema's account of a description beside it, with the
+baseline template and the baseline schema — which carry none of it — as the
+controls.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -1141,6 +1154,555 @@ def test_rendered_for_this_repository_the_source_directories_are_its_own():
         if key != "source_dirs"})
     assert absent["source_dirs"] is None
     assert absent["stage_path_restrictions"] is not None
+
+
+# --------------------------------------------------------------------------
+# story-212: the consequence questions, and the rule against a stand-in
+#
+# Between the sweep and the step that asks the developer questions the planner
+# now works through a standing set of questions about what the change breaks,
+# answers every one of them — in one sentence naming together the ones that
+# found nothing, which is the only home such an answer has — and records the
+# answers in the draft the developer approves and in the artifact's
+# description. The two questions that are about other texts are answered from
+# what the sweep above already turned up rather than by searching again, and
+# the step closes with the rule that a criterion naming a spelling, a text
+# match or a fixed enumeration in place of the property wanted binds the work
+# to the stand-in.
+#
+# Held on the prompt l5-plan hands the session, the way the two sections above
+# are held, with the baseline template as the control. The absences the
+# criteria ask for each have a control that shows the same search finding what
+# it looks for: the brief schema's category names put back into a copy of the
+# step one at a time, the sweep's own list of places appended to a copy of it,
+# and the step that does name a file read by the same search that reports none
+# in this one. The two searches whose subject is a word rather than a phrase
+# carry a second control, for the opposite mistake: a category name used for
+# the thing it ordinarily means, and a slash between two ordinary words, are
+# each shown reported as nothing — so neither search reddens a question worded
+# naturally and calls it another target's vocabulary.
+#
+# Two statements the criteria make about this step are held elsewhere and not
+# restated here: that the rendered prompt still names no schema property
+# together with a word stating contract membership, which is
+# tests/test_planner_injection.py's detector, and that the description the
+# planner receives is the schema's own text, which
+# tests/test_every_story_and_brief_opens_in_plain_english.py asserts against
+# the live field.
+# --------------------------------------------------------------------------
+
+
+#: The new step, recognised by the work it opens with. Like the four patterns
+#: the sections above resolve steps by, it has to match exactly one step, so
+#: it carries none of their words.
+CONSEQUENCE_STEP = r"Trace what the change breaks"
+
+#: The step that says where the artifact is written, which is a step that does
+#: name a file — the control for the assertion that the new one names none.
+ARTIFACT_STEP = r"The story id is"
+
+#: The schemas read live below. The story schema because what its account of a
+#: description says is one of the things this story changed, and the brief
+#: schema because what is asserted about the step is that it spells none of
+#: the names that enum holds — whatever names it comes to hold, since a
+#: category added later is a name the step must still not adopt.
+STORY_SCHEMA_REL = "schemas/story.schema.json"
+BRIEF_SCHEMA_REL = "schemas/story-brief.schema.json"
+
+#: An extensionless file under a directory, for the control below: the
+#: launcher this whole section reads the prompt from, which is the single
+#: likeliest path for a later author to write into the step, and which carries
+#: no extension, as every script this repository ships does not.
+LAUNCHER_REL = str((SCRIPTS / "l5-plan").relative_to(REPO_ROOT))
+
+#: The questions the step has to ask, each as the words a reader would look
+#: for in one of them. An entry is the phrases that have to appear in one
+#: bullet together rather than a sentence written out, so what is held is that
+#: the step asks about the thing rather than how it happens to word the
+#: asking — which is the rule the step itself states about a criterion.
+QUESTIONS = {
+    "a second implementation of what the system already has": (
+        r"second implementation", r"already"),
+    "another path doing the same job that has to move in step": (
+        r"another path", r"same job", r"move in step"),
+    "still right on a retry, a resume, a later entry and every verdict": (
+        r"retry", r"resume", r"later entry", r"every verdict"),
+    "validation that can fail when the change is wrong": (
+        r"validation", r"fail", r"wrong"),
+    "a value that is absent, unwritable or unreadable, and who is told": (
+        r"absent", r"unwritable", r"unreadable", r"who is told"),
+    "the written statement the change makes untrue": (
+        r"written statement", r"untrue"),
+}
+
+#: What the step has to say beside its questions: where the questions about
+#: other texts are answered, that every question is answered and a question
+#: that found nothing answered too, where the answers are recorded, and the
+#: rule the step closes with. Phrases of the collapsed step, so none of them
+#: is about where a line happens to wrap.
+STEP_STATES = {
+    "the sweep is where the questions about other texts are answered": (
+        "the sweep above is where they are answered",
+        "rather than searching again"),
+    "every question is answered": ("Answer every question",),
+    "a question that found nothing is answered too": (
+        "found nothing is answered too",),
+    "the answers are recorded in the draft the developer approves": (
+        "in the draft the developer approves",),
+    "the answers are recorded in the artifact's description": (
+        "story.description after the plain-English opening",),
+    "a criterion naming a stand-in binds the work to the stand-in": (
+        "a spelling, a text match or a fixed enumeration",
+        "binds the work to the stand-in"),
+    "the property is stated instead": ("State the property instead",),
+}
+
+#: What the story schema's account of a description has to say since this
+#: story: that the consequence answers are among its later paragraphs, that a
+#: question which found nothing is recorded in the one sentence naming those
+#: together, that nothing scores an answer, and the clause that a description
+#: written before the rule is not held to it.
+DESCRIPTION_STATES = {
+    "the consequence answers are recorded there": (
+        "consequence questions", "before it writes tasks and criteria"),
+    "a found-nothing answer has one home": (
+        "one sentence naming together the ones that found nothing",),
+    "nothing scores whether a question was answered": (
+        "whether a question was answered",),
+    "a description written before the rule is not held to it": (
+        "not held to it",),
+}
+
+#: A token that might name a file or a directory: a run of the characters a
+#: path is written with, carrying a separator or one of the extensions this
+#: repository's texts have. Whether a candidate names a file is decided by
+#: `names_a_path` below, because carrying a separator is not the same as
+#: being a path — `and/or` carries one and names nothing.
+PATH_CANDIDATE = re.compile(r"[\w.\-]+(?:/[\w.\-]*)+|[\w.\-]+\.(?:md|json|ya?ml|py)\b")
+
+#: Extensions common enough in this repository's texts that a token carrying
+#: one is a file with no separator needed to say so. Not the whole of what is
+#: named here — .sh files, .txt files and the extensionless scripts under this
+#: repository's script directory are named too — which is why `names_a_path`
+#: below does not decide on this list alone.
+PATH_EXTENSIONS = ("md", "json", "yaml", "yml", "py")
+
+#: What tells a path segment apart from an ordinary English word standing
+#: beside a slash: a digit, a hyphen or an underscore, none of which an
+#: ordinary word carries, or an extension-shaped tail, which covers the
+#: extensions the list above leaves out. This is how an extensionless script
+#: is recognised — `l5-plan` is a name and `or` is a word.
+NAMED_SEGMENT = re.compile(r"[0-9_-]|\.[A-Za-z][A-Za-z0-9]+$")
+
+
+def one_line(text: str) -> str:
+    """`text` with every run of whitespace collapsed, so a phrase below is
+    about what the prompt says and not about where its lines wrap."""
+    return " ".join(text.split())
+
+
+def consequence_step_of(text: str) -> str:
+    steps = numbered_steps(process_section(text))
+    return steps[step_index(steps, CONSEQUENCE_STEP)]
+
+
+def step_numbers(section: str) -> list[int]:
+    """The numbers the process section's steps are written with, in order."""
+    return [int(number) for number
+            in re.findall(r"^(\d+)\. ", section, re.MULTILINE)]
+
+
+def question_bullets(text: str) -> list[str]:
+    """The dashed items of `text`, each joined into one line.
+
+    An item starts at a line whose first non-space character is a dash; the
+    lines beneath it indented further than that dash continue it, and a line
+    indented no further ends the list — so the prose a step returns to after
+    its questions is not read as one of them.
+    """
+    bullets: list[str] = []
+    marker: int | None = None
+    for line in text.splitlines():
+        if not line.strip():
+            marker = None
+            continue
+        dashed = re.match(r"(\s*)- (.*)", line)
+        if dashed:
+            marker = len(dashed.group(1))
+            bullets.append(dashed.group(2))
+        elif marker is not None and len(line) - len(line.lstrip()) > marker:
+            bullets[-1] += " " + line.strip()
+        else:
+            marker = None
+    return [one_line(bullet) for bullet in bullets]
+
+
+def bullets_asking(bullets: list[str], phrases: tuple[str, ...]) -> list[str]:
+    """The bullets carrying every phrase of one question."""
+    return [bullet for bullet in bullets
+            if all(re.search(phrase, bullet) for phrase in phrases)]
+
+
+def unsaid(text: str, phrases: tuple[str, ...]) -> list[str]:
+    """The phrases of one statement that `text` does not carry."""
+    return [phrase for phrase in phrases if phrase not in one_line(text)]
+
+
+def sweep_places_named_by(step: str) -> list[str]:
+    """Which of the places the sweep step searches a step names, for the
+    absence assertion and its control to share."""
+    return [searched for searched in SWEEP_SEARCHES if re.search(searched, step)]
+
+
+def brief_categories() -> tuple[str, ...]:
+    return tuple(schema_validator.load_schema("story-brief")
+                 ["properties"]["category"]["enum"])
+
+
+def whole_word(name: str) -> str:
+    """`name` bounded, so a longer word carrying it is not a use of it."""
+    return rf"(?<![\w-]){re.escape(name)}(?![\w-])"
+
+
+#: A name coined by joining words is not something an ordinary sentence
+#: writes, so its presence is the filing vocabulary being adopted whatever
+#: the surrounding words do. Which names are of that kind is read off their
+#: own form here rather than listed, so a name added to the enum later is
+#: read the same way as the ones there today.
+WORD_JOIN = re.compile(r"[-_ ]")
+
+#: The nouns a classification is stated with. A name qualifying one of them
+#: — "a complexity problem" — is the name applied as a label rather than the
+#: word used for the thing itself, which is what "does the change add
+#: complexity the problem does not have?" does with the same word.
+CLASSIFYING_NOUNS = (
+    r"problems?", r"questions?", r"categor(?:y|ies)", r"class(?:es)?",
+    r"kinds?", r"shapes?", r"findings?", r"issues?", r"concerns?",
+    r"defects?", r"labels?", r"tags?",
+)
+
+#: The phrases that apply a classification to something, which put the name
+#: after them rather than before a noun.
+CLASSIFYING_PHRASES = (
+    r"classified as", r"categori[sz]ed as", r"filed under", r"files? under",
+    r"falls? under", r"counts? as", r"recorded as", r"reported as", r"tagged",
+)
+
+
+def coined_name(name: str) -> bool:
+    """Whether a category name is a label built by joining words rather than
+    a single word English also has an ordinary use for."""
+    return len(WORD_JOIN.split(name)) > 1
+
+
+def label_uses(name: str) -> tuple[str, ...]:
+    """The constructions that state a question by `name` rather than using
+    the word for the thing it ordinarily means: the name qualifying a noun
+    that states a classification, a phrase that applies one putting the name
+    after it, and the name standing as the label of its own item, which is
+    how a list keyed by categories is written."""
+    bounded = whole_word(name)
+    return (
+        rf"{bounded}\s+(?:{'|'.join(CLASSIFYING_NOUNS)})(?![\w-])",
+        rf"(?:{'|'.join(CLASSIFYING_PHRASES)})\s+{bounded}",
+        rf"^\s*(?:[-*]\s*)?{bounded}\s*[:—-]",
+    )
+
+
+def categories_named_by(text: str) -> list[str]:
+    """Which of the brief schema's category names `text` states a question
+    by, for the absence assertion and its controls to share.
+
+    What the criterion asks is that no question is stated by naming one of
+    the shapes this harness files its own reviews under, and that is not the
+    same as the word never appearing: most of the names the enum holds today
+    are ordinary English words, so a reader that reported every whole-word
+    use would redden a question worded in its most natural way and say the
+    step had adopted another target's vocabulary when it had not. This
+    reports `- is this a complexity problem?` and stays silent on `- does the
+    change add complexity the problem does not have?` — which is the
+    distinction the step itself states about a criterion, between the
+    property wanted and a spelling standing in for it.
+
+    A name coined by joining words is the other case: no ordinary sentence
+    writes `cross-path-parity`, so such a name carries the vocabulary
+    wherever it appears and any whole-word use of it is reported. A single
+    word that is jargon on some future target is read the lenient way, which
+    is the direction this reader errs in deliberately: the failure it exists
+    to catch is a step that states its questions by category name, and that
+    is a labelling use.
+    """
+    named = []
+    for name in brief_categories():
+        patterns = (whole_word(name),) if coined_name(name) else label_uses(name)
+        if any(re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+               for pattern in patterns):
+            named.append(name)
+    return named
+
+
+def names_a_path(candidate: str) -> bool:
+    """Whether a candidate token names a file or a directory.
+
+    A path separator alone does not make one: `and/or` carries a separator
+    and names nothing, and a reader that took the separator for the answer
+    would report it as a file the step sends the planner to. So something in
+    the token has to say it is a path — it ends at a separator, which is how
+    a directory is written; or one of its segments carries one of the
+    extensions above; or a segment opens with a dot, which is how a
+    dot-directory or a dotfile is written; or, where the token is written
+    with a separator, one of its segments is a name rather than an ordinary
+    English word.
+
+    That last test is what reaches an extensionless file, which is how every
+    script this repository ships is written, and it is the likeliest such
+    path for a later author to put into this step. Deciding it on the
+    segment's own form rather than on a list keeps `and/or`, `yes/no` and
+    `absent/unwritable/unreadable` silent: those segments are words, and a
+    word carries no digit, hyphen, underscore or extension.
+    """
+    if candidate.endswith("/"):
+        return True
+    segments = candidate.split("/")
+    if any(segment.startswith(".") for segment in segments):
+        return True
+    if any(segment.endswith(f".{extension}")
+           for segment in segments for extension in PATH_EXTENSIONS):
+        return True
+    return len(segments) > 1 and any(
+        NAMED_SEGMENT.search(segment) for segment in segments)
+
+
+def paths_named_by(text: str) -> list[str]:
+    """The files and directories `text` names, for the same pair to share."""
+    return [found for found in
+            (candidate.rstrip(".") for candidate in PATH_CANDIDATE.findall(text))
+            if names_a_path(found)]
+
+
+def story_description_field(schema: dict) -> dict:
+    return schema["properties"]["story"]["properties"]["description"]
+
+
+def sentences_of(text: str) -> list[str]:
+    return re.split(r"(?<=[.])\s+", one_line(text))
+
+
+def test_the_rendered_prompt_carries_the_consequence_step_between_the_sweep_and_the_questions(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session, and in the place the plan put it:
+    after the step telling the planner to sweep and before the step telling it
+    to ask the developer questions. Each of the steps it was placed among is
+    still resolved by its own pattern, which `step_index` refuses unless that
+    pattern matches exactly one step — so the new step took none of their
+    words — and the list is numbered straight through, so the step was
+    inserted into it rather than added under a number already taken."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    section = process_section(prompt)
+    steps = numbered_steps(section)
+    consequences = step_index(steps, CONSEQUENCE_STEP)
+    assert step_index(steps, STANDARDS_STEP) < step_index(steps, SWEEP_STEP)
+    assert step_index(steps, SWEEP_STEP) < consequences
+    assert consequences < step_index(steps, QUESTIONS_STEP)
+    assert step_index(steps, QUESTIONS_STEP) < step_index(steps, DRAFT_STEP)
+    assert step_numbers(section) == list(range(1, len(steps) + 1))
+
+
+def test_the_consequence_step_asks_a_question_for_every_shape(
+    plan_capture, tmp_path
+):
+    """Each question of the plan is asked by one of the step's items, each
+    item is asked as a question, and no two of the questions resolve to the
+    same item."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    bullets = question_bullets(consequence_step_of(prompt))
+    assert bullets
+    asked = {}
+    for question, phrases in QUESTIONS.items():
+        found = bullets_asking(bullets, phrases)
+        assert len(found) == 1, (question, found)
+        asked[question] = found[0]
+    assert len(set(asked.values())) == len(QUESTIONS)
+    for bullet in bullets:
+        assert bullet.endswith("?"), bullet
+
+
+def test_the_consequence_step_says_what_to_answer_where_to_record_it_and_the_rule(
+    plan_capture, tmp_path
+):
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = consequence_step_of(prompt)
+    for statement, phrases in STEP_STATES.items():
+        assert unsaid(step, phrases) == [], statement
+
+
+def test_the_consequence_step_names_the_sweep_rather_than_restating_its_places(
+    plan_capture, tmp_path
+):
+    """The step points at the sweep for the two questions about other texts
+    and names none of the places the sweep searches. The control is beside it
+    and needs no history: the same search over a copy of the step with the
+    sweep's own list of places appended — taken from the sweep step of the
+    same prompt rather than written out again — reports every one of them, so
+    an empty result above is the step not restating them."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = consequence_step_of(prompt)
+    assert sweep_places_named_by(step) == []
+
+    places = STORY_179_SWEEP_PLACES.search(sweep_step_of(prompt))
+    assert places is not None, "the sweep step no longer names its places"
+    assert sweep_places_named_by(f"{step}\n   ask them of {places.group(0)}") \
+        == list(SWEEP_SEARCHES)
+
+
+def test_the_consequence_step_names_no_filing_category_and_no_other_file(
+    plan_capture, tmp_path
+):
+    """The step is worded for a planner on any target: it states its questions
+    in its own words rather than by naming one of the shapes this harness
+    files its own reviews under, and it sends the planner to no file for the
+    words it uses. Both searches have their controls in the tests below —
+    each shown reporting what it looks for, and each shown staying silent on
+    the ordinary use of a word it must not report."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = consequence_step_of(prompt)
+    assert brief_categories(), "the brief schema declares no categories"
+    assert categories_named_by(step) == []
+    assert paths_named_by(step) == []
+
+
+def test_the_category_search_reports_a_step_that_spells_each_name():
+    """Control for the first absence above: the same search over a copy of the
+    step with one category name put into it reports that name, for every name
+    the enum holds — so an empty result there is the step spelling none rather
+    than the search having stopped seeing them."""
+    step = consequence_step_of(planner_template())
+    for name in brief_categories():
+        assert categories_named_by(f"{step}\n   - is this a {name} problem?") \
+            == [name], name
+
+
+def test_the_category_search_is_silent_on_an_ordinary_use_of_the_same_word():
+    """The other half of that control, and the one that says what the search
+    is for: most of the enum's names are ordinary English words, and a
+    question that uses one for the thing it ordinarily means has not adopted
+    anybody's filing vocabulary. A search that reported it would put a later
+    author to rewording an accurate question to clear a failure whose message
+    says something untrue — which is the stand-in the step itself warns
+    about. So the same search over a copy of the step carrying each such
+    name used ordinarily reports nothing, while the same text with one name
+    used as a label still reports that one."""
+    step = consequence_step_of(planner_template())
+    ordinary = [name for name in brief_categories() if not coined_name(name)]
+    assert ordinary, "the enum holds no name that is also an ordinary word"
+    for name in ordinary:
+        for question in (f"- does the change add {name} the problem does not have?",
+                         f"- is this a change that trades {name} for speed?"):
+            assert categories_named_by(f"{step}\n   {question}") == [], question
+            labelled = f"{step}\n   {question}\n   - is this a {name} problem?"
+            assert categories_named_by(labelled) == [name], question
+
+
+def test_the_file_search_reports_the_steps_that_do_name_one(
+    plan_capture, tmp_path
+):
+    """Control for the second: the same search over the step that says where
+    the artifact is written reports the path that step names, and over a copy
+    of the consequence step with a file named in it reports that file — once
+    with a file carrying an extension, and once with an extensionless file
+    under a directory, which is how this repository's own scripts are written
+    and so the shape a later author is likeliest to send the planner to."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    steps = numbered_steps(process_section(prompt))
+    assert paths_named_by(steps[step_index(steps, ARTIFACT_STEP)]) != []
+    step = consequence_step_of(prompt)
+    assert paths_named_by(f"{step}\n   the words for them are in {BRIEF_SCHEMA_REL}") \
+        == [BRIEF_SCHEMA_REL]
+    # Guarded, because a control that has stopped being about an extensionless
+    # path would pass on the extension instead and say nothing about the case
+    # it is here for.
+    assert Path(LAUNCHER_REL).suffix == "", LAUNCHER_REL
+    assert paths_named_by(f"{step}\n   see {LAUNCHER_REL} for the words") \
+        == [LAUNCHER_REL]
+
+
+def test_the_file_search_is_silent_on_a_slashed_pair_of_ordinary_words():
+    """The other half of that control: a slash between two words is not a
+    path, so a question that writes one names no file the step sends the
+    planner to. Each pair below is put into a copy of the step and reported as
+    nothing, and then a real file is added beside it and reported on its own —
+    so the silence is the search deciding rather than the search being blind
+    in that text."""
+    step = consequence_step_of(planner_template())
+    for slashed in ("what does it do when the value is absent and/or unreadable?",
+                    "is the value absent/unwritable/unreadable?",
+                    "is the answer yes/no, or neither?"):
+        assert paths_named_by(f"{step}\n   - {slashed}") == [], slashed
+        assert paths_named_by(f"{step}\n   - {slashed} see {BRIEF_SCHEMA_REL}") \
+            == [BRIEF_SCHEMA_REL], slashed
+
+
+def test_the_template_carries_the_consequence_step_the_session_receives():
+    """The assertions above read a render; this reads the template, so a
+    regression in either the template or the rendering is caught by name."""
+    step = consequence_step_of(planner_template())
+    bullets = question_bullets(step)
+    for question, phrases in QUESTIONS.items():
+        assert len(bullets_asking(bullets, phrases)) == 1, question
+    for statement, phrases in STEP_STATES.items():
+        assert unsaid(step, phrases) == [], statement
+
+
+def test_the_baseline_template_carried_none_of_the_consequence_questions():
+    """Control for the presences above, in this module's own idiom: the
+    template before it had no such step, none of its dashed items asked any of
+    these questions, and it stated none of what the step states — so the same
+    searches go the other way there, and green today is the text having been
+    added rather than the searches matching what was always written."""
+    before = baseline_planner_template()
+    steps = numbered_steps(process_section(before))
+    assert [index for index, step in enumerate(steps)
+            if re.search(CONSEQUENCE_STEP, step)] == []
+
+    bullets = question_bullets(before)
+    assert bullets, "the baseline template has no dashed items to search"
+    for question, phrases in QUESTIONS.items():
+        assert bullets_asking(bullets, phrases) == [], question
+    for statement, phrases in STEP_STATES.items():
+        assert unsaid(before, phrases) == list(phrases), statement
+    # The step the new one sits before was there, after the reading step, so
+    # the placement above is a step inserted into an existing list.
+    assert step_index(steps, STANDARDS_STEP) < step_index(steps, QUESTIONS_STEP)
+
+
+def test_the_story_schemas_description_records_the_consequence_answers():
+    """The other place that states what a description carries says the answers
+    are recorded there, and says it inside the sentence that already carried
+    the clause exempting a description written before the form was stated — so
+    that clause covers the new statement rather than only the older one."""
+    description = story_description_field(
+        schema_validator.load_schema("story"))["description"]
+    for statement, phrases in DESCRIPTION_STATES.items():
+        assert unsaid(description, phrases) == [], statement
+
+    carrying = [sentence for sentence in sentences_of(description)
+                if "whether a question was answered" in sentence]
+    assert len(carrying) == 1, carrying
+    assert "not held to it" in carrying[0]
+
+
+def test_the_baseline_description_stated_none_of_it():
+    """Control for the statements above: the same searches over that field as
+    it stood at this module's baseline report every one of them absent. The
+    exemption clause is older than this story and newer than that baseline, so
+    its absence there is the search working rather than a claim about which
+    story wrote it."""
+    before = story_description_field(json.loads(repository_file_at(
+        STORY_SCHEMA_REL, validation_file=Path(__file__), bound=BASELINE)))
+    assert before["description"], "the field carried no description to search"
+    for statement, phrases in DESCRIPTION_STATES.items():
+        assert unsaid(before["description"], phrases) == list(phrases), statement
 
 
 # --------------------------------------------------------------------------

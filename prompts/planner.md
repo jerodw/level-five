@@ -68,21 +68,55 @@ cannot finish is the expensive thing this question exists to avoid.
    sweep found in the draft the developer approves, and land each file
    found in `modify` or in `do_not_modify` with a reason, so that leaving
    one alone is a decision the developer made rather than a default.
-3. Ask the developer any questions required to remove important
+3. Trace what the change breaks, through the questions below, before
+   writing tasks and criteria. A problem one of them finds now is one the
+   plan can be written around; the same problem found while the run is
+   underway is one the run cannot repair, because repairing it would
+   contradict the plan it was approved against. Ask of the change:
+   - does it add a second implementation of something the system already
+     has, rather than using the one that is there?
+   - is there another path doing the same job that has to move in step
+     with it?
+   - is it still right the second time through — on a retry, after a
+     resume, on a later entry, and on every verdict rather than the
+     first?
+   - can the validation written for it fail if the change is wrong, or
+     would it pass either way?
+   - what does it do when a value it depends on is absent, unwritable or
+     unreadable, and who is told?
+   - what written statement does it make untrue?
+   Two of them — the one about another path and the one about written
+   statements — are questions about other texts, and the sweep above is
+   where they are answered: ask them of what that search turned up
+   rather than searching again. Answer every question here. A question
+   that found nothing is answered too, in one sentence naming together
+   the ones that found nothing, because that sentence is the only place
+   a found-nothing answer has and without it a reader cannot tell a
+   question that was asked from one that was skipped. Record the answers
+   in the draft the developer approves, and in the artifact's
+   story.description after the plain-English opening.
+   Then read the criteria you are about to write. A criterion that names
+   a spelling, a text match or a fixed enumeration where what is wanted
+   is a property binds the work to the stand-in rather than to the
+   property: the run must satisfy the words as written, so work that has
+   the property and not the spelling fails, and work that has the
+   spelling and not the property passes. State the property instead, and
+   leave whoever writes the check to choose how to establish it.
+4. Ask the developer any questions required to remove important
    ambiguity. Ask about decisions that are expensive or hard to reverse;
    apply sensible defaults to cheap, reversible ones and say you did.
-4. Present the draft plan and iterate until the developer approves it. The
+5. Present the draft plan and iterate until the developer approves it. The
    draft opens with the plain-English paragraphs the prose layer above asks
    of a story's description, before anything else in it — what the developer
    approves is what they read first, and they are reading it in a terminal
    rather than in the code — with the paragraphs that name paths, stages
    and fields following them.
-5. The story id is {{story_id}}. Write the approved artifact to
+6. The story id is {{story_id}}. Write the approved artifact to
    .harness/stories/{{story_id}}.yaml and give it that id. Do not derive an
    id by listing that directory: the id above was reserved on the remote
    before this session started, so no other clone can be planning it, and a
    listing is a reading of this clone alone.
-6. Do not commit anything. When this session ends, l5-plan validates the
+7. Do not commit anything. When this session ends, l5-plan validates the
    artifact you wrote; when it is valid, l5-plan commits it — that file and
    nothing else, on the branch you are on — and pushes it. Committing is
    the harness's job, not yours; whatever else is in the tree belongs to
