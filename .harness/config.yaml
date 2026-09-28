@@ -58,6 +58,15 @@ source_dirs:
 # are the two inspect_ keys the defaults above cover. Delete the key and no run
 # inspects anything.
 inspect_after_story_max_files: 60
+# What one Inspector invocation may spend. Set explicitly rather than left to the
+# harness's unset default of $5.00, because that default was already being
+# crossed: the post-story inspections of stories 206, 207 and 208 cost $7.10,
+# $7.90 and $9.30 across two invocations each, so roughly $5 per invocation, and
+# story-209 declared the inspection an xhigh effort. The ceiling is per scope
+# rather than per inspection, so an l5-inspect over four scopes may spend four of
+# these. $12 is above what two recent invocations actually cost with margin for
+# the effort it now runs at.
+inspect_max_cost_usd: 12
 # The cross-run history — the append-only logs that outlive the run
 # directories they describe — is left at its default of .harness/history, and
 # unlike runs_dir and logs_dir above it is versioned and blocked to every

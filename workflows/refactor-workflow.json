@@ -1,7 +1,7 @@
 {
   "name": "refactor-workflow",
   "applies_when": "The correctness claim is that behaviour is unchanged. The work restructures, renames, moves, extracts or consolidates something that already works, the validation that would show it still works already exists, and the job is to carry that validation across rather than to weaken it. Choose this when what you are asking for is judged by whether the system still does exactly what it did before. Work that ends by making a new standing claim -- that something is now the only place a thing happens, that a rule holds from here on -- is not this workflow's work, even where behaviour is unchanged: such a claim needs an assertion nothing asserts today, this workflow has no stage whose work is to write one, and an assertion written under it would be written by the stage whose own change it validates.",
-  "max_run_cost_usd": 90,
+  "max_run_cost_usd": 150,
   "max_run_cost_usd_reason": "This workflow has no cost corpus of its own yet: no run has executed under it, so there is nothing to derive a figure from. It inherits story-workflow's ceiling until it has one, and story-workflow's reason string carries the derivation. Tighten it against the record runs under this workflow write, not against story-workflow's, since this workflow has one fewer stage and its work is behaviour-preserving rather than new. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
   "stages": [
     {
@@ -10,7 +10,7 @@
       "outputs": ["changed-files.json", "implementation-summary.md"],
       "changed_files": "changed-files.json",
       "max_self_routes": 1,
-      "max_execution_cost_usd": 30,
+      "max_execution_cost_usd": 60,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's implementer ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
       "effort": "xhigh",
       "effort_reason": "xhigh. The stage that writes the code, and the only stage where raising further costs real money: it carries the largest execution ceiling this definition declares, so the spend here would be paid on every refactor rather than only where judgement is scarcest. Declaring it at all is the other half of the value. Before this key a stage thought as hard as the developer's own editor happened to be set to think, so changing that setting for one unrelated piece of work silently changed how every story was built; a declared level pins it. The spend ordering this rests on is story-workflow's rather than this definition's: it was measured on stories 206, 207 and 208, completed 2026-09-24, each of which ran under story-workflow, and that definition's reason string carries the derivation. This workflow has no cost corpus of its own yet, and its shares will differ in any case, because it declares three stages and no tester where story-workflow declares four. Nothing reads this key; it records the judgement where a reader of the definition meets the value.",
