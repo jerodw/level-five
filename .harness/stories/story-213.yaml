@@ -1,0 +1,216 @@
+story:
+  id: story-213
+  title: A completed run says what became of every finding it made
+  description: |
+    When a story run finishes, the report a developer reads says what the story
+    was, that it completed, what it cost, and which files hold the evidence. It
+    says nothing about the problems the run found in its own work. A run
+    examines what it has just built, repairs some of the defects it finds,
+    decides others belong to somebody else and sends them to the backlog, and
+    throws a few away as too small to be worth anyone's time — and the report
+    mentions none of that. The developer learns about it later, from the
+    backlog, without the run's side of the story.
+
+    A fourth outcome has no account at all, and it is the one that matters
+    most. A run is allowed a bounded number of attempts at fixing a defect it
+    found in its own work. That bound is correct — a fix the reviewer keeps
+    rejecting must not cycle forever — but when the allowance runs out the
+    defect simply goes nowhere. Nothing is filed, the run reports success, and
+    the only trace is in the run's own working files, which are deleted when
+    the story is cleaned up. Planning this story turned up something sharper
+    than the brief describes: the durable record a run keeps does not merely
+    omit such a defect, it actively records it as one the run dealt with. That
+    is untrue, and it is also the mechanical reason the defect never reaches
+    the backlog, because the machinery that files unresolved findings skips
+    anything already marked as answered.
+
+    So this story makes a completed run say what became of every problem it
+    found — the ones it fixed, the ones it is sending to the backlog and on
+    what grounds, the ones it discarded, and the ones it abandoned when the
+    allowance ran out — and puts that account in the repository's committed
+    history so it outlives the run's working files. It corrects the false
+    record at the same time, and once the record tells the truth the existing
+    machinery files an abandoned finding like any other unresolved one, with
+    the queue's duplicate detection stopping a later run from filing it again.
+    It deliberately leaves alone which defects are fixed and which are sent
+    on, which is the reviewing stage's judgement; how many attempts a run is
+    allowed, which is a bound this story has no business raising; how the
+    examination itself is done; and the report an escalated run leaves, which
+    loses its findings too but is a separate problem.
+
+    This story was planned from the brief filed under 350.
+
+    The surfaces. The completion report is assembled in `_complete` in
+    `orchestration/story_coordinator.py` from Story, Outcome, Cost, Evidence
+    and Next Step, and gains a section accounting for the run's findings. The
+    durable half is the committed cross-run history under
+    `.harness/history/<story-id>/`, where `inspection-log.jsonl` already
+    carries three kinds of record — the inspection itself, the accounting
+    after a verdict, and the filing at completion — and gains a fourth saying
+    what the run abandoned. The false record is written by
+    `account_after_verdict` in `orchestration/story_inspection.py`, whose
+    split through `acted_on_by` counts a finding as acted on whenever the
+    verdict names its slug for correction or repair, and which runs in the
+    verifier branch before the coordinator checks whether the pass budget is
+    spent. The two spent-budget paths are `_repair_pass_recorded` and
+    `_correction_pass_recorded` in the coordinator.
+
+    Consequences traced before the criteria were written. A second
+    implementation is the live risk here and the plan avoids it: the split of
+    the routed findings, the drop reasons and the counts are already derived
+    once, in `orchestration/story_inspection.py`, and the report reads them
+    through the accessors that exist rather than re-deriving them, and the
+    durable record rides on the projection `append_event` already makes into
+    the cross-run logs rather than a second write path.
+
+    Another path doing the same job: the escalation summary is the sibling
+    terminal report and is deliberately out of scope, named in
+    `do_not_modify` with its reason. The durable record, riding on
+    `append_event`, reaches an escalated run's history as well, which is a
+    gain rather than a cost and is not what the story is judged on.
+
+    Right the second time through: this is where the care is needed. The
+    accounting is written once per attempt and amended by a later verdict of
+    the same attempt, and the filing at completion reads the final attempt of
+    the current entry plus the earlier entries of a resumed run. The report
+    must account for exactly what the filing will act on, so it reads the same
+    attempts and entries the filing reads rather than the current attempt
+    alone, and it reads the accounting artifacts so that an amended split is
+    the one it reports. A run can spend both allowances, so both abandonments
+    are accounted. The budget is cumulative across attempts, so a verdict can
+    find the allowance already spent on its first pass through as well as on
+    a later one, and both must be accounted the same way.
+
+    Validation that can fail if the change is wrong: the new module drives
+    whole runs with the fake runner in which findings take each disposition,
+    rather than asserting the derivation in isolation, and carries controls in
+    the other direction — a run under a workflow declaring no inspection, and
+    a run that abandoned nothing — so a report that names every disposition
+    unconditionally fails.
+
+    Absent, unwritable or unreadable values: the completion report is a
+    required artifact of every completed run, so its new section may not be
+    able to stop it being written. Where the accounting artifacts are missing
+    or unreadable the report says that in place of the account and the run
+    still completes, which is the totality the inspection machinery already
+    holds itself to; the problem is reported on stderr and in the run's own
+    events log, where the rest of that machinery reports its failures.
+
+    Written statements this makes untrue: the docstrings of
+    `_repair_pass_recorded` and `_correction_pass_recorded`, which say the
+    findings are named in the event stream where a developer meets them and
+    the run completes; the two passages of `.harness/docs/ARCHITECTURE.md`
+    that say the same of the correction pass and the repair pass; and the
+    description of `inspection-log.jsonl` in
+    `schemas/cross-run-history.schema.json`, which enumerates the kinds of
+    record that log holds. The docstrings of the two spent-budget tests in
+    `tests/` repeat the phrase and are brought into line by the stage that
+    owns them. Of the six questions asked, none found nothing: every one of
+    them turned something up, and the paragraphs above are the answers.
+  workflow: story-workflow
+
+tasks:
+  - Account, in the completion report of a run that completed, for every finding the run made and what the run decided about each — repaired or corrected within the run, sent to the backlog and on the ground the verdict recorded, discarded as not worth filing, or abandoned because a pass allowance was spent — including the findings the inspection made about files beside the change.
+  - Stop the accounting after a verdict recording a finding as acted on when the pass that would have acted on it was refused for want of allowance; record it instead as abandoned, with that as its recorded ground, so the filing at the run's completion sends it to the backlog like every other finding the verdict left.
+  - Carry the account of what a run abandoned into the repository's committed cross-run history, as a record of its own kind in the log that already records what became of a run's findings, so it survives the deletion of the run directory.
+  - Bring the texts that state the old rule into line — the two spent-budget docstrings in the coordinator, the architecture document's passages on the correction pass and the repair pass, and the declaration of the log that gains a record kind.
+  - Write the standing validation for all of the above, driving whole runs, with controls in the other direction.
+
+acceptance_criteria:
+  - A completed run whose inspection routed findings to the story leaves a completion report that accounts for every one of them, and for the findings the same inspection made about files beside the change; nothing the run found is left out of the account.
+  - The account distinguishes a finding the run repaired or corrected, one it is sending to the backlog, one it discarded as not worth filing, and one it abandoned for want of pass allowance; each is named individually rather than only counted, so a developer reading the report knows which defect had which outcome.
+  - A finding the run is sending to the backlog is accounted together with the ground the verdict recorded for leaving it, or with the fact that the verdict recorded none.
+  - The report does not state how many briefs reached the queue, because it is written and committed before the filing runs; it says where that outcome is recorded instead.
+  - A routed finding that a spent pass allowance abandoned is not recorded anywhere as acted on by the verdict, and is filed at the run's completion through the same call, severity floor and brief cap every other producer files through, so the queue's existing duplicate detection governs it.
+  - A completed run that abandoned findings leaves, in the repository's committed history under that story, a record naming how many were abandoned, and that record is distinguishable from the other kinds of record in the same log by the fields it carries rather than by prose.
+  - That record is still readable after the run directory has been deleted.
+  - A run under a workflow that declares no inspection leaves its completion report and its events log byte for byte what they are before this story; a run whose inspection found nothing to route says so in the account rather than omitting the account.
+  - A run that abandoned nothing writes no abandonment record and no abandonment clause.
+  - The completion report is still written, and the run still completes and returns the exit code it returns today, when the artifacts the account is derived from are missing or unreadable; the report says the account could not be derived, and the reason reaches the run's own events log.
+  - No text that ships in this repository still says the event stream is the whole of what becomes of a finding abandoned for want of pass allowance.
+
+technical_plan:
+  implementation_steps:
+    - Establish, in the verifier branch, that the findings a verdict names for a pass the allowance refuses are abandoned, and make that known to the accounting rather than leaving the accounting to infer it. The seam already exists: `refused_slugs` is how the coordinator tells `account_after_verdict` that a routed slug it would otherwise read as acted on was not. The spent allowance is a second reason for exactly that, and reusing the seam keeps one rule for what "acted on" means. Note that the accounting currently runs before the allowance is checked, and that a verdict can find the allowance spent on its first pass through an attempt as well as on the returning verdict of a later one, so both the writing path and the amending path of the accounting must carry it.
+    - Record the abandonment durably by giving the two spent-budget events a count field of their own and naming their kinds in the enum of `inspection-log.jsonl` in `schemas/cross-run-history.schema.json`. The projection into the cross-run logs is selection by declaration and needs no orchestration change; the count field is what tells the new record apart from the three kinds already in that log, since the event kind itself is not projected. A new keyword on `append_event` is also a new optional property on `schemas/execution-history.schema.json`, which is the recurring bill that schema's closed enum and both-directions equality impose.
+    - Derive the account for the report from the artifacts the run directory already holds — the attempt's findings record, its accounting record and its held record — through the accessors `orchestration/story_inspection.py` already exposes, reading the same attempts and earlier entries the filing at completion reads so the report and the filing cannot disagree about what is being sent on. Put the derivation beside the filing it must agree with rather than in the coordinator, and hand the coordinator a value to render.
+    - Render the section in `_complete` in the shape the sections beside it take, under a guard that cannot stop the report being written, and say in it where the outcome of the filing is recorded.
+    - Bring the two spent-budget docstrings, the architecture passages and the log's own declaration into line with what the run now does.
+  likely_file_changes:
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The completion report is assembled in `_complete` and gains the account; the verifier branch is where a spent allowance is discovered and must tell the accounting; `_repair_pass_recorded` and `_correction_pass_recorded` gain the count that makes their records durable and lose the docstring claim that the event stream is the whole disposition; `append_event` gains the keyword.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: `account_after_verdict` and its amending path decide what is recorded as acted on, and the derivation the report renders belongs beside `file_at_completion`, whose reading of attempts and earlier entries it must match.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: The log that records what became of a run's findings gains a fourth kind of record; the enum is the selection and the description is where the kinds are told apart.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: A new keyword on `append_event` is a new optional property here, the enum being closed and the two held equal in both directions.
+    - file: tests/test_a_completed_run_says_what_became_of_its_findings.py
+      stage: tester
+      reason: The standing validation, driving whole runs in which findings take each disposition, with the two controls.
+    - file: tests/test_execution_history.py
+      stage: tester
+      reason: The hand-written set of optional fields is held equal to `append_event`'s keywords in both directions and moves with the new one.
+    - file: tests/test_repair_pass.py
+      stage: tester
+      reason: The spent-allowance case now records more than an event, and the docstring saying the event stream is where a developer meets the finding is no longer the whole truth.
+    - file: tests/test_correction_pass.py
+      stage: tester
+      reason: The same, for the correction pass.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: A new module that reads this repository's shipped artifacts or its own history owes its declaration here in the same change; the architecture records that omitting it has cost a retry on every story that did.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The passages on the correction pass and the repair pass say the findings are where a developer meets them, and the sections on the accounting and the filing at completion describe a disposition that now has a fourth outcome and a report.
+
+scope:
+  modify:
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - schemas/cross-run-history.schema.json
+    - schemas/execution-history.schema.json
+    - tests/
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - workflows/story-workflow.json (the pass allowances bound a run correctly and stop a rejected fix cycling forever; this story reports what a spent allowance leaves behind and has no business raising or removing the bound)
+    - workflows/refactor-workflow.json (the same allowances, declared for the other shipped workflow, and out of this story's reach for the same reason)
+    - prompts/story-verifier.md (what the reviewing stage decides about a finding — repair it, correct it, decline it, drop it as not worth filing — is the judgement this story leaves alone; only what the run says about the decision changes)
+    - prompts/refactor-verifier.md (the same judgement, stated for the other shipped workflow, and unchanged for the same reason)
+    - prompts/inspector.md (the shape of the inspection itself — what it looks at, what it rates, what it calls a finding — is not what this story is about)
+    - schemas/verification-result.schema.json (the verdict's own shape is unchanged: the reviewing stage goes on naming a finding for repair or correction, and whether the allowance for that pass is spent is the coordinator's knowledge and not the verdict's)
+    - orchestration/inspection.py (the shared filing call, the severity floor, the brief cap and the drop vocabulary are what an abandoned finding must reach the queue through unchanged, because that is what makes the queue's duplicate detection apply to it as it applies to every other brief)
+    - orchestration/outbox.py (the queue's identity and duplicate detection are the thing relied on to stop a recurring abandoned finding being filed by every run that hits the allowance, so they are load-bearing here and must stay as they are)
+    - the escalation summary an escalated run leaves (a run that gives up part way loses its findings too, which is a real defect worth its own story; this work is about what a run that completes says, and widening it would make the change harder to review without making the completed run's account any better)
+
+verification_requirements:
+  - Confirm the account in the completion report is derived from the artifacts the run directory already holds, through the derivations that exist, rather than from a second split of the findings written for the report.
+  - Confirm the report and the filing at completion agree about which findings are being sent to the backlog, including on a run that was interrupted and resumed and on a run whose accounting was amended by a later verdict of the same attempt.
+  - Confirm the validation drives whole runs rather than asserting a pure derivation alone, and that it would fail if the account named a disposition the run did not reach; confirm the two controls are present and that each of them would fail if the account were rendered unconditionally.
+  - Confirm a run under a workflow declaring no inspection leaves its completion report and events log byte for byte what they were, by comparison rather than by inspection of the code.
+  - Confirm the completion report is still written, and the run still returns the exit code it returns today, when the artifacts the account is derived from are absent or unreadable.
+  - Confirm the durable record is readable from the committed history with no run directory present.
+  - Confirm no shipped text — coordinator docstrings, architecture document, schema descriptions, test docstrings — still states that the event stream is the whole of what becomes of a finding abandoned for want of pass allowance.
+  - Confirm that a module reading this repository's own shipped artifacts or its own history carries its declaration in the baseline-honesty list, with its reason, in this same change.
+
+constraints:
+  - The completion report must go on being written for every completed run, and nothing added to it may raise, block or change the run's exit code; the account is a report and never a decision.
+  - Nothing added here may be read back to make a routing decision: the cross-run history stays evidence, and the coordinator stays deterministic with no model call in its logic.
+  - Which findings are repaired, filed or discarded is unchanged except for the one case this story corrects, where a finding recorded as acted on was never acted on; no other finding changes its destination.
+  - An abandoned finding reaches the queue through the same filing call, severity floor, brief cap and duplicate detection every other producer uses, so that a defect abandoned by several runs is filed once.
+  - The pass allowances themselves are untouched, and termination stays a property of the bound rather than of anything added here.
+  - The account added to the report must not claim an outcome the run cannot know at the moment the report is written.
+  - A new standing test module that reads this repository's shipped artifacts or its own history carries its declaration in the same change rather than in a later one.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-28 13:28:33
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 350
