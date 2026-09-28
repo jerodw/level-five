@@ -1,0 +1,175 @@
+story:
+  id: story-212
+  title: The planner traces a change's consequences before writing the criteria that bind it
+  description: |
+    The planning interview looks for one thing before it writes a story's
+    boundaries: every other place that already states the rule the story is
+    about to change. It never asks what else the change will break. Stories
+    therefore keep finishing with real problems in the work they have just
+    done, and the run cannot repair them, because repairing them would
+    contradict the plan the run was approved against. Reviewing three
+    consecutive stories, three of the four write-ups they sent to the backlog
+    were consequences of what the plan specified that the plan had never
+    named: one created a second copy of something that already existed, one
+    wrote a rule about a piece of text that then matched more text than was
+    meant, and one changed a value on one path without noticing that a second
+    path reads the same value for a different purpose.
+
+    This story gives the interview a standing set of questions to work
+    through before it writes tasks and criteria, and has it say what each
+    question found — including that it found nothing, where that is the
+    answer. The questions are not invented here: they are the recurring
+    classes of problem this system's own reviews keep reporting, drawn from
+    classifying the last sixty write-ups it filed, so the planner is told to
+    look where the evidence says problems come from. One addition is about
+    wording rather than about consequences, and it is the one that makes the
+    plan itself the obstacle: a criterion that names a spelling, a text match
+    or a fixed list standing in for the property actually wanted binds the
+    work to the stand-in, and satisfying such a criterion as written has
+    already cost a run an accurate docstring example that had nothing wrong
+    with it.
+
+    It deliberately leaves alone what a run does with a problem it finds in
+    its own work, whether a run may ever change an approved criterion, and
+    how a plan is validated once written; all three are separate work already
+    written up. It adds no new refusal anywhere. Whether a question was
+    answered, and answered honestly, is a reading rather than a shape, so
+    what holds this is the developer's approval at the interview — the same
+    thing that holds the plain-English opening rule and the consequence sweep
+    that already sits in the same list of steps. It is planned from the brief
+    filed under key 349.
+
+    The questions go into prompts/planner.md as a numbered [Process] step
+    between the existing consequence sweep and the step that asks the
+    developer questions. The sweep keeps its wording: it is already the
+    mechanism for the questions that are about other texts, so the new step
+    names it rather than restating its search — a story that duplicated the
+    sweep would commit the very shape it exists to catch. Each question is
+    written as a question about the change, in ordinary words, and names no
+    classification vocabulary: this prompt is rendered for every target, and
+    how this harness happens to file its own reviews is not something a
+    target should have to adopt in order to plan a story. The answers are
+    recorded in the draft the developer approves and in
+    the artifact's story.description, after the plain-English opening: a
+    sentence for each question that found something and one sentence naming
+    those that found nothing, which is the only home a found-nothing answer
+    has. schemas/story.schema.json's account of story.description gains a
+    sentence saying so, since it is the other place that states what a
+    description carries.
+
+    tests/test_planner_receives_the_standards.py gains a section holding the
+    new step on the prompt scripts/l5-plan actually hands the session, with
+    the baseline template as its control, beside the sections that already
+    hold the consequence sweep and the reason rule the same way.
+    .harness/docs/ARCHITECTURE.md records the account in the planner.md
+    paragraph under "Prompts (prompts/)", where the sweep is recorded.
+
+    What this story's own consequence questions found. Structural
+    duplication: the new step would have restated the sweep's search, and
+    does not — it names the sweep instead. Cross-path parity: the harness
+    already carries a list of the shapes it files its own reviews under, in
+    prompts/inspector.md and in the brief schema's enum, and this story
+    deliberately does not become a third spelling of it — the questions are
+    worded for a planner on any target, and both of those texts are left
+    alone.
+    Correctness on a second pass: the step is prompt text rendered afresh for
+    every planning session, so there is no retry, resume or later entry it
+    can be wrong on. Coverage: the assertions read the prompt scripts/l5-plan
+    hands a session rather than the template file on disk, and each is
+    controlled against the template as it stood before this story, which
+    carries none of the text. Robustness: the step introduces no placeholder
+    and reads no configuration, so no value it depends on can be absent,
+    unwritable or unreadable. Documentation drift: the architecture
+    document's planner.md paragraph and the schema's account of
+    story.description are the written statements this change would otherwise
+    leave incomplete, and both are in scope.
+  workflow: story-workflow
+
+tasks:
+  - Add a numbered [Process] step to prompts/planner.md, between the consequence sweep and the step that asks the developer questions, naming a question for each recurring consequence shape and saying what each one looks for.
+  - Have that step name the consequence sweep as where the questions about other texts are answered, rather than restating the places the sweep searches.
+  - Have that step tell the planner to answer every question it lists, to say so where a question found nothing, and to record the answers in the draft the developer approves and in the artifact's story.description after the plain-English opening.
+  - Close that step with the rule against a criterion that names a spelling, a text match or a fixed enumeration standing in for the property actually wanted.
+  - Add a sentence to schemas/story.schema.json's description of story.description saying the consequence answers are recorded there, carrying the clause that a story written before the rule is not held to it.
+  - Hold the new step on the prompt scripts/l5-plan hands a session in tests/test_planner_receives_the_standards.py, controlled against the baseline template, and hold every category name the step spells to the enum in schemas/story-brief.schema.json.
+  - Record the step, where it sits, what it asks and what nothing scores about it in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - The prompt scripts/l5-plan hands a planning session carries a numbered [Process] step that sits after the step telling the planner to sweep for the consequences of the change and before the step telling it to ask the developer questions.
+  - That step names a question for a change that creates a second implementation of something that already exists, for another path doing the same job that must move in step, for whether the change is still right on a retry, after a resume, on a later entry and on every verdict rather than the first, for whether the validation written for the change can fail if the change is wrong, for what the change does when a value it depends on is absent, unwritable or unreadable and who is told, and for what written statement the change makes untrue.
+  - Each question is stated in the step's own ordinary words, so a planner working on a target that classifies its own work differently can follow the step without adopting another vocabulary: no question is stated by naming a category from the enum in schemas/story-brief.schema.json, and the step sends the planner to no other file for the words it uses.
+  - The step tells the planner to answer every question it lists, and to say so in the plan where a question found nothing.
+  - The step tells the planner to record those answers in the draft the developer approves and in the artifact's story.description after the plain-English opening.
+  - The step names the consequence sweep as where the questions about other texts are answered, and does not restate the places the sweep searches.
+  - The step states that a criterion naming a spelling, a text match or a fixed enumeration in place of the property actually wanted binds the work to the stand-in, and tells the planner to state the property instead.
+  - The same searches run over the planner template as it stood before this story report every statement the criteria above require absent from it.
+  - schemas/story.schema.json's description of story.description states that the consequence answers are recorded there and that a story written before the rule is not held to it.
+  - The rendered planner prompt still carries no sentence naming a story-schema property together with a word stating contract membership, which is the check tests/test_planner_injection.py already makes.
+  - The consequence sweep step, the step that presents the draft, the artifact skeleton and the do_not_modify reason rule carry the wording they carry today.
+  - .harness/docs/ARCHITECTURE.md records the new step, where it sits in the process list, what it asks the planner to answer and to record, and that nothing deterministic scores whether a question was answered.
+
+technical_plan:
+  implementation_steps:
+    - Draft the step in prompts/planner.md immediately after the consequence-sweep step, wording every sentence so that none names a story-schema property together with "required", "optional" or "mandatory", which is the shape tests/test_planner_injection.py reports.
+    - Keep out of the new step the phrases the existing assertions resolve the other steps by — "Read the architecture documents", "Sweep for the consequences", "Ask the developer any questions" and "Present the draft plan" — because tests/test_planner_receives_the_standards.py resolves each step by a pattern that must match exactly one step.
+    - Name no story of this repository and no path of this repository's own layout in the prompt text, since prompts/planner.md is rendered for every target.
+    - Append the sentence to schemas/story.schema.json's description of story.description, beside the plain-English opening rule already stated there.
+    - Add the section to tests/test_planner_receives_the_standards.py following that module's own pattern: capture the prompt scripts/l5-plan hands a session, resolve the step through numbered_steps and step_index, assert each statement, and control each one against baseline_planner_template(), which carries none of them.
+    - Word each question so it holds on a target that files its own reviews under a different vocabulary: name no category from the brief schema's enum, and point at no other file for the words the questions use.
+    - Record the account in .harness/docs/ARCHITECTURE.md in the planner.md paragraph under "Prompts (prompts/)", where the consequence sweep and the reason rule are already recorded.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The new process step, the record of the answers, and the rule about a criterion that binds work to a stand-in.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: One sentence on story.description saying the consequence answers are recorded there, so the other place that states what a description carries agrees with the prompt.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: The section holding the new step on the prompt l5-plan hands a session, with the baseline template as its control, beside the sections that already hold the sweep step and the reason rule.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The planner.md paragraph under "Prompts (prompts/)" records what the planner prompt tells the planner and would otherwise stop being a complete account of it.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - schemas/story.schema.json
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/inspector.md (it names the shapes this harness files its own reviews under, and this story keeps that vocabulary out of a prompt every target receives rather than extending or restating it)
+    - schemas/story-brief.schema.json (its category enum is this harness's own filing vocabulary, deliberately not mirrored into the planner's prompt, and whether a target should be able to declare its own is separate work already filed)
+    - tests/test_a_brief_is_not_only_a_defect.py (it holds that prompt and that enum in agreement about the filing vocabulary, which this story neither joins nor changes)
+    - tests/test_planner_injection.py (it holds the rule that planner.md states nothing normative of its own, which the new text is written to satisfy rather than to change)
+    - tests/test_every_story_and_brief_opens_in_plain_english.py (it holds the planner's draft step and the schema descriptions to the plain-English rule; the new step is added beside the draft step and the schema sentence is appended, so nothing it holds moves)
+    - tests/test_harness_layer_extraction.py (it holds the shared prose partial's reach into the planner prompt, which a new process step does not touch)
+    - orchestration/plan_validation.py (whether a question was answered, and answered honestly, is a reading rather than a shape, so this story adds no plan-time check)
+    - orchestration/context_assembler.py (the new step introduces no placeholder, so the planner's render context is unchanged)
+    - scripts/l5-plan (it renders the template and states nothing itself about what the interview does before it writes criteria)
+    - prompts/story-verifier.md (how a criterion is evaluated once written is one of the three things the brief leaves alone)
+    - .harness/standards/ (the standards and the areas vocabulary are the target's own text, and this story changes no rule the target declares about itself)
+
+verification_requirements:
+  - Confirm the new step is on the prompt scripts/l5-plan renders and hands a session, rather than only in the template file on disk.
+  - Confirm every assertion tests/test_planner_injection.py and tests/test_every_story_and_brief_opens_in_plain_english.py already made about the planner prompt still passes with no edit to either module.
+  - Confirm each new statement is controlled against the planner template as it stood before this story, so a search that has stopped seeing anything is told apart from a prompt that states the thing.
+  - Confirm the new step names no classification vocabulary — no question stated by a category name from the enum in schemas/story-brief.schema.json — so a target that files its reviews under different names can still follow it.
+  - Confirm .harness/docs/ARCHITECTURE.md's account matches the step the prompt actually carries and names no behaviour the change does not have.
+
+constraints:
+  - No sentence added to prompts/planner.md names a story-schema property together with a word stating contract membership, so the prompt still states nothing normative of its own.
+  - The new text names no story of this repository and no path of this repository's own layout, because prompts/planner.md is rendered for every target.
+  - The new step introduces no template placeholder and reads no configuration value.
+  - Nothing in this story refuses a plan, a story or a run that would not have been refused before: l5-plan's plan-time checks and the coordinator's pre-flight are unchanged.
+  - Story artifacts already committed are not held to the new rule about what story.description records.
+  - The vocabulary this harness files its own reviews under stays where it is, in prompts/inspector.md and in the brief schema's enum, and reaches the planner's prompt nowhere: the questions are worded so a planner on any target can follow them, whatever that target files its reviews under.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-28 08:11:23
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 349
