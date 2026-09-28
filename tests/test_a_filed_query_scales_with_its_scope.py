@@ -76,6 +76,8 @@ from test_filed_query import (  # noqa: F401 - shared idioms and fixtures
     ISSUE_LIST_CALL,
     LEDGER_VARIABLE,
     QUERY_JOB,
+    READ_ATTEMPTS,
+    STUB_ENVIRONMENT,
     TEMPLATE_CONSTANTS,
     TEMPLATE_SCRIPT,
     asked,
@@ -197,8 +199,7 @@ def stubbed(environment: dict, **overrides):
     setting that environment rather than by handing one over.
     """
     previous = dict(os.environ)
-    os.environ.update({name: environment[name]
-                       for name in ("PATH", LEDGER_VARIABLE)})
+    os.environ.update({name: environment[name] for name in STUB_ENVIRONMENT})
     os.environ.update({name: str(value) for name, value in overrides.items()})
     try:
         yield
@@ -356,7 +357,12 @@ def test_a_batch_whose_search_failed_is_re_asked_one_path_at_a_time(tmp_path):
     assert set(answer.items[0].paths) == {paths[1]}
     # Every batch was tried and every batch's paths were then asked about one
     # at a time, which is the fallback rather than a batch quietly skipped.
-    assert len(searches.batched) == math.ceil(len(paths) / BATCH)
+    # Each batch is asked as many times as a refused read is given attempts,
+    # because a search is a read and this tracker refuses every one of them —
+    # so the count is per batch rather than per search, and the number of
+    # attempts is read out of the script rather than written here.
+    assert len(searches.batched) == \
+        math.ceil(len(paths) / BATCH) * READ_ATTEMPTS
     assert paths_in(searches.per_path) == sorted(paths)
 
 

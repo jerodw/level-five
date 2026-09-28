@@ -30,6 +30,17 @@
 # interprets three sets of exit codes. What changed is that the three commands
 # are three arguments to one file.
 #
+# A REFUSED READ IS ASKED AGAIN AND A REFUSED WRITE IS NOT. A dropped
+# connection and a board that is genuinely misconfigured look identical from
+# out here — both are a call that exited non-zero — and only the first is
+# answered by asking again a moment later. So every call in this file that only
+# asks the tracker something is asked again a small number of times before it
+# gives up, which is safe because repeating a question changes nothing on the
+# tracker: a second attempt either answers or confirms the first failure. Every
+# call that writes makes exactly one attempt, whatever it exits. The rule in
+# full, the two constants that bound it and what it deliberately leaves alone
+# are below, at A REFUSED READ IS ASKED AGAIN.
+#
 # ==========================================================================
 # THE SYNC CONTRACT — github.sh sync
 # ==========================================================================
@@ -421,6 +432,26 @@ LIMIT="${L5_QUERY_LIMIT:-500}"
 # paths one filled page can hide.
 BATCH="${L5_QUERY_BATCH:-20}"
 
+# --- how many times a refused read is asked again. Edit these. -----------
+# One attempt count and one wait serve every read in the file: a read is a read
+# whichever job makes it, so these are declared here rather than once per job,
+# and they carry the same defaults in every copy because neither of them is a
+# statement about a particular board.
+#
+# Three attempts rather than two because the failure this exists for is a
+# connection dropped at the moment of the call, and a third attempt costs a
+# second of waiting where a second failure costs the whole update. A count that
+# is not a count is read as one attempt, which is what every read did before any
+# of them was asked twice.
+READ_ATTEMPTS="${L5_TRACKER_READ_ATTEMPTS:-3}"
+
+# How long to wait before asking again, in whatever units this machine's `sleep`
+# takes a bare number as. Short, because the evidence is that an immediate retry
+# answered: what has to clear is one reset socket rather than an outage. It is
+# read from the environment for the reason the count is, and a suite driving
+# this file against a fake tracker sets it to zero so that no test pays it.
+READ_RETRY_SECONDS="${L5_TRACKER_READ_RETRY_SECONDS:-1}"
+
 # --- the failure vocabularies -------------------------------------------
 # fail_transient is the sync branch's alone. Exit 75 means "the entry stays
 # pending and a later sweep tries again", and nothing retries behind the query
@@ -434,6 +465,65 @@ fail_terminal()  { echo "$*" >&2; exit 1; }
 # work, so one implementation of each lookup serves both writers while each
 # keeps the failure vocabulary its own call site is read with.
 BOARD_FAIL=fail
+
+# --- a refused read is asked again --------------------------------------
+# A READ IS REPEATED BECAUSE REPEATING IT CHANGES NOTHING. Every call below
+# that only asks the tracker something goes through the helper here, which
+# asks again when the call exits non-zero: the two project reads, one item's
+# own field values, every search, and the reads of an issue's body and its
+# URL. Nothing on the tracker can be done twice by any of them, so a second
+# attempt either answers or confirms that the first failure was real.
+#
+# A WRITE IS NOT REPEATED. Creating an issue, creating a label, adding one to
+# an issue, adding an item to a board and editing a board's field each make
+# exactly one attempt, whatever they exit. Whether a failed write should be
+# tried again is a different question carrying a different risk, and this file
+# does not ask it — including for the board add, which reports an item already
+# there rather than adding a second one and would therefore be defensible, so
+# that the writes are one rule rather than a rule with an exception.
+#
+# THE REPEAT IS INSIDE THIS COMMAND, which is why it does not contradict the
+# two branches above that say no exit code of theirs is read as a retry. That
+# is still true: nothing invokes this file again for a query or an item update,
+# which is exactly why the asking again has to happen before it exits. A failed
+# item update leaves a board saying the wrong thing about finished work, and a
+# failed query is read by the harness as knowing nothing, so it files anyway
+# and the board collects duplicate briefs. The sync branch has a sweep behind
+# it and gains this for consistency rather than for need.
+#
+# ONLY A NON-ZERO EXIT IS ASKED AGAIN. A read that succeeded and answered with
+# nothing is a misconfigured board rather than a dropped connection — a project
+# naming no id, a field listing naming no fields, an answer describing no such
+# item — so the emptiness checks that follow each read below give up on the
+# first answer, because a second attempt would answer identically.
+#
+# WHAT A READ GIVES UP WITH IS UNCHANGED. The helper answers with the last
+# attempt's output and the last attempt's exit status, so every message and
+# every exit code below is the one it was before any read was asked twice.
+retry_read() {
+  local attempts attempt output status
+  attempts="$READ_ATTEMPTS"
+  [ "$attempts" -ge 1 ] 2>/dev/null || attempts=1
+  attempt=1
+  while : ; do
+    # The read is a named function rather than a string this evaluates,
+    # because the reads below are pipelines of gh into jq whose exit status
+    # matters under `set -o pipefail` and whose stderr is theirs to redirect.
+    output="$("$@")"
+    status=$?
+    if [ "$status" -eq 0 ] || [ "$attempt" -ge "$attempts" ]; then
+      printf '%s' "$output"
+      return "$status"
+    fi
+    # Nothing is said about an attempt that is about to be made again. What a
+    # developer reads when a read gives up is the message below it, which the
+    # harness carries back as the reason, and a line per attempt above that
+    # would change what every failure here reads as without saying anything a
+    # second attempt does not.
+    sleep "$READ_RETRY_SECONDS"
+    attempt=$((attempt + 1))
+  done
+}
 
 # The two dependencies every job has, checked with the branch's own failure
 # helper: an absent gh is transient for the sync branch, because a later sweep
@@ -465,32 +555,33 @@ fields=""
 item=""
 item_id=""
 
+read_project_id() {
+  gh project view "$L5_TRACKER_PROJECT" --owner "$L5_TRACKER_PROJECT_OWNER" \
+    --format json 2>/dev/null | jq -r '.id // ""'
+}
+
+read_project_fields() {
+  gh project field-list "$L5_TRACKER_PROJECT" --owner "$L5_TRACKER_PROJECT_OWNER" \
+    --format json 2>/dev/null
+}
+
 read_the_project() {
   [ -z "$fields" ] || return 0
-  project_id="$(gh project view "$L5_TRACKER_PROJECT" --owner "$L5_TRACKER_PROJECT_OWNER" \
-                  --format json 2>/dev/null | jq -r '.id // ""')" \
+  project_id="$(retry_read read_project_id)" \
     || "$BOARD_FAIL" "project ${L5_TRACKER_PROJECT} could not be read, so none of its fields were set"
   [ -n "$project_id" ] || "$BOARD_FAIL" "project ${L5_TRACKER_PROJECT} named no id"
-  fields="$(gh project field-list "$L5_TRACKER_PROJECT" --owner "$L5_TRACKER_PROJECT_OWNER" \
-              --format json 2>/dev/null)" \
+  fields="$(retry_read read_project_fields)" \
     || "$BOARD_FAIL" "the fields of project ${L5_TRACKER_PROJECT} could not be read"
   [ -n "$fields" ] || "$BOARD_FAIL" "project ${L5_TRACKER_PROJECT} named no fields"
 }
 
-read_the_item() {
-  [ -z "$item" ] || return 0
-  # What the board already says about this item, asked for by the item's own
-  # node id rather than selected out of a listing of the whole project. The id
-  # is already in hand, so one graphql read answers the same question
-  # consistently: it is not read against an index that lags behind an add, and
-  # it has no size to outgrow as the board grows.
-  #
-  # An item whose field values could not be obtained -- the read failing, or
-  # answering with no such node -- is a failure to know rather than a set of
-  # empty fields: writing on the strength of an answer that did not describe
-  # the item would overwrite values a human put there.
-  local answered
-  answered="$(gh api graphql -f item="$item_id" -f query='
+# What the board already says about one item, asked for by the item's own node
+# id rather than selected out of a listing of the whole project. The id is
+# already in hand, so one graphql read answers the same question consistently:
+# it is not read against an index that lags behind an add, and it has no size
+# to outgrow as the board grows.
+read_item_field_values() {
+  gh api graphql -f item="$1" -f query='
     query($item: ID!) {
       node(id: $item) {
         ... on ProjectV2Item {
@@ -504,7 +595,17 @@ read_the_item() {
           }
         }
       }
-    }' 2>/dev/null)" \
+    }' 2>/dev/null
+}
+
+read_the_item() {
+  [ -z "$item" ] || return 0
+  # An item whose field values could not be obtained -- the read failing on
+  # every attempt, or answering with no such node -- is a failure to know
+  # rather than a set of empty fields: writing on the strength of an answer
+  # that did not describe the item would overwrite values a human put there.
+  local answered
+  answered="$(retry_read read_item_field_values "$item_id")" \
     || "$BOARD_FAIL" "the field values of item ${item_id} in project ${L5_TRACKER_PROJECT} could not be read, so its fields are unknown"
   # One object mapping field name to value. Only single-select values are
   # selected, because those are the only ones this script writes, and an entry
@@ -545,6 +646,15 @@ option_id_for() {
 # ==========================================================================
 # The sync job
 # ==========================================================================
+
+# Whether an issue carrying one key's marker is already filed. Read-only, so a
+# refusal is asked again rather than taken for an answer: searching twice finds
+# what searching once found, and the alternative to asking again is creating a
+# second issue for a search that failed for a moment.
+search_for_the_key() {
+  gh issue list --search "\"$1\"" --state all --limit 1 \
+    --json url --jq '.[0].url // ""' 2>/dev/null
+}
 
 do_sync() {
   BOARD_FAIL=fail_transient
@@ -652,11 +762,10 @@ PATHS
 <!-- ${PAYLOAD_MARKER_PREFIX}${encoded} -->"
 
   # --- idempotency: search before creating ------------------------------
-  # A search that fails is transient rather than terminal: we do not know
-  # whether the issue exists, and creating on a failed search is exactly the
-  # duplicate this whole mechanism exists to avoid.
-  existing="$(gh issue list --search "\"${marker}\"" --state all --limit 1 \
-                --json url --jq '.[0].url // ""' 2>/dev/null)" \
+  # A search that fails on every attempt is transient rather than terminal: we
+  # do not know whether the issue exists, and creating on a failed search is
+  # exactly the duplicate this whole mechanism exists to avoid.
+  existing="$(retry_read search_for_the_key "$marker")" \
     || fail_transient "the search for ${key} failed, so nothing was created"
 
   if [ -n "$existing" ]; then
@@ -804,6 +913,16 @@ batch_search=""
 batch_paths=""
 batch_count=0
 
+# One search, whatever it is searching for: a batch's markers OR'd together, or
+# one path's marker on its own. Both go through it, so what a search asks the
+# tracker for and how many times a refused one is asked again are stated once
+# rather than once per call site. A refusal that survives every attempt is then
+# what the fallback and the refusal below decide on.
+search_issues() {
+  gh issue list --search "$1" --state all --limit "$LIMIT" \
+    --json number,title,body,url,state,stateReason 2>/dev/null
+}
+
 # Search for one batch's markers at once, and fall back to one search per path
 # where the batch's answer cannot be trusted.
 #
@@ -830,8 +949,7 @@ query_batch() {
 
   echo "searching for ${batch_count} path marker(s) in one search" >&2
   fallback=0
-  if page="$(gh issue list --search "$batch_search" --state all --limit "$LIMIT" \
-               --json number,title,body,url,state,stateReason 2>/dev/null)"; then
+  if page="$(retry_read search_issues "$batch_search")"; then
     returned="$(printf '%s' "$page" | jq 'length' 2>/dev/null)" || returned=""
     if [ -z "$returned" ]; then
       echo "the batched search's page could not be counted, so it is re-asked one path at a time" >&2
@@ -855,8 +973,7 @@ query_batch() {
     [ -n "$one" ] || continue
     marker="${PATH_MARKER_PREFIX}${one}"
     echo "searching for ${marker}" >&2
-    page="$(gh issue list --search "\"${marker}\"" --state all --limit "$LIMIT" \
-              --json number,title,body,url,state,stateReason 2>/dev/null)" \
+    page="$(retry_read search_issues "\"${marker}\"")" \
       || fail "the search for ${one} failed, so what is filed is not known"
     returned="$(printf '%s' "$page" | jq 'length' 2>/dev/null)" || returned=""
     [ -n "$returned" ] \
@@ -868,6 +985,12 @@ query_batch() {
   done <<BATCH_PATHS
 $batch_paths
 BATCH_PATHS
+}
+
+# One item's whole body, which is where the payload the fetch answers with was
+# recorded. Read-only, so a refusal is asked again before the fetch gives up.
+read_brief_body() {
+  gh issue view "$1" --json body --jq '.body' 2>/dev/null
 }
 
 do_query() {
@@ -888,7 +1011,7 @@ do_query() {
     # item's key, which for this implementation is the issue's URL. Fetched
     # whole: no per-field bound shortens a brief, because a truncated brief is a
     # brief that plans wrong.
-    body="$(gh issue view "$key" --json body --jq '.body' 2>/dev/null)" \
+    body="$(retry_read read_brief_body "$key")" \
       || fail "the item ${key} could not be read, so its brief is not known"
     encoded="$(printf '%s\n' "$body" \
       | sed -n "s/^<!-- ${PAYLOAD_MARKER_PREFIX}\(.*\) -->\$/\1/p" | tail -1)"
@@ -984,6 +1107,18 @@ PATHS
 # The item job
 # ==========================================================================
 
+# The item's body, which this branch rewrites, and its URL, which a board takes
+# it by. Both are read-only, so a refusal is asked again before either gives up
+# — and this branch is the one where giving up is most expensive, because
+# nothing behind it invokes this file a second time.
+read_issue_body() {
+  gh issue view "$1" --json body --jq '.body // ""' 2>/dev/null
+}
+
+read_issue_url() {
+  gh issue view "$1" --json url --jq '.url // ""' 2>/dev/null
+}
+
 do_item() {
   require_tools fail
 
@@ -1030,7 +1165,7 @@ do_item() {
     begin="<!-- l5-story-begin: ${story_id} -->"
     end="<!-- l5-story-end: ${story_id} -->"
 
-    body="$(gh issue view "$key" --json body --jq '.body // ""' 2>/dev/null)" \
+    body="$(retry_read read_issue_body "$key")" \
       || fail "the item ${key} could not be read, so nothing was published onto it"
 
     # Everything the item already says, with this story's own block removed if
@@ -1088,7 +1223,7 @@ do_item() {
   # item, the project, the field or the option — is said on stderr and exits
   # non-zero: an item that was not moved must not be reported as one that was.
   if [ -n "$status" ] && [ -n "$L5_TRACKER_PROJECT" ]; then
-    url="$(gh issue view "$key" --json url --jq '.url // ""' 2>/dev/null)" \
+    url="$(retry_read read_issue_url "$key")" \
       || fail "the item ${key} could not be read, so it was not moved to ${option}"
     [ -n "$url" ] || fail "the item ${key} named no URL, so it was not moved to ${option}"
 

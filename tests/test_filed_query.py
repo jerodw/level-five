@@ -1416,6 +1416,50 @@ def branch_source(text: str, name: str) -> str:
     return text[start:text.index("\n}\n", start)]
 
 
+#: The helper every read in a tracker script goes through, by the name the
+#: script gives it. Written here rather than derived: what the scans below take
+#: it out of is this function, and a script that renamed it is a resolution
+#: that fails rather than a scan that quietly stopped seeing anything.
+RETRY_HELPER = "retry_read"
+
+
+def named_outside(text: str, name: str, function: str) -> list[str]:
+    """Every line naming `name` that is neither its own declaration nor part of
+    `function`'s body.
+
+    Read by shape, for the same reason `branch_source` is: what is asked of it
+    is whether a constant is read anywhere but the one place that is supposed
+    to read it.
+    """
+    inside = branch_source(text, function).splitlines()
+    return [line for line in text.splitlines()
+            if name in line
+            and not line.startswith(f"{name}=")
+            and line not in inside]
+
+
+def board_variables(text: str) -> set[str]:
+    """Every environment variable a board value could reach this script
+    through.
+
+    A constant one of these scripts declares decides something about the
+    tracker it talks to — which project, whose, which field, which column,
+    which label, how much of an answer to ask for — unless the only code that
+    reads it is the helper that asks a refused read again, which decides how
+    many times to ask and how long to wait between attempts and reaches no
+    call of its own. So the scan is every variable the script declares, less
+    the ones named nowhere but that helper.
+
+    Derived rather than listed, for the reason `sync_constants` is: a constant
+    added to a script joins this by being added, and one that was renamed is a
+    resolution that fails rather than a name that has quietly stopped matching
+    anything.
+    """
+    return {variable
+            for name, (variable, _default) in sync_constants(text).items()
+            if named_outside(text, name, RETRY_HELPER)}
+
+
 def declared_marker(text: str) -> str | None:
     found = MARKER_ASSIGNMENT.search(text)
     return None if found is None else found.group("marker")
@@ -1641,12 +1685,34 @@ LEDGER_VARIABLE = "L5_STUB_LEDGER"
 #: the issue exists, so it answers the same way and is failed the same way.
 FAIL_VARIABLE = "L5_STUB_FAILS_AT"
 
+#: What separates a call's name from a count of refusals in FAIL_VARIABLE. A
+#: name on its own is refused every time it is made; a name and a count are
+#: refused that many times and then answered, which is the tracker that dropped
+#: one connection and was fine on the next attempt. Every call name below is
+#: written without this character, so the two halves cannot be confused.
+REFUSAL_SEPARATOR = ":"
+
+#: What a test names in FAIL_VARIABLE to answer a call with nothing rather than
+#: refusing it: the call exits zero and prints no output at all. That is not a
+#: refusal and must not be read as one — a board that answers is a board that
+#: was reached, and a read whose answer is empty is a board configured wrongly
+#: rather than a connection that dropped.
+EMPTY_VARIABLE = "L5_STUB_ANSWERS_NOTHING_AT"
+
 #: What a test names in FAIL_VARIABLE to fail the two calls the label work
 #: makes. The project subcommands are named there by their own names, which is
 #: why these two carry the issue-side spelling rather than colliding with
 #: `item-edit`.
 LABEL_CREATE_CALL = "label-create"
 LABEL_ADD_CALL = "issue-edit"
+
+#: The two calls made against an issue rather than against the board: the
+#: create the sync branch files with, and the read of one issue the query and
+#: item branches make. Named for the same reason the label calls are — neither
+#: is a project subcommand, so neither has a name to be recorded under unless
+#: the stub gives it one.
+ISSUE_CREATE_CALL = "issue-create"
+ISSUE_VIEW_CALL = "issue-view"
 
 #: How the ledger names the read the sync makes of one item's own field values.
 #: The project subcommands are recorded under their own names; this one is not
@@ -1667,6 +1733,55 @@ BATCHED_SEARCH_CALL = "batched-search"
 #: looks like, and it is the case the script must answer transiently rather
 #: than read as a set of empty fields.
 OMIT_VARIABLE = "L5_STUB_ITEM_READ_REPORTS_NOTHING"
+
+#: How long the shipped scripts wait before asking a refused read again, read
+#: out of the script's own constant rather than written here, and set to zero
+#: in the environment every drive against the stub inherits. No test here pays
+#: the wait and none measures it: what makes a retry observable is what the
+#: stub was asked for and what it answered, which is in the ledger.
+RETRY_WAIT_VARIABLE = TEMPLATE_CONSTANTS["READ_RETRY_SECONDS"][0]
+
+#: How many attempts a read is given before the command gives up, read out of
+#: the same place, and the variable that overrides it. Resolved here rather
+#: than in each module that counts attempts, so what a refused read costs is
+#: one reading of the script for the whole suite — and a constant that was
+#: renamed or dropped is a resolution that fails rather than a count quietly
+#: standing for something else.
+READ_ATTEMPTS_VARIABLE, READ_ATTEMPTS_DEFAULT = \
+    TEMPLATE_CONSTANTS["READ_ATTEMPTS"]
+READ_ATTEMPTS = int(READ_ATTEMPTS_DEFAULT)
+
+def stub_overrides(stub_bin: Path, ledger: Path) -> dict[str, str]:
+    """Everything `stub_tracker` puts into the environment it hands back.
+
+    Stated once because two kinds of reader need it. A test that drives a
+    script as a subprocess is handed the whole environment; a test that drives
+    one from inside this process puts the stub on `PATH` for the duration and
+    sets these names into its own environment rather than handing one over. A
+    variable added here reaches both — which is what stops the second kind
+    being forgotten, and for the wait below being forgotten would mean a drive
+    that refuses a read waiting for real between attempts with nothing going
+    red.
+    """
+    return {
+        "PATH": f"{stub_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        LEDGER_VARIABLE: str(ledger),
+        # The scripts ask a refused read again, and nothing driven against
+        # this stub waits between attempts: the wait is what a dropped
+        # connection needs and no test here is a dropped connection. Set once
+        # here rather than per test, so a module that refuses a read pays
+        # nothing for it.
+        RETRY_WAIT_VARIABLE: "0",
+    }
+
+
+#: What a process driving the stub needs in its environment, for the readers
+#: that set those names one at a time rather than handing an environment over.
+#: Derived from the overrides above rather than written out beside them, so the
+#: two cannot come to disagree: a variable added there is in this tuple by
+#: having been added. The two paths that resolve it here stand for nothing —
+#: what is wanted is the names.
+STUB_ENVIRONMENT = tuple(stub_overrides(Path("a-stub"), Path("a-ledger")))
 
 STUB_GH = '''#!INTERPRETER
 """A stub `gh`, standing in for a tracker and its project board. It reaches no
@@ -1736,6 +1851,21 @@ implement is recorded before it is refused, so an invocation the sync script
 must no longer make is visible in the ledger rather than only in its exit
 status. FAIL_VARIABLE names calls that must exit non-zero, and OMIT_VARIABLE
 makes the item read answer with no such node.
+
+Beside those, the ledger holds one entry per invocation of any kind, in the
+order they were made, under `attempts`. That is what makes a call asked twice
+distinguishable from a call asked once: a read the scripts ask again after a
+refusal appears there twice, and a write that is not repeated appears once,
+whatever either of them exited. It is a record of what the stub was asked for
+rather than of what it did, which is why it is kept apart from the three
+lists above rather than folded into them.
+
+A name in FAIL_VARIABLE may carry a separator and a count after it, in which
+case the stub refuses that call that many times and answers afterwards. How
+many times it has already refused is held in the ledger, because every call is
+a fresh process. A name in EMPTY_VARIABLE is answered with no output and a
+zero exit, which is a board that was reached and said nothing rather than a
+call that failed.
 """
 import json
 import os
@@ -1764,7 +1894,59 @@ def refuse(message):
 
 
 def told_to_fail(call):
-    return call in (os.environ.get("FAIL_VARIABLE", "") or "").split(",")
+    """Whether this invocation of `call` is one a test told the stub to refuse.
+
+    An entry in FAIL_VARIABLE is a call's name, which refuses it every time it
+    is made, or a name and a count, which refuses it that many times and then
+    answers. The count of refusals already spent is held in the ledger: each
+    call is a fresh process, so counting anywhere else would refuse the first
+    call for ever and never reach the answer.
+    """
+    for entry in (os.environ.get("FAIL_VARIABLE", "") or "").split(","):
+        name, _, limit = entry.partition("REFUSAL_SEPARATOR")
+        if name != call:
+            continue
+        if not limit:
+            return True
+        spent = state["refusals"].get(call, 0)
+        if spent >= int(limit):
+            return False
+        state["refusals"][call] = spent + 1
+        save()
+        return True
+    return False
+
+
+def told_to_answer_nothing(call):
+    """Whether this call is one a test told the stub to answer with nothing.
+
+    Distinct from a refusal in the one respect that matters here: the call
+    exits zero. That is a tracker that was reached and had nothing to say,
+    which is what a project naming no id, a field list naming no fields and an
+    issue naming no URL all look like from inside the scripts.
+    """
+    return call in (os.environ.get("EMPTY_VARIABLE", "") or "").split(",")
+
+
+def call_name(argv):
+    """What one invocation is recorded under.
+
+    The project subcommands answer to their own names, as the ledger's board
+    calls always have; everything else carries the name this module gave it,
+    because none of them is a subcommand of anything the ledger already keys
+    by.
+    """
+    named = {
+        ("issue", "create"): "ISSUE_CREATE_CALL",
+        ("issue", "view"): "ISSUE_VIEW_CALL",
+        ("issue", "edit"): "LABEL_ADD_CALL",
+        ("issue", "list"): "ISSUE_LIST_CALL",
+        ("label", "create"): "LABEL_CREATE_CALL",
+        ("api", "graphql"): "GRAPHQL_CALL",
+    }
+    if argv[:1] == ["project"] and len(argv) > 1:
+        return argv[1]
+    return named.get(tuple(argv[:2]), "something the stub does not do")
 
 
 def board_key(name):
@@ -1797,7 +1979,20 @@ def record_issue_call(command):
     save()
 
 
+# Every invocation, whatever it asks for and whatever it goes on to answer,
+# recorded before anything else happens to it. A call the scripts ask again
+# after a refusal is two entries here and a call they make once is one, which
+# is how a retry is observed: by what the tracker was asked for rather than by
+# how long the invocation took.
+state["attempts"].append(call_name(argv))
+save()
+
+if told_to_answer_nothing(call_name(argv)):
+    sys.exit(0)
+
 if argv[:2] == ["issue", "create"]:
+    if told_to_fail("ISSUE_CREATE_CALL"):
+        refuse("the stub was told to fail at issue create")
     number = len(issues) + 1
     issue = {
         "number": number,
@@ -1812,6 +2007,8 @@ if argv[:2] == ["issue", "create"]:
     save()
     print(issue["url"])
 elif argv[:2] == ["issue", "view"]:
+    if told_to_fail("ISSUE_VIEW_CALL"):
+        refuse("the stub was told to fail at issue view")
     # One issue by the key `issue create` printed, which for this stub is the
     # url and for a real tracker is whatever that tracker's own key is. The
     # number is accepted too, because the reference sync falls back to it.
@@ -1873,7 +2070,10 @@ elif argv[:2] == ["issue", "list"]:
     save()
     if told_to_fail("ISSUE_LIST_CALL"):
         refuse("the stub was told to fail at issue list")
-    if told_to_fail("BATCHED_SEARCH_CALL") and len(search_terms(argv)) > 1:
+    # The shape of the search is asked first, so that a count of refusals
+    # named against the batched form is spent on a batched search rather than
+    # on the per-path searches that may precede one.
+    if len(search_terms(argv)) > 1 and told_to_fail("BATCHED_SEARCH_CALL"):
         refuse("the stub was told to fail at a batched search")
     fields = (flag(argv, "--json", "") or "").split(",")
     terms = search_terms(argv)
@@ -2057,6 +2257,11 @@ def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
     from the environment rather than inherited, so a copy driven with nothing
     set is driven with nothing set — which is the whole claim of the test that
     files through the installed copy on this target's own values.
+
+    What is put back afterwards is `stub_overrides` and nothing else: the stub
+    on PATH, the ledger it writes to, and a wait of zero between the attempts a
+    refused read is given. None of them can decide which board is reached,
+    which is what lets the strip and the put-back coexist.
     """
     directory = tmp_path / "stub-bin"
     ledger = tmp_path / "tracker-ledger.json"
@@ -2064,11 +2269,15 @@ def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
                  STUB_GH.replace("INTERPRETER", sys.executable)
                         .replace("LEDGER_VARIABLE", LEDGER_VARIABLE)
                         .replace("FAIL_VARIABLE", FAIL_VARIABLE)
+                        .replace("EMPTY_VARIABLE", EMPTY_VARIABLE)
                         .replace("OMIT_VARIABLE", OMIT_VARIABLE)
+                        .replace("REFUSAL_SEPARATOR", REFUSAL_SEPARATOR)
                         .replace("GRAPHQL_CALL", GRAPHQL_CALL)
                         .replace("LABEL_CREATE_CALL", LABEL_CREATE_CALL)
                         .replace("LABEL_ADD_CALL", LABEL_ADD_CALL)
                         .replace("BATCHED_SEARCH_CALL", BATCHED_SEARCH_CALL)
+                        .replace("ISSUE_CREATE_CALL", ISSUE_CREATE_CALL)
+                        .replace("ISSUE_VIEW_CALL", ISSUE_VIEW_CALL)
                         .replace("ISSUE_LIST_CALL", ISSUE_LIST_CALL))
     ledger.write_text(json.dumps(
         {"issues": [], "labels": [], "projects": seeded_board(),
@@ -2076,16 +2285,20 @@ def stub_tracker(tmp_path: Path) -> tuple[dict, Path]:
          # One entry per `issue list --search`, in the order the searches were
          # made, so how many searches a scope cost is readable rather than
          # inferred from how long the script took.
-         "searches": []}),
+         "searches": [],
+         # One entry per invocation of any kind, in the order they were made,
+         # so a call that was asked again after a refusal is distinguishable
+         # from one that was asked once.
+         "attempts": [],
+         # How many times each named call has already been refused, for the
+         # refusals a test asks for by count rather than outright.
+         "refusals": {}}),
         encoding="utf-8")
     environment = {
         name: value for name, value in os.environ.items()
         if not name.startswith(SYNC_VARIABLE_PREFIX)
     }
-    environment.update({
-        "PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}",
-        LEDGER_VARIABLE: str(ledger),
-    })
+    environment.update(stub_overrides(directory, ledger))
     return environment, ledger
 
 
@@ -2144,6 +2357,20 @@ def issue_calls(ledger: Path, command: str | None = None) -> list[dict]:
     """Every call made against the issue itself, optionally by name."""
     return [call for call in ledger_state(ledger)["issue_calls"]
             if command is None or call["command"] == command]
+
+
+def attempts(ledger: Path, command: str | None = None) -> list[str]:
+    """Every invocation the stub was made, by name, in the order it was made.
+
+    Whatever each one answered: a call that was refused is here beside a call
+    that was answered, which is what makes "asked again after a refusal"
+    something a test reads rather than infers. Held apart from the three lists
+    above because those record what the stub *did* — a search it ran, a board
+    call it made, a label call it was given — and this records what it was
+    asked for.
+    """
+    return [name for name in ledger_state(ledger)["attempts"]
+            if command is None or name == command]
 
 
 def issue_labels(ledger: Path, index: int = 0) -> list[str]:
@@ -2216,8 +2443,7 @@ def test_the_query_script_finds_what_the_sync_script_filed(tmp_path):
                  "body": "what it says", "paths": list(ASKED)})
 
     previous = dict(os.environ)
-    os.environ.update({key: environment[key]
-                       for key in ("PATH", LEDGER_VARIABLE)})
+    os.environ.update({key: environment[key] for key in STUB_ENVIRONMENT})
     try:
         answer = asked(reference_script(QUERY_JOB), tmp_path)
         unrelated = asked(reference_script(QUERY_JOB), tmp_path,
@@ -2250,7 +2476,7 @@ def test_the_query_script_answers_nothing_known_when_its_search_fails(tmp_path):
     broken = {**environment, LEDGER_VARIABLE: str(tmp_path)}
 
     previous = dict(os.environ)
-    os.environ.update({key: broken[key] for key in ("PATH", LEDGER_VARIABLE)})
+    os.environ.update({key: broken[key] for key in STUB_ENVIRONMENT})
     try:
         answer = asked(reference_script(QUERY_JOB), tmp_path)
     finally:
@@ -2672,20 +2898,84 @@ def test_the_transient_answer_names_the_item_and_the_project_and_no_count(
         "the reduction reports no number in a message that names a bound"
 
 
+#: A name no tracker script declares and nothing reads, for the control below.
+A_VARIABLE_THE_FIXTURE_DOES_NOT_SET = "L5_STUB_A_VARIABLE_NOTHING_READS"
+
+
+def names_added_to(base, environment: dict) -> set[str]:
+    """Every name `environment` carries that `base` does not, or carries
+    differently: what a drive is given over what it started from."""
+    return {name for name, value in environment.items()
+            if base.get(name) != value}
+
+
+def test_the_stub_fixture_and_the_in_process_drives_set_the_same_names(
+        monkeypatch, tmp_path):
+    """One statement of what a drive against the stub needs, rather than two.
+
+    `STUB_ENVIRONMENT` is what the readers that drive a script from inside this
+    process set into their own environment; `stub_tracker` is what a subprocess
+    drive is handed. The two named the same fact a few hundred lines apart, so
+    a variable added to the fixture reached every subprocess drive and none of
+    the others — which for the retry wait means a drive that refuses a read
+    waiting for real between attempts, with nothing going red. The tuple is
+    derived from the fixture's own overrides now, and this holds that
+    derivation to what the fixture hands back, so a name set past them is
+    reported here rather than reaching one kind of drive alone.
+
+    That the wait is off at all is asserted here too, because it is what the
+    tuple is carrying: every drive against this stub inherits a wait of zero,
+    and no test anywhere measures one.
+
+    The script's own variables are taken out of the ambient environment first,
+    so a developer who exports one is not what decides this.
+
+    The control is the last assertion: a name present in the environment and
+    absent from the tuple is reported, so the comparison above is a comparison
+    rather than one that would agree with anything.
+    """
+    for name in [name for name in os.environ
+                 if name.startswith(SYNC_VARIABLE_PREFIX)]:
+        monkeypatch.delenv(name)
+    environment, _ledger = stub_tracker(tmp_path)
+
+    assert names_added_to(os.environ, environment) == set(STUB_ENVIRONMENT)
+    assert environment[RETRY_WAIT_VARIABLE] == "0"
+
+    planted = {**environment, A_VARIABLE_THE_FIXTURE_DOES_NOT_SET: "1"}
+    assert names_added_to(os.environ, planted) - set(STUB_ENVIRONMENT) == \
+        {A_VARIABLE_THE_FIXTURE_DOES_NOT_SET}
+
+
 @needs_jq
 def test_the_installed_copy_files_to_this_targets_board_with_nothing_set(
         tmp_path):
     """This deployment's own wiring, rather than the test's environment.
 
-    None of the variables the script reads its board values out of is in the
+    None of the variables the script could read a board value out of is in the
     environment this runs under — asserted against the names the script itself
     declares, not assumed — so the project and the column the item lands in can
     only have come out of `.harness/scripts/github.sh` itself.
+
+    What that scan leaves out is the pair only the retry helper reads: how many
+    times a refused read is asked again, and how long it waits between
+    attempts. The suite sets that wait to zero in every drive against the stub,
+    and neither of them can decide which board is reached or which column an
+    item lands in. That the narrowing kept everything that can is asserted
+    beside it — the constants naming the project, its owner, the Status field
+    and the column a filing lands in are all still scanned — and the control is
+    the project variable planted into a copy of the same environment, which the
+    same scan reports. Without that, "none of them is here" would pass just as
+    happily over a scan that had stopped looking.
     """
     environment, ledger = stub_tracker(tmp_path)
-    declared = {variable for variable, _ in TEMPLATE_CONSTANTS.values()}
-    assert declared, "the script declares no editable constant"
-    assert [name for name in environment if name in declared] == []
+    scanned = board_variables(INSTALLED_SCRIPT.read_text(encoding="utf-8"))
+    assert set(SHARED_CONSTANTS) <= scanned, scanned
+    assert INSTALLED_CONSTANTS[STATUS_OPTION_CONSTANT][0] in scanned, scanned
+    assert [name for name in environment if name in scanned] == []
+
+    planted = {**environment, PROJECT_CONSTANT: THIS_TARGETS_PROJECT}
+    assert [name for name in planted if name in scanned] == [PROJECT_CONSTANT]
 
     result = run_the_sync(INSTALLED_SCRIPT, tmp_path, environment,
                           key="k-this-target", payload=AN_ENTRY)
@@ -3989,8 +4279,7 @@ def test_this_repositorys_own_pair_files_and_answers_through_its_configured_quer
     assert board_items(ledger)[0]["status"] == THIS_TARGETS_REVIEW_COLUMN
 
     previous = dict(os.environ)
-    os.environ.update({name: environment[name]
-                       for name in ("PATH", LEDGER_VARIABLE)})
+    os.environ.update({name: environment[name] for name in STUB_ENVIRONMENT})
     try:
         answer = filed_query.query(ASKED, config, target_root=REPO_ROOT)
         unrelated = filed_query.query(

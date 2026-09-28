@@ -115,12 +115,12 @@ from test_filed_query import (  # noqa: F401 - shared fixtures and idioms
     CHILD_SLEEP_SECONDS,
     KILL_BOUND_SECONDS,
     KILL_CEILING_SECONDS,
-    LEDGER_VARIABLE,
     LONGER_THAN_ANY_BOUND,
     PATIENCE_SECONDS,
     QUERY_JOB,
     REPO_ROOT,
     SPAWN_BOUND_SECONDS,
+    STUB_ENVIRONMENT,
     SYNC_JOB,
     TEMPLATE_SCRIPT,
     alive,
@@ -1037,8 +1037,7 @@ def with_the_reference_command(environment: dict, call):
     the duration -- and out of it afterwards, whatever the call did.
     """
     previous = dict(os.environ)
-    os.environ.update({key: environment[key]
-                       for key in ("PATH", LEDGER_VARIABLE)})
+    os.environ.update({key: environment[key] for key in STUB_ENVIRONMENT})
     try:
         return call()
     finally:

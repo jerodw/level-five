@@ -81,9 +81,9 @@ import story_coordinator
 
 from test_filed_query import (  # noqa: F401 - shared idioms and fixtures
     INTERPRETER,
-    LEDGER_VARIABLE,
     QUERY_JOB,
     REPO_ROOT,
+    STUB_ENVIRONMENT,
     SYNC_JOB,
     TEMPLATES,
     asked,
@@ -951,15 +951,20 @@ def test_the_marker_readers_report_what_the_scripts_declare():
 
 def publish_through_the_reference_script(
         tmp_path: Path, environment: dict, *, key: str, story_id: str,
-        document: str,
-        script: Path | None = None) -> subprocess.CompletedProcess:
-    """One invocation of the shipped item command, whatever it exits."""
+        document: str, script: Path | None = None,
+        extra: dict | None = None) -> subprocess.CompletedProcess:
+    """One invocation of the shipped item command, whatever it exits.
+
+    `extra` is whatever this invocation alone is driven with, which is how the
+    stub is broken for one publish rather than for a whole test — the same
+    parameter, for the same reason, that the move below takes.
+    """
     question = {"key": key, "story_id": story_id, "document": document}
     return subprocess.run(
         [INTERPRETER, str(script or TEMPLATE_ITEM), *ITEM_JOB_ARGUMENTS],
         input=json.dumps(question), capture_output=True, text=True, timeout=60,
         cwd=tmp_path,
-        env={**environment, KEY_VARIABLE: key})
+        env={**environment, **(extra or {}), KEY_VARIABLE: key})
 
 
 def an_item_already_filed(tmp_path: Path, environment: dict) -> str:
@@ -1099,8 +1104,7 @@ def test_the_query_script_still_finds_an_item_that_was_published_onto(
     assert result.returncode == 0, result.stderr
 
     previous = dict(os.environ)
-    os.environ.update({name: environment[name]
-                       for name in ("PATH", LEDGER_VARIABLE)})
+    os.environ.update({name: environment[name] for name in STUB_ENVIRONMENT})
     try:
         answer = asked(reference_script(QUERY_JOB), tmp_path,
                        paths=("src/parser.py",))
