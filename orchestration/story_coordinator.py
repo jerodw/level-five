@@ -2062,6 +2062,7 @@ def append_event(
     inspection_made: bool | None = None,
     routed: int | None = None,
     acted_on: int | None = None,
+    abandoned: int | None = None,
     operation: str | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
@@ -2142,6 +2143,13 @@ def append_event(
         # none acted on is an answer.
         "routed": routed,
         "acted_on": acted_on,
+        # How many findings a spent pass allowance abandoned, on the same
+        # omitted-when-None terms. It is what makes the abandonment durable:
+        # the two spent-budget entries are the only ones that carry it, so a
+        # record in the cross-run inspection log carrying it is an abandonment
+        # and one that does not is one of the three kinds beside it — the kind
+        # itself is not projected, so a field is what tells them apart.
+        "abandoned": abandoned,
         # Which timed operation the entry completes, beside its
         # duration_seconds: the stage's own name for a stage, a fixed name for
         # a check or the inspection. It is the key the cross-run duration log
@@ -8060,8 +8068,20 @@ def _correction_pass_recorded(
     The bound is one pass per run and it is what makes termination a property
     rather than a hope: a fix the verifier keeps rejecting cannot cycle. A
     second verdict still carrying findings is not an error and routes nowhere,
-    so the findings are named in the event stream, where a developer meets
-    them, and the run completes.
+    so the findings are abandoned: they are named in the event stream, the
+    count of them travels into the repository's committed history, and the
+    run completes.
+
+    The count is the whole of what makes the abandonment durable. The event
+    stream is in the run directory, which is gitignored and deleted when the
+    story is cleaned up, so a finding named there and nowhere else went
+    nowhere; `abandoned` is projected into the cross-run inspection log, where
+    it outlives the run and is what tells this record apart from the three
+    kinds of record beside it. What became of each of them, and the account a
+    developer reads, is in the completion report: a finding abandoned here is
+    left by the verdict, so the accounting after that verdict carries it in
+    the remainder and the filing at the run's completion sends it to the
+    backlog like every other finding the verdict left.
     """
     named = "; ".join(
         f"{finding.get('location')}: {finding.get('finding')}"
@@ -8074,6 +8094,7 @@ def _correction_pass_recorded(
         f"left uncorrected: {named}",
         kind="correction-pass-recorded",
         stage=stage_name,
+        abandoned=len(findings),
     )
 
 
@@ -8322,8 +8343,19 @@ def _repair_pass_recorded(
 
     The bound is what makes termination a property rather than a hope: a fix
     the verifier keeps rejecting cannot cycle. A later verdict still carrying
-    findings is not an error and routes nowhere, so the findings are named in
-    the event stream, where a developer meets them, and the run completes.
+    findings is not an error and routes nowhere, so the findings are
+    abandoned: they are named in the event stream, the count of them travels
+    into the repository's committed history, and the run completes.
+
+    The count is what makes the abandonment durable, on exactly the terms
+    `_correction_pass_recorded` states above: the event stream lives in a
+    gitignored run directory that the story's cleanup deletes, and `abandoned`
+    is projected into the cross-run inspection log, where it outlives the run
+    and is the field that tells this record from the three kinds beside it. A
+    finding abandoned here is left by the verdict, so the accounting after
+    that verdict carries it in the remainder, the filing at the run's
+    completion sends it to the backlog like every other finding the verdict
+    left, and the completion report's account says which of them it was.
     """
     named = "; ".join(
         f"{finding.get('location')}: {finding.get('finding')}"
@@ -8336,6 +8368,7 @@ def _repair_pass_recorded(
         f"left unrepaired: {named}",
         kind="repair-pass-recorded",
         stage=stage_name,
+        abandoned=len(findings),
     )
 
 
@@ -8740,6 +8773,87 @@ def refused_routed_slugs(
                     and story_inspection.names_a_slug(location, (slug,))):
                 named.append(slug)
     return tuple(named)
+
+
+def abandoned_routed_slugs(
+    stage: dict, verdict: dict, state: RunState, routed_slugs=()
+) -> dict[str, str]:
+    """The routed slugs the verdict named for a pass its allowance refuses,
+    each with the reason, in the order the findings were named.
+
+    A verdict that asks for a finding to be corrected or repaired and meets a
+    spent allowance leaves that finding nowhere: the pass the verifier asked
+    for cannot be run, the verdict named the slug so the accounting would read
+    it as acted on, and the filing at completion skips anything already marked
+    as answered. So the slugs are handed to the accounting through the seam a
+    refused scope extension already uses, and the reason travels with each so
+    the account in the completion report can say which allowance ran out.
+
+    Decided from the state, the stage's own declarations and the verdict, all
+    of which this reads and none of which it changes: it is asked before the
+    accounting, which runs before the pass blocks check their own budgets, and
+    the blocks below still make the decision that acts. A verdict that did not
+    pass abandons nothing, because both pass blocks are on the passing route.
+
+    The repairable findings are put to their allowance only where the
+    correction block does not route, which is what the coordinator does one
+    block further down: a correction pass that routes defers them to the
+    verification it returns to rather than leaving them, and the repair
+    allowance is asked about there. Where the correction allowance is spent
+    the correction block records and falls through, so both allowances can be
+    met on one verdict and both abandonments are accounted.
+    """
+    if verdict.get("status") != "passed":
+        return {}
+    correction = stage.get("correction_pass") or {}
+    repair = stage.get("repair_pass") or {}
+    correctable = verdict.get("correctable_findings") or []
+    repairable = verdict.get("repairable_findings") or []
+    correction_declared = bool(correction.get("result")) and bool(correctable)
+    correction_spent = (
+        correction_declared
+        and state.correction_pass_count >= correction.get("budget", 0)
+    )
+    abandoned: dict[str, str] = {}
+    if correction_spent:
+        abandoned.update(_abandoned_among(
+            correctable, routed_slugs,
+            f"the correction pass allowance of "
+            f"{correction.get('budget')} was already spent, so no pass could "
+            f"be run for it",
+        ))
+    # Reached where the correction block does not route — either because it
+    # declared or carried nothing, or because its own allowance is spent and
+    # it records and falls through.
+    if not (correction_declared and not correction_spent):
+        if (repair.get("result") and repairable
+                and state.repair_pass_count >= repair.get("budget", 0)):
+            abandoned.update(_abandoned_among(
+                repairable, routed_slugs,
+                f"the repair pass allowance of {repair.get('budget')} was "
+                f"already spent, so no pass could be run for it",
+            ))
+    return abandoned
+
+
+def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
+    """The routed slugs a set of abandoned findings' locations name, each with
+    `reason`, first naming winning.
+
+    Decided by `names_a_slug`, the one rule `refused_routed_slugs` beside it
+    is decided by, so a refusal and an abandonment cannot disagree about which
+    routed finding a verdict entry was about.
+    """
+    named: dict[str, str] = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        location = finding.get("location")
+        for slug in routed_slugs:
+            if (isinstance(slug, str) and slug and slug not in named
+                    and story_inspection.names_a_slug(location, (slug,))):
+                named[slug] = reason
+    return named
 
 
 def verdict_after_refusals(
@@ -10246,6 +10360,97 @@ def state_story_id(story: dict | None) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _findings_account_section(account) -> str:
+    """The completion report's account of what became of the run's findings.
+
+    Rendered in the shape the sections beside it take — a `##` heading and
+    prose — and empty for a run under a workflow that declares no inspection,
+    which has nothing to account for and whose report is byte for byte what it
+    was before this section existed. Every other completed run gets the
+    section, including one whose inspection found nothing to route: a report
+    that omitted the account there would be indistinguishable from one written
+    before the account existed.
+
+    Each finding is named by the slug it is filed under, because a count says
+    which outcome was reached and not which defect reached it. The section
+    says where the outcome of the filing is recorded rather than how many
+    briefs reached the queue: the report is written and committed before the
+    filing runs, so a number here would be a claim about something that has
+    not happened yet.
+    """
+    if not account.inspected:
+        return ""
+    body: list[str] = []
+    if account.problem:
+        # Reported rather than raised: the account is a report, and a report
+        # that stopped the completion report being written would be worse
+        # than no account at all.
+        body.append(
+            f"The account of what became of this run's findings could not be "
+            f"derived: {account.problem}. events.log carries what each "
+            f"inspection and each verdict of this run recorded."
+        )
+    else:
+        if account.repaired:
+            # No ground: a finding the run fixed was not declined, so there is
+            # no reason for leaving it to report.
+            body.append(
+                "Repaired or corrected within the run: "
+                + _named_findings(account.repaired, with_ground=False) + "."
+            )
+        if account.to_the_backlog:
+            body.append(
+                "Sent to the backlog: "
+                + _named_findings(account.to_the_backlog) + "."
+            )
+        if account.discarded:
+            body.append(
+                "Discarded as not worth filing: "
+                + _named_findings(account.discarded) + "."
+            )
+        if account.abandoned:
+            body.append(
+                "Abandoned because a pass allowance was spent, and sent to "
+                "the backlog with the rest: "
+                + _named_findings(account.abandoned) + "."
+            )
+        if not body:
+            body.append(
+                "This run's inspection found nothing to route to the story "
+                "and nothing to send on."
+            )
+        body.append(
+            "Which of the briefs above reached the queue is not known when "
+            "this report is written, because the filing runs after the "
+            "completion commit: it is recorded in this run's events.log and "
+            "in the story's inspection log under the committed history."
+        )
+    return "## Findings\n" + "\n\n".join(body) + "\n\n"
+
+
+def _named_findings(findings, *, with_ground: bool = True) -> str:
+    """One clause per finding, naming its slug and the ground recorded for it.
+
+    A finding about a file beside the change says so instead of a ground: it
+    was never put to the verdict, and reporting its absent ground as a verdict
+    that said nothing would be a claim about a judgement nobody made.
+    `with_ground` is false for the findings the run fixed, which were not left
+    and so have no ground to report.
+    """
+    named: list[str] = []
+    for one in findings:
+        slug = one.slug or "a finding carrying no slug"
+        if not with_ground:
+            named.append(slug)
+        elif one.beside_the_change:
+            named.append(f"{slug} (about a file beside the change)")
+        elif one.ground:
+            named.append(f"{slug} ({one.ground})")
+        else:
+            named.append(f"{slug} (the verdict recorded no ground)")
+    return "; ".join(named)
+
+
 def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
               *, config: dict | None = None,
               harness_root: Path | None = None,
@@ -10265,6 +10470,14 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
         "Review the branch and merge it when you accept the story."
         + (f" Also: {past_bound}." if past_bound else "")
     )
+    # What became of every problem this run found in its own work. Derived
+    # beside the filing it must agree with, from the artifacts the run
+    # directory already holds, and guarded there — the section below renders
+    # whatever it returns, and a derivation that could not be made renders as
+    # a sentence saying so, because the completion report is a required
+    # artifact of every completed run and nothing added to it may stop it
+    # being written.
+    account = story_inspection.account_for_the_report(run_dir, stages or [])
     report = (
         f"# {state.story_id} Completion Report\n\n"
         f"## Story\n{title}\n\n"
@@ -10279,6 +10492,7 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
         f"- test-results.json\n"
         f"- verification/iteration-{state.verification_iterations}.json (passed)\n"
         f"- documentation-report.md\n\n"
+        f"{_findings_account_section(account)}"
         f"## Next Step\n{next_step}\n"
     )
     (run_dir / "completion-report.md").write_text(report, encoding="utf-8")
@@ -10306,6 +10520,24 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
     # for the same reason and so the completion entry stays the last thing the
     # history says; it appends nothing when the startup read counted nothing.
     _report_history_past_bound(run_dir)
+    # And, where the account could not be derived, why — where the rest of the
+    # inspection machinery reports its failures. The report already says it,
+    # and this is what a reader of the run's own record meets; it goes before
+    # the completion entry so that entry stays the last thing the history
+    # says, and appends nothing at all for a run whose account was derived.
+    if account.problem:
+        print(
+            f"the account of this run's findings could not be derived: "
+            f"{account.problem}",
+            file=sys.stderr,
+        )
+        append_event(
+            run_dir,
+            f"the account of what became of this run's findings could not be "
+            f"derived: {account.problem}; the completion report says so in "
+            f"place of the account",
+            kind="note",
+        )
     append_event(
         run_dir,
         f"story completed on branch {state.branch}",
@@ -12443,6 +12675,7 @@ def run_story(
             # the coordinator refused the other file, and the brief the
             # refusal promised is never filed. Empty when nothing was refused.
             refused_slugs: tuple = ()
+            routed_named: tuple = ()
             if extensions.refused:
                 routed_named = (
                     story_inspection.findings_slugs(
@@ -12451,13 +12684,33 @@ def run_story(
                 )
                 refused_slugs = refused_routed_slugs(extensions, routed_named)
                 verdict = verdict_after_refusals(verdict, extensions, routed_named)
+            # And the routed slugs a spent pass allowance abandons. The same
+            # seam as the refusals for the same reason: the verdict names the
+            # slug, so the accounting would read it as acted on and the filing
+            # at completion would skip it, and the finding would go nowhere.
+            # Decided here, above the accounting, because the accounting runs
+            # before the pass blocks check their own budgets; the blocks below
+            # still make the decision that acts, and this reads the state and
+            # the declarations and changes neither. Both the writing path and
+            # the amending path of the accounting are handed it, since a
+            # verdict can find an allowance spent on its first pass through an
+            # attempt and on the returning verdict of a later one.
+            abandoned: dict = {}
+            if declared_inspection:
+                if not routed_named:
+                    routed_named = story_inspection.findings_slugs(
+                        run_dir, declared_inspection, attempt
+                    )
+                abandoned = abandoned_routed_slugs(
+                    stage, verdict, state, routed_named
+                )
             routed_slugs: tuple = ()
             if declared_inspection:
                 story_inspection.account_after_verdict(
                     run_dir, target_root, config or {}, harness_root,
                     state.story_id, artifact=declared_inspection,
                     attempt=attempt, verdict=verdict,
-                    refused_slugs=refused_slugs,
+                    refused_slugs=refused_slugs, abandoned=abandoned,
                 )
                 routed_slugs = story_inspection.routed_slugs(
                     run_dir, declared_inspection, attempt

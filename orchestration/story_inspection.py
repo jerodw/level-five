@@ -1862,7 +1862,8 @@ def not_worth_filing_texts(verdict) -> dict:
     return texts
 
 
-def declined_accounting(remainder, reasons, dropped=None) -> list:
+def declined_accounting(remainder, reasons, dropped=None,
+                        abandoned=None) -> list:
     """One entry per finding the verdict left, saying why or that nothing said.
 
     Each carries the finding's slug and `reason_given`; the reason itself is
@@ -1880,8 +1881,21 @@ def declined_accounting(remainder, reasons, dropped=None) -> list:
     left finding as not dropped, which is what a verdict carrying the field
     nowhere means, and an entry not dropped carries the boolean false and no
     text, on the terms `reason_given` beside it already takes.
+
+    `abandoned` is the mapping the coordinator supplies for the routed slugs a
+    spent pass allowance refused a pass for, and an entry whose slug it carries
+    records `abandoned` true beside those words in `abandoned_because`. It is a
+    marker rather than a reading of any reason's prose, for the reason `dropped`
+    beside it is one: what became of a finding is decided by an explicit field
+    and never by matching text. An abandoned finding is still left by the
+    verdict and is still filed at the run's completion — the allowance refused
+    the pass, not the finding — so it is recorded here beside the ones the
+    verdict declined rather than in place of them, and the two markers say
+    which of the two it was. A caller passing none records every left finding
+    as not abandoned, which is what a verdict meeting no spent allowance means.
     """
     dropped = dropped or {}
+    abandoned = abandoned or {}
     declined: list = []
     for one in remainder:
         slug = _slug_of(one)
@@ -1891,6 +1905,9 @@ def declined_accounting(remainder, reasons, dropped=None) -> list:
         entry["dropped"] = slug in dropped
         if slug in dropped:
             entry["not_worth_filing"] = dropped[slug]
+        entry["abandoned"] = slug in abandoned
+        if slug in abandoned:
+            entry["abandoned_because"] = abandoned[slug]
         declined.append(entry)
     return declined
 
@@ -1964,6 +1981,11 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
     the left findings the verdict judged not worth filing, which the filing at
     completion reads back and excludes from what it files — the counterpart of
     `remainder_slugs`, read through the same accessor the acted-on slugs are.
+    Beside those, `abandoned_slugs` names the left findings a spent pass
+    allowance refused a pass for, read back through that same accessor: they
+    are in the remainder and are filed like every other left finding, and the
+    list is what lets the account in the completion report tell a finding the
+    verdict declined from one no pass could be run for.
     `filed` and `dropped` are zero when this is written, because the
     accounting files nothing: they are here so the record and the event say
     the same thing. Nothing routes on any of it.
@@ -1973,6 +1995,8 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
     with_reason = sum(1 for one in declined if one.get("reason_given"))
     dropped_by_verdict = [one["slug"] for one in declined
                           if one.get("dropped") and one.get("slug")]
+    abandoned_by_allowance = [one["slug"] for one in declined
+                              if one.get("abandoned") and one.get("slug")]
     try:
         path = Path(run_dir) / accounting_artifact_file(artifact, attempt)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1992,6 +2016,8 @@ def write_accounting(run_dir: Path, artifact: str, attempt: int,
                     "declined_without_reason": len(declined) - with_reason,
                     "dropped_slugs": dropped_by_verdict,
                     "dropped_by_verdict": len(dropped_by_verdict),
+                    "abandoned_slugs": abandoned_by_allowance,
+                    "abandoned_by_spent_allowance": len(abandoned_by_allowance),
                     "filed": filed,
                     "dropped": dropped,
                     "reason": reason,
@@ -2086,6 +2112,43 @@ def dropped_slugs(directory: Path, artifact: str, attempt: int) -> tuple:
     return _accounting_slugs(directory, artifact, attempt, "dropped_slugs")
 
 
+def abandoned_slugs(directory: Path, artifact: str, attempt: int) -> tuple:
+    """The slugs the accounting artifact records as abandoned — a routed
+    finding the verdict named for a pass a spent allowance refused to run.
+
+    Read by the account the completion report renders, so a finding the
+    verifier asked to have fixed and no pass could be run for is told apart
+    from one the verifier declined on its merits. Not read by the filing:
+    an abandoned finding is in the remainder and is filed exactly as every
+    other left finding is, because the allowance refused the pass rather than
+    the finding. Empty where no attempt was accounted and where nothing was
+    abandoned, and read by nothing that routes.
+    """
+    return _accounting_slugs(directory, artifact, attempt, "abandoned_slugs")
+
+
+def declined_grounds(directory: Path, artifact: str, attempt: int) -> dict:
+    """What one attempt's accounting recorded about each finding it left.
+
+    A mapping from slug to that finding's `declined` entry as the accounting
+    wrote it, so the account in the completion report reads the ground the
+    verdict gave — or the record that none was given — off the artifact the
+    accounting wrote rather than re-reading a verdict the run no longer holds.
+    The first entry naming a slug wins, on `declined_reasons`' terms. Empty
+    where no attempt was accounted, and read by nothing that routes.
+    """
+    record = _read_record(
+        Path(directory) / accounting_artifact_file(artifact, attempt))
+    grounds: dict = {}
+    for entry in (record or {}).get("declined") or ():
+        if not isinstance(entry, dict):
+            continue
+        slug = entry.get("slug")
+        if isinstance(slug, str) and slug:
+            grounds.setdefault(slug, entry)
+    return grounds
+
+
 def _gather_drops(into: dict, directory: Path, artifact: str,
                   attempt: int) -> None:
     """Add to `into` the slug and the verdict's own words for each finding one
@@ -2126,7 +2189,7 @@ def _gather_drops(into: dict, directory: Path, artifact: str,
 def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
                           harness_root: Path, story_id: str, *,
                           artifact: str, attempt: int, verdict,
-                          refused_slugs=()) -> None:
+                          refused_slugs=(), abandoned=None) -> None:
     """Account for every finding routed to this story, once per attempt.
 
     Called from the verifier branch after the verdict is archived and before
@@ -2140,7 +2203,19 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     accepted sibling did, so the refusal the verdict now records as declined
     for it is what the accounting reads and the completion filing files.
     Empty when nothing was refused, and then the split is exactly as before
-    the parameter existed. For
+    the parameter existed.
+
+    `abandoned` is a mapping from routed slug to why, naming the findings the
+    verdict asked to have fixed by a pass whose allowance was already spent.
+    It is the second reason a routed slug the verdict names is not acted on,
+    and it reaches the split through the same set the refusals do — one rule
+    for what acted on means, rather than a second condition beside it — while
+    the mapping carries the marker and the words into the record, so the
+    account in the completion report can tell an abandoned finding from a
+    declined one. An abandoned finding is in the remainder and is filed at
+    completion like any other left finding: the allowance refused the pass,
+    not the finding. None, or empty, is a verdict that met no spent allowance,
+    and then the split is exactly as before the parameter existed. For
     each finding of the remainder it also records the reason the verdict's
     `declined_findings` gave for its slug, or that none was given, and the
     event says how many were declined each way — a report and never a
@@ -2156,16 +2231,21 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     finds it and splits nothing twice, and a retry, whose findings artifact
     is its own, is accounted under the next attempt's number. What a later
     verdict of the same attempt *can* do is amend: where it names
-    `refused_slugs`, each routed slug the artifact records as acted on is
-    moved to the remainder with the refusal recorded as its declined reason,
+    `refused_slugs` or `abandoned`, each routed slug the artifact records as
+    acted on is
+    moved to the remainder with the refusal or the abandonment recorded as its
+    declined reason,
     the artifact is rewritten with the counts recomputed, and an event of
     this kind says which slugs moved and why — a refusal the verifier
     discovers on the returning verdict of a correction or repair pass would
-    otherwise be logged and then forgotten, with no brief filed for it. A
-    refused slug the artifact already records in the remainder keeps the
+    otherwise be logged and then forgotten, with no brief filed for it, and a
+    spent allowance met on such a verdict is exactly the same case: the pass
+    whose returning verdict it is was the last one the run had. A
+    refused or abandoned slug the artifact already records in the remainder
+    keeps the
     reason it was recorded with, and one the artifact does not record as
-    routed changes nothing. A later verdict refusing nothing leaves the
-    artifact byte-for-byte what the first verdict wrote.
+    routed changes nothing. A later verdict refusing and abandoning nothing
+    leaves the artifact byte-for-byte what the first verdict wrote.
 
     An attempt that routed nothing is not accounted: a findings artifact that
     is absent, that records `ran` false, or that carries no findings leaves
@@ -2181,7 +2261,7 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
         _account_after_verdict(
             run_dir, target_root, config, harness_root, story_id,
             artifact=artifact, attempt=attempt, verdict=verdict,
-            refused_slugs=refused_slugs,
+            refused_slugs=refused_slugs, abandoned=abandoned,
         )
     except Exception as error:  # noqa: BLE001 - the totality is the guarantee
         print(f"the accounting after the verdict could not run: {error}",
@@ -2197,18 +2277,27 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
 def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
                            harness_root: Path, story_id: str, *,
                            artifact: str, attempt: int, verdict,
-                           refused_slugs=()) -> None:
+                           refused_slugs=(), abandoned=None) -> None:
     """The body of the above, so the guard has one thing to guard."""
     label = f"accounting for the findings routed to {story_id}"
+    abandoned = abandoned or {}
+    # The one set the split is decided by, so what "acted on" means is one
+    # rule and not one per reason a slug is in it: a scope extension the
+    # coordinator refused, and a pass a spent allowance refused to run.
+    not_acted = tuple(refused_slugs) + tuple(abandoned)
     if (Path(run_dir) / accounting_artifact_file(artifact, attempt)).is_file():
         # This attempt is accounted. A second verdict within it — the one a
         # correction or repair pass returns to — changes nothing about what
-        # was routed; the one thing it can change is a refusal made on this
-        # verdict of a slug the first verdict acted on, which is amended in.
-        if refused_slugs:
+        # was routed; the one thing it can change is a slug the first verdict
+        # acted on that this one did not, which is amended in: a refusal made
+        # here, and an allowance this verdict found spent, which is the
+        # ordinary shape when the returning verdict of the last pass a run
+        # had still asks for one.
+        if not_acted:
             _amend_accounting(run_dir, story_id, artifact=artifact,
                               attempt=attempt, verdict=verdict,
-                              refused_slugs=refused_slugs, label=label)
+                              refused_slugs=not_acted, abandoned=abandoned,
+                              label=label)
         return
     record = _read_findings_record(run_dir, artifact, attempt)
     if record is None or not record.get("ran"):
@@ -2217,7 +2306,7 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     if not routed:
         return
 
-    acted, remainder = acted_on_by(routed, verdict, refused_slugs=refused_slugs)
+    acted, remainder = acted_on_by(routed, verdict, refused_slugs=not_acted)
     # Why each left finding was left, where the verdict said. The verdict's
     # `declined_findings` names a slug and a reason; a left finding it names
     # is recorded with that reason, and one it does not name is recorded as
@@ -2229,11 +2318,19 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     # excludes it — so it is recorded as a slug list beside the reasons, and
     # the drop is read off the explicit field alone rather than out of the
     # prose of a reason.
+    # And, beside them, which of those left findings a spent pass allowance
+    # abandoned. That one comes from the coordinator rather than from the
+    # verdict: the verifier asked for the finding to be fixed, and what
+    # refused is the run's own allowance, which the verdict has no way to
+    # know about. It is recorded as its own marker so the account in the
+    # completion report tells the two apart by a field rather than by prose.
     declined = declined_accounting(remainder, declined_reasons(verdict),
-                                   not_worth_filing_texts(verdict))
+                                   not_worth_filing_texts(verdict),
+                                   abandoned)
     with_reason = sum(1 for one in declined if one["reason_given"])
     without_reason = len(declined) - with_reason
     dropped_by_verdict = sum(1 for one in declined if one["dropped"])
+    abandoned_count = sum(1 for one in declined if one["abandoned"])
 
     # The remainder is recorded and not filed. What is filed, and when, is
     # `file_at_completion`'s: it reads these slugs back off this artifact for
@@ -2257,6 +2354,11 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     if dropped_by_verdict:
         line += (f"; {dropped_by_verdict} of those the verdict judged not "
                  f"worth filing, so nothing is filed for them")
+    # Named only where an allowance was spent, on the same terms: a run that
+    # abandoned nothing writes exactly the line it wrote before this clause.
+    if abandoned_count:
+        line += (f"; {abandoned_count} of those a spent pass allowance "
+                 f"abandoned, so no pass was run for them")
     _say(run_dir, line + "; 0 filed, 0 dropped",
          kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
          filed=0, dropped=0)
@@ -2286,18 +2388,24 @@ def _refusal_reasons(verdict, slugs) -> dict:
 
 
 def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
-                      attempt: int, verdict, refused_slugs, label: str) -> None:
-    """Move the refused slugs the attempt's accounting records as acted on
-    into its remainder, and say so.
+                      attempt: int, verdict, refused_slugs, label: str,
+                      abandoned=None) -> None:
+    """Move the slugs the attempt's accounting records as acted on that this
+    verdict did not act on into its remainder, and say so.
 
     Reached only from a later verdict of an already-accounted attempt that
-    names `refused_slugs`. The split itself is not redone: the acted-on set
+    names a refusal or an abandonment. `refused_slugs` is the whole set to
+    move, and `abandoned` is the subset a spent pass allowance refused a pass
+    for — carried beside it so a moved entry records which of the two it was
+    and why, in the marker the account in the completion report reads. The
+    split itself is not redone: the acted-on set
     is the recorded one minus the moved slugs, the remainder is the routed
     findings less that, so everything the first verdict left stays exactly
     as it was recorded, reason included. Each moved slug gains a declined
     entry carrying the refusal — read off the verdict's `declined_findings`,
-    where the coordinator wrote it — or recorded as declined without a
-    reason where none is there. The artifact is rewritten through
+    where the coordinator wrote it — or the abandonment's own words, or
+    recorded as declined without a
+    reason where neither is there. The artifact is rewritten through
     `write_accounting` with the counts recomputed, so `remainder_slugs` is
     what `file_at_completion` reads and the brief the refusal promised is
     filed. Where no recorded acted-on slug is refused there is nothing to
@@ -2313,6 +2421,7 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     amended in and why, so the run's record carries the refusal even though
     the accounting does not.
     """
+    abandoned = abandoned or {}
     accounting = _read_record(
         Path(run_dir) / accounting_artifact_file(artifact, attempt))
     if accounting is None:
@@ -2327,11 +2436,17 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     moved = list(dict.fromkeys(moved))
     if not moved:
         return
+    # What moved each slug, said once so the event and the artifact cannot
+    # disagree: the abandonment's own words where a spent allowance refused
+    # the pass, and the refusal otherwise.
+    cause = ("a spent pass allowance abandoned some of them"
+             if any(slug in abandoned for slug in moved)
+             else "a scope extension was refused")
     record = _read_findings_record(run_dir, artifact, attempt)
     if record is None:
         _say(run_dir,
              f"{label}: not amended on a later verdict of attempt {attempt}; "
-             f"a scope extension was refused of {', '.join(moved)}, which the "
+             f"{cause}, of {', '.join(moved)}, which the "
              f"accounting records as acted on, but the attempt's findings "
              f"record {findings_artifact_file(artifact, attempt)} is absent "
              f"or cannot be read, so the accounting is left as the first "
@@ -2348,19 +2463,29 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     declined = [one for one in accounting.get("declined") or ()
                 if isinstance(one, dict)]
     for slug in moved:
-        entry = {"slug": slug, "reason_given": slug in reasons}
-        if slug in reasons:
-            entry["reason"] = reasons[slug]
+        # An abandoned slug's ground is the abandonment's own words: the
+        # verdict records no decline for it, because the verifier asked for
+        # the finding to be fixed and what refused was the run's allowance.
+        # A refused slug's is the verdict's, where the coordinator wrote it.
+        ground = abandoned.get(slug) or reasons.get(slug, "")
+        entry = {"slug": slug, "reason_given": bool(ground)}
+        if ground:
+            entry["reason"] = ground
         # A slug moved here was acted on by the first verdict and is left only
-        # because the coordinator refused the extension the repair needed, so
-        # it is filed rather than dropped whatever else the verdict said. The
-        # entries carried over above keep whatever they recorded, so a finding
-        # the first verdict dropped stays dropped across an amendment.
+        # because the coordinator refused the extension the repair needed, or
+        # because no allowance was left to run the pass with, so it is filed
+        # rather than dropped whatever else the verdict said. The entries
+        # carried over above keep whatever they recorded, so a finding the
+        # first verdict dropped stays dropped across an amendment.
         entry["dropped"] = False
+        entry["abandoned"] = slug in abandoned
+        if slug in abandoned:
+            entry["abandoned_because"] = abandoned[slug]
         declined.append(entry)
     write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
                      acted_on=acted, remainder=remainder, declined=declined)
     why = "; ".join(
+        f"{slug}: {abandoned[slug]}" if slug in abandoned else
         f"{slug}: {reasons[slug]}" if slug in reasons else
         f"{slug}: the coordinator refused a scope extension of it, "
         f"and the verdict records no reason"
@@ -2369,7 +2494,7 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     _say(run_dir,
          f"{label}: amended on a later verdict of attempt {attempt}; "
          f"{len(moved)} moved from acted on to left for the run's completion "
-         f"because a scope extension was refused — {why}; now "
+         f"because {cause} — {why}; now "
          f"{len(acted)} acted on by the verdict, {len(remainder)} left by it; "
          f"0 filed, 0 dropped",
          kind=ACCOUNTING_EVENT, routed=len(routed), acted_on=len(acted),
@@ -2662,15 +2787,59 @@ def file_at_completion(run_dir: Path, target_root: Path, config: dict,
             pass
 
 
-def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
-                        harness_root: Path, story_id: str, stages) -> None:
-    """The body of the above, so the guard has one thing to guard."""
-    label = f"filing at the completion of {story_id}"
-    from story_coordinator import inspection_declaration
+@dataclass(frozen=True)
+class _Assembly:
+    """What the run directory says is left to send on, and what became of the
+    rest — read once, by the one function both the filing and the account the
+    completion report renders read through.
 
-    artifact = inspection_declaration(stages or []).get("result")
-    if not artifact:
-        return
+    One derivation rather than two that agree today: the filing decides what
+    reaches the queue and the account says what is being sent on, and a report
+    that named a different set than the filing sends would be the defect this
+    account exists to remove, one layer down.
+    """
+
+    #: The final attempt of the current entry, or 0 where it holds nothing.
+    attempt: int
+    #: What that attempt held and what its verdict left, before the filters
+    #: below — the two numbers the completion line opens with, which are the
+    #: ones the accounting event of the same attempt recorded.
+    held_count: int
+    remainder_count: int
+    #: The findings to send on, deduped by the key the queue files under, this
+    #: entry's first. This is what the filing files and what the account says
+    #: is going to the backlog.
+    assembled: tuple
+    #: How many of those came from an earlier entry of this run.
+    from_earlier: int
+    #: Slug to the verdict's own words, for each finding a verdict judged not
+    #: worth filing, over every attempt of every entry.
+    dropped_why: dict
+    #: The area suggestions and the refused ones, ordered as the report's area
+    #: gate reads them.
+    suggestions: tuple
+    refused: tuple
+    #: The slugs some verdict of this run acted on, over every attempt of
+    #: every entry: what the run repaired or corrected.
+    repaired: frozenset
+    #: The slugs of the findings the inspections made about files beside the
+    #: change, so the account can say of a brief which of the two it was.
+    beside_the_change: frozenset
+    #: Slug to the `declined` entry the accounting recorded for it, over the
+    #: attempts the assembled findings came from, this entry's winning.
+    grounds: dict
+    #: The slugs a spent pass allowance abandoned, over those same attempts.
+    abandoned: frozenset
+
+
+def _assemble(run_dir: Path, artifact: str) -> _Assembly:
+    """Read what this run has left to send on, and what became of the rest.
+
+    Lifted whole out of the filing at completion so the account the report
+    renders reads the same attempts and the same earlier entries: every
+    decision below is the filing's own, unchanged, and what is new is only
+    that the two readers share it.
+    """
     attempts = _attempts_holding(run_dir, artifact)
     attempt = attempts[-1] if attempts else 0
     held = held_findings(run_dir, artifact, attempt) if attempts else []
@@ -2763,6 +2932,22 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     held = [one for one in held if _slug_of(one) not in dropped_by_verdict]
     remainder = [one for one in remainder
                  if _slug_of(one) not in dropped_by_verdict]
+    # What the account says of each brief it names, read off the attempts the
+    # findings themselves came from: which were about files beside the change
+    # rather than routed to the story, the ground the accounting recorded for
+    # each routed one, and which a spent allowance abandoned. Read here rather
+    # than by a second walk, so the account cannot read a different entry's
+    # record than the finding it is about came from. This entry's reading wins
+    # where two entries recorded one slug, which is the dedupe's rule from the
+    # other side.
+    beside: set = set()
+    grounds: dict = {}
+    abandoned: set = set()
+    if attempts:
+        beside.update(_slug_of(one)
+                      for one in held_findings(run_dir, artifact, attempt))
+        grounds.update(declined_grounds(run_dir, artifact, attempt))
+        abandoned.update(abandoned_slugs(run_dir, artifact, attempt))
     repaired: set = set()
     for one in attempts:
         repaired.update(acted_on_slugs(run_dir, artifact, one))
@@ -2773,6 +2958,12 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
         earlier.extend(one for one in contributed
                        if _slug_of(one) not in repaired
                        and _slug_of(one) not in dropped_by_verdict)
+        beside.update(_slug_of(one)
+                      for one in held_findings(directory, artifact, found[-1]))
+        for slug, entry in declined_grounds(
+                directory, artifact, found[-1]).items():
+            grounds.setdefault(slug, entry)
+        abandoned.update(abandoned_slugs(directory, artifact, found[-1]))
         suggestions[:0] = held_area_suggestions(directory, artifact, found[-1])
         refused.extend(
             held_refused_area_suggestions(directory, artifact, found[-1]))
@@ -2786,7 +2977,40 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
     # added rather than what it read.
     current = _deduped(held + remainder)
     assembled = _deduped(held + remainder + earlier)
-    from_earlier = len(assembled) - len(current)
+    return _Assembly(
+        attempt=attempt,
+        held_count=held_count,
+        remainder_count=remainder_count,
+        assembled=tuple(assembled),
+        from_earlier=len(assembled) - len(current),
+        dropped_why=dropped_why,
+        suggestions=tuple(suggestions),
+        refused=tuple(refused),
+        repaired=frozenset(repaired),
+        beside_the_change=frozenset(beside),
+        grounds=grounds,
+        abandoned=frozenset(abandoned),
+    )
+
+
+def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
+                        harness_root: Path, story_id: str, stages) -> None:
+    """The body of the above, so the guard has one thing to guard."""
+    label = f"filing at the completion of {story_id}"
+    from story_coordinator import inspection_declaration
+
+    artifact = inspection_declaration(stages or []).get("result")
+    if not artifact:
+        return
+    read = _assemble(run_dir, artifact)
+    attempt = read.attempt
+    dropped_why = read.dropped_why
+    held_count = read.held_count
+    remainder_count = read.remainder_count
+    assembled = list(read.assembled)
+    from_earlier = read.from_earlier
+    suggestions = list(read.suggestions)
+    refused = list(read.refused)
 
     # One named drop per finding the verdict judged not worth filing, carrying
     # the verdict's own words, so the line below says how many were dropped and
@@ -2901,3 +3125,154 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
                   FILED_COMMIT_SUBJECT, write_problem=write_problem)
 
 
+
+# --------------------------------------------------------------------------
+# The account a completed run's report carries
+# --------------------------------------------------------------------------
+#
+# A run examines what it has just built, repairs some of what it finds, sends
+# some of it to the backlog, discards a little as too small to be worth
+# anyone's time, and — where a pass allowance was already spent — abandons the
+# rest. The report a developer reads said none of that: they learned about it
+# later, from the backlog, without the run's side of the story.
+#
+# The account is derived here rather than in the coordinator, and from the
+# artifacts the run directory already holds rather than from a second split of
+# the findings: it reads the same attempts and the same earlier entries the
+# filing at completion reads, through the one `_assemble` both go through, so
+# the report and the filing cannot disagree about what is being sent on. It is
+# a report and never a decision — nothing here files, drops, routes or refuses
+# anything, and the coordinator renders what it returns.
+
+
+@dataclass(frozen=True)
+class AccountedFinding:
+    """One finding in the account, named by the slug it is filed under.
+
+    The slug rather than the title, because the slug is what a brief is filed
+    under and so what a developer can find the item by; the title is prose the
+    Inspector may word differently between two readings of one defect.
+
+    `ground` is what the accounting recorded about why the finding was left —
+    the verdict's own words where its `declined_findings` gave them, the
+    abandonment's where a spent allowance refused the pass, and empty where
+    neither did. `beside_the_change` is a finding the inspection made about a
+    file beside the change rather than one routed to the story: it was never
+    put to the verdict, so it has no ground and the report says so rather than
+    reporting an absent one as a verdict that said nothing.
+    """
+
+    slug: str
+    ground: str = ""
+    beside_the_change: bool = False
+
+
+@dataclass(frozen=True)
+class FindingsAccount:
+    """What became of every problem a completed run found in its own work.
+
+    Four dispositions, disjoint by construction, so a finding is named once:
+    `repaired` is what the run's own verdicts acted on, `to_the_backlog` is
+    what is being sent on, `discarded` is what a verdict judged not worth
+    filing, and `abandoned` is what a spent pass allowance left no pass to run
+    for. `inspected` is whether the loaded workflow declares an inspection at
+    all — a run under one that does not has no account to render, and its
+    report is what it was before this existed. `problem` is why the account
+    could not be derived, and an account carrying one carries nothing else:
+    the report says that in place of the account, and the run completes.
+    """
+
+    inspected: bool = False
+    problem: str = ""
+    repaired: tuple = ()
+    to_the_backlog: tuple = ()
+    discarded: tuple = ()
+    abandoned: tuple = ()
+
+
+def _ground_of(entry) -> str:
+    """The ground one accounting `declined` entry recorded, or "" for none.
+
+    The abandonment's own words first, because a finding a spent allowance
+    abandoned was asked to be fixed rather than declined and the words the
+    coordinator recorded are what say so; the verdict's reason otherwise.
+    """
+    if not isinstance(entry, dict):
+        return ""
+    for key in ("abandoned_because", "reason"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
+def account_for_the_report(run_dir: Path, stages) -> FindingsAccount:
+    """What became of every finding this run made, for its completion report.
+
+    Read off the artifacts the run directory already holds — each attempt's
+    findings record, its accounting record and its held record — through the
+    one assembly the filing at completion reads, so the two agree about what
+    is being sent on by construction rather than by inspection. Nothing is
+    re-derived here: which findings were routed, which the verdict acted on,
+    which it declined and on what ground, which it judged not worth filing and
+    which a spent allowance abandoned were each decided when they happened and
+    recorded then.
+
+    The four dispositions are disjoint: a finding being sent on, discarded or
+    abandoned is not also named as repaired, even where an earlier attempt's
+    verdict did act on it and a later attempt's inspection found it again —
+    what the report says of a finding is where it ended up.
+
+    A workflow declaring no inspection returns an account saying so, which the
+    coordinator renders as no section at all. Every failure is caught and
+    returned as `problem`: the completion report is a required artifact of
+    every completed run, so nothing here may stop it being written.
+    """
+    try:
+        from story_coordinator import inspection_declaration
+
+        artifact = inspection_declaration(stages or []).get("result")
+        if not artifact:
+            return FindingsAccount()
+        read = _assemble(run_dir, artifact)
+        sent: list = []
+        abandoned: list = []
+        for one in read.assembled:
+            slug = _slug_of(one)
+            beside = slug in read.beside_the_change
+            entry = AccountedFinding(
+                slug=slug,
+                # A finding about a file beside the change was never put to
+                # the verdict, so it has no ground rather than an empty one.
+                ground="" if beside else _ground_of(read.grounds.get(slug)),
+                beside_the_change=beside,
+            )
+            (abandoned if slug in read.abandoned else sent).append(entry)
+        discarded = tuple(
+            AccountedFinding(slug=slug, ground=why)
+            for slug, why in read.dropped_why.items()
+        )
+        # What the run repaired is what some verdict of it acted on, less
+        # whatever ended up somewhere else: a finding acted on by one
+        # attempt's verdict and found again by a later attempt's inspection is
+        # going to the backlog, and naming it under both would account for one
+        # finding twice.
+        elsewhere = ({one.slug for one in sent}
+                     | {one.slug for one in abandoned}
+                     | {one.slug for one in discarded})
+        repaired = tuple(
+            AccountedFinding(slug=slug)
+            for slug in sorted(read.repaired - elsewhere) if slug
+        )
+        return FindingsAccount(
+            inspected=True,
+            repaired=repaired,
+            to_the_backlog=tuple(sent),
+            discarded=discarded,
+            abandoned=tuple(abandoned),
+        )
+    except Exception as error:  # noqa: BLE001 - the report must still be written
+        return FindingsAccount(
+            inspected=True,
+            problem=str(error) or error.__class__.__name__,
+        )
