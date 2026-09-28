@@ -2,3 +2,4 @@
 {"story_id": "story-211", "timestamp": "2026-09-28 10:08:25", "filed": 0, "dropped": 0, "routed": 3, "acted_on": 1}
 {"story_id": "story-211", "mode": "narrow", "cost_usd": 5.023003000000001, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-28 10:42:28", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true, "inspection_made": true}
 {"story_id": "story-211", "timestamp": "2026-09-28 10:51:28", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 0}
+{"story_id": "story-211", "timestamp": "2026-09-28 11:04:31", "filed": 1, "dropped": 0}
