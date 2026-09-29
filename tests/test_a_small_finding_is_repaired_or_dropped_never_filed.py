@@ -19,7 +19,11 @@ The subjects, in the order the criteria state them:
     field for a correct finding too small to be worth any route, say in the
     inspection slot that a finding dropped through it is not filed, agree
     with each other in both passages, and leave the repairable-findings
-    passage exactly as it stood before this story.
+    passage exactly as it stood before this story. That agreement sets aside
+    the one sentence story-214 gives one workflow's prompt alone, named by
+    that story's own declaration of which sentence may differ; every sentence
+    carrying anything this story claims about the paragraph is still in the
+    comparison.
 
   * **the verdict schema** declares the new field optional beside a
     `declined_findings` entry whose required set is still slug and reason,
@@ -102,6 +106,7 @@ from test_a_routed_finding_is_repaired_unless_the_verdict_says_why import (
     sentences,
     slot_paragraph,
     verifier_prompts,
+    without_the_permitted_divergence,
 )
 from test_inspection_findings_reach_the_story import (  # noqa: F401 - fixtures used by name
     BOTH_FINDING,
@@ -310,11 +315,22 @@ def test_the_two_rewritten_passages_are_identical_between_the_prompts():
     """The criterion that the rule reads the same in both shipped verifier
     prompts. Each passage is found by its own phrase first and asserted
     non-empty, so equality is between two found passages rather than between
-    two failures to find one."""
+    two failures to find one.
+
+    The triage paragraph is compared with the one sentence story-214 gives one
+    workflow's prompt alone set aside, on that story's terms and through its
+    declaration of which sentence that is — the same narrowing the sibling
+    module's own walk over this paragraph makes. This story's rule is not that
+    sentence's subject: what it claims about this paragraph is that size is a
+    reason to fix, which grounds remain, and which field drops a finding, and
+    every sentence saying any of that is still held to reading the same in both
+    prompts. The control below rewords one of them and must be reported.
+    """
     texts = {prompt.name: prompt.read_text(encoding="utf-8")
              for prompt in verifier_prompts()}
     assert len(texts) > 1, texts
-    triage = {name: triage_paragraph(text) for name, text in texts.items()}
+    triage = {name: without_the_permitted_divergence(triage_paragraph(text))
+              for name, text in texts.items()}
     slots = {name: slot_paragraph(text) for name, text in texts.items()}
     for found in (triage, slots):
         for name, passage in found.items():
@@ -324,14 +340,17 @@ def test_the_two_rewritten_passages_are_identical_between_the_prompts():
 
 def test_the_parity_reading_tells_two_triage_paragraphs_apart():
     """Control for the equality above: the same extraction over a copy whose
-    triage paragraph has one word changed finds two different passages."""
+    triage paragraph has one word changed finds two different passages, and
+    the word changed is in a sentence the narrowing above does not set aside —
+    so what the comparison still reports is a sentence the two prompts share
+    and not the one story-214 permits them to differ in."""
     text = verifier_prompts()[0].read_text(encoding="utf-8")
-    original = triage_paragraph(text)
+    original = without_the_permitted_divergence(triage_paragraph(text))
     # Mutated in the *unflowed* text, where the paragraph is line-wrapped, so
     # the word replaced is one that does not straddle a line break.
     altered = text.replace("therefore", "accordingly", 1)
     assert altered != text
-    assert triage_paragraph(altered) != original
+    assert without_the_permitted_divergence(triage_paragraph(altered)) != original
 
 
 @pytest.mark.parametrize("prompt", verifier_prompts(), ids=lambda p: p.name)

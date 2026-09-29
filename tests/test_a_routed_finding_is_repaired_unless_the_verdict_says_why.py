@@ -17,8 +17,21 @@ The subjects, in the order the criteria state them:
     sentence once, state the right to decline once rather than three times, no
     longer close either route on "nothing if it does not", give the repairable
     paragraph the story-artifact bound in the correctable paragraph's own
-    words, and agree character for character in the passages this story
-    changed.
+    words, and agree in the passages this story changed.
+
+    That last claim was "character for character" until story-214, which gave
+    one of the two prompts a statement that is true of its workflow alone: a
+    fix needing new standing validation is no ground for declining there,
+    because that workflow declares a stage whose work is validation and a
+    repair pass reaches it. The parity walk now names that one statement —
+    `PERMITTED_DIVERGENCE_PHRASE`, declared here and imported by the module
+    whose claim is that the statement is in the prompt — and sets it aside a
+    sentence at a time, keeping every other sentence of the same paragraph in
+    the comparison. It gains two claims for the one it narrows: the statement
+    is in the prompt of the workflow that declares a validating stage, and it
+    is in no other. So the walk reports a shared sentence reworded in either
+    prompt exactly as before, and reports the statement gone missing from the
+    prompt that should carry it or turning up in the one that should not.
 
   * **the verdict schema** accepts a `declined_findings` entry carrying a slug
     and a reason, refuses one missing either, and still accepts every shape it
@@ -107,6 +120,30 @@ def verifier_prompts() -> list[Path]:
     return found
 
 
+def verifier_prompts_declaring_validation() -> list[Path]:
+    """Of the prompts `verifier_prompts` found, those whose workflow declares a
+    stage whose work is validation — a stage confined to the tests directory
+    this deployment configures.
+
+    Derived rather than named, and resolved against this repository's own
+    configuration the way a run resolves a definition, because a declaration
+    read as text carries the token and not the directory. Which of the two
+    shipped prompts may carry the permitted divergence is exactly what that
+    divergence says about its own workflow, so the permission is read off the
+    same fact the sentence states rather than off a file name.
+    """
+    tests_dir = conftest.repository_config()["tests_dir"]
+    found = []
+    for path in sorted((REPO_ROOT / "workflows").glob("*.json")):
+        stages = conftest.shipped_workflow(name=path.stem)["stages"]
+        if not any(tests_dir in (stage.get("may_only_change") or [])
+                   for stage in stages):
+            continue
+        found += [REPO_ROOT / "prompts" / stage["prompt"]
+                  for stage in stages if stage.get("inspection")]
+    return found
+
+
 def flowed(text: str) -> str:
     """`text` with its line wrapping removed, so a clause that straddles a
     newline is still found."""
@@ -147,6 +184,16 @@ PASSAGE_PHRASES = {
     "correction-bounds": CORRECTION_BOUNDS_PHRASE,
     "repairable": REPAIRABLE_PHRASE,
 }
+
+#: The one statement the verifier prompt of the workflow that declares a
+#: validating stage carries and the other shipped verifier prompt does not,
+#: found by the words that occur in exactly one of the two. The parity walk
+#: below permits the sentence carrying this phrase to differ and permits
+#: nothing else, and `test_a_verdict_repairs_a_finding_needing_new_validation`
+#: imports the phrase from here for its own assertions about that sentence —
+#: one declaration, so the guard and the claim cannot disagree about which
+#: sentence may differ.
+PERMITTED_DIVERGENCE_PHRASE = "needs new standing validation"
 
 #: The sentence the correctable-findings bounds already carried and the
 #: repairable paragraph lacked, by its opening words.
@@ -325,25 +372,89 @@ def test_the_inspection_slot_points_at_the_passages_and_the_field(
     assert RIGHT_TO_DECLINE not in slot
 
 
-def test_the_passages_are_identical_between_the_shipped_prompts():
-    """The refactor workflow carries the same default: every passage this
-    story changed, and the inspection slot, reads the same in each shipped
-    verifier prompt. Each passage is checked non-empty and to carry its own
-    phrase first, so equality is between two found passages and not between
-    two failures to find one."""
-    prompts = verifier_prompts()
-    texts = {prompt.name: prompt.read_text(encoding="utf-8")
-             for prompt in prompts}
+def without_the_permitted_divergence(passage: str) -> str:
+    """`passage` with the one sentence carrying `PERMITTED_DIVERGENCE_PHRASE`
+    taken out of it, and every other sentence left exactly as it is.
+
+    Sentence at a time rather than paragraph at a time: dropping the whole
+    paragraph from the comparison to make room for one statement would leave a
+    guard that catches nothing, and every other sentence of that paragraph is
+    still held to reading the same in both prompts.
+    """
+    return " ".join(one for one in sentences(passage)
+                    if PERMITTED_DIVERGENCE_PHRASE not in one)
+
+
+def parity_problems(texts: dict[str, str], permitted: set[str]) -> list[str]:
+    """Every divergence the parity walk finds across the given prompt texts,
+    keyed by prompt name. Empty means they agree.
+
+    Two kinds. The permitted statement must be in each prompt named in
+    `permitted` and in no other, so it neither goes missing from the prompt
+    whose workflow the statement is true of nor spreads to the one it is false
+    of. And each walked passage, once that one sentence is set aside, must read
+    the same in every prompt — so a sentence the prompts share, reworded in any
+    of them, is reported exactly as it was before the walk was narrowed.
+
+    A function rather than a test body so the controls can put mutated copies
+    of the shipped prompts through the same walk the shipped assertion makes.
+    """
+    problems = []
+    for name, text in sorted(texts.items()):
+        expected = 1 if name in permitted else 0
+        carried = flowed(text).count(PERMITTED_DIVERGENCE_PHRASE)
+        if carried != expected:
+            problems.append(f"{name}: carries the permitted statement "
+                            f"{carried} times, expected {expected}")
     for key, phrase in PASSAGE_PHRASES.items():
-        found = {name: paragraph_containing(text, phrase)
-                 for name, text in texts.items()}
-        for name, passage in found.items():
+        found = {}
+        for name, text in texts.items():
+            passage = paragraph_containing(text, phrase)
             assert phrase in passage and len(passage) > len(phrase), (key, name)
-        assert len(set(found.values())) == 1, (key, found)
+            found[name] = without_the_permitted_divergence(passage)
+            assert phrase in found[name], (key, name)
+        if len(set(found.values())) != 1:
+            problems.append(f"{key}: {found}")
     slots = {name: slot_paragraph(text) for name, text in texts.items()}
     for name, slot in slots.items():
         assert DECLINED in slot, (name, slot)
-    assert len(set(slots.values())) == 1, slots
+    if len(set(slots.values())) != 1:
+        problems.append(f"slot: {slots}")
+    return problems
+
+
+def shipped_prompt_texts() -> dict[str, str]:
+    """Each shipped verifier prompt's whole text, by file name."""
+    return {prompt.name: prompt.read_text(encoding="utf-8")
+            for prompt in verifier_prompts()}
+
+
+def prompts_that_may_carry_the_divergence() -> set[str]:
+    """The names of the prompts the walk permits the statement in."""
+    return {prompt.name for prompt in verifier_prompts_declaring_validation()}
+
+
+def test_exactly_one_shipped_prompt_may_carry_the_permitted_divergence():
+    """The premise the narrowing rests on: the permission is derived from a
+    fact that separates the two shipped workflows rather than granted to
+    everything the walk looks at. One of them declares a stage confined to the
+    tests directory and the other declares none, so one prompt may carry the
+    statement and the other may not."""
+    permitted = set(verifier_prompts_declaring_validation())
+    assert len(permitted) == 1, permitted
+    assert permitted < set(verifier_prompts()), permitted
+
+
+def test_the_passages_are_identical_between_the_shipped_prompts():
+    """The refactor workflow carries the same default: every passage this
+    story changed, and the inspection slot, reads the same in each shipped
+    verifier prompt, apart from the one statement story-214 gives the prompt of
+    the workflow that declares a validating stage. Each passage is checked
+    non-empty and to carry its own phrase first, so equality is between two
+    found passages and not between two failures to find one."""
+    texts = shipped_prompt_texts()
+    assert len(texts) > 1, texts
+    assert parity_problems(texts, prompts_that_may_carry_the_divergence()) == []
 
 
 def test_the_parity_check_tells_two_passages_apart():
@@ -355,6 +466,34 @@ def test_the_parity_check_tells_two_passages_apart():
                            "not a permit to revisit", 1)
     assert altered != text
     assert paragraph_containing(altered, REPAIRABLE_PHRASE) != original
+
+
+#: A clause both shipped prompts carry in the one paragraph the walk now
+#: permits a divergence in, and one word of it. Rewording it is the drift the
+#: narrowing must not have stopped reporting.
+SHARED_IN_THE_NARROWED_PASSAGE = "wrong on the evidence"
+REWORDED = "wrong on the record"
+
+
+@pytest.mark.parametrize("prompt", verifier_prompts(), ids=lambda p: p.name)
+def test_the_narrowed_walk_still_reports_a_shared_sentence_reworded(
+        prompt: Path):
+    """Control for the narrowing, in the paragraph the narrowing is about: a
+    sentence both prompts share, reworded in a copy of either one of them,
+    is still reported. Run for each prompt in turn, because a walk that
+    happened to compare one prompt against itself would be silent for the
+    other. The whole shipped text is mutated and put back through the same
+    walk the shipped assertion makes, so what reports the drift is the guard
+    rather than a search over a string this test just edited."""
+    texts = shipped_prompt_texts()
+    permitted = prompts_that_may_carry_the_divergence()
+    assert parity_problems(texts, permitted) == []
+
+    drifted = texts[prompt.name].replace(SHARED_IN_THE_NARROWED_PASSAGE,
+                                         REWORDED, 1)
+    assert drifted != texts[prompt.name]
+    reported = parity_problems({**texts, prompt.name: drifted}, permitted)
+    assert any(problem.startswith("default:") for problem in reported), reported
 
 
 @pytest.mark.parametrize("prompt", verifier_prompts(), ids=lambda p: p.name)

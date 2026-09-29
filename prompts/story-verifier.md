@@ -60,7 +60,14 @@ categories, each with the stage the retry is routed to and when it applies:
 
 The coordinator routes the next attempt on that category alone. There is no
 default route: a recommended retry naming no category, or one this workflow
-does not define, escalates the run rather than being routed somewhere.
+does not define, escalates the run rather than being routed somewhere. This
+workflow declares a stage whose work is validation, and a repair pass entering
+at the stage that owns a fix runs forward from there through every stage after
+it. So a fix owned by a stage that runs before the validating one reaches it
+on the way back to verification, and the assertion that fix needs is written
+there — by a stage other than the one whose change it validates. That an
+assertion does not exist yet is work this run can do rather than a reason to
+send a finding to the backlog.
 
 Some work cannot be finished by retrying it. When what remains against the
 story's declared scope cannot plausibly close in the attempts that are left —
@@ -95,7 +102,11 @@ entry protects the file where its reason speaks to the fix, or the finding is
 wrong on the evidence. A fix that is only out of scope is not a reason either:
 a routed finding whose fix lives in a file the story did not declare is
 extended rather than declined, on the terms the repairable paragraph below
-gives, and one that matters more than a pass is a blocking issue. A declined routed finding is recorded rather than silent:
+gives, and one that matters more than a pass is a blocking issue. A fix that
+needs new standing validation is not a reason either: the repair pass reaches
+the stage whose work is validation, on the terms the routing paragraph above
+gives, so the assertion that fix needs is written within this run rather than
+left to a later one. A declined routed finding is recorded rather than silent:
 name its slug and the reason in declined_findings, so the verdict says why it
 was not acted on. Where a finding is correct and smaller than either of those
 cheap routes is worth, say so in that entry's not_worth_filing and the harness
