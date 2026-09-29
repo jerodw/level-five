@@ -657,6 +657,10 @@ OPTIONAL_FIELDS = {
     # nothing.
     "inspection_made",
     "routed", "acted_on",
+    # How many findings a spent pass allowance abandoned, on the two entries
+    # that record one being spent. It is what carries the abandonment into the
+    # committed history, where the entry's own message does not reach.
+    "abandoned",
     # Which timed operation an entry completes, beside its duration_seconds;
     # the key the cross-run duration log records an observation under.
     "operation",

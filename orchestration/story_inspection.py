@@ -2229,22 +2229,26 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     Once per attempt, decided by the presence of the accounting artifact: the
     second verdict of one attempt — the one a correction pass returns to —
     finds it and splits nothing twice, and a retry, whose findings artifact
-    is its own, is accounted under the next attempt's number. What a later
-    verdict of the same attempt *can* do is amend: where it names
+    is its own, is accounted under the next attempt's number. What a call
+    that finds an already-accounted attempt *can* do is amend: where it names
     `refused_slugs` or `abandoned`, each routed slug the artifact records as
     acted on is
-    moved to the remainder with the refusal or the abandonment recorded as its
-    declined reason,
+    moved to the remainder, carrying the refusal as its declined reason and
+    the abandonment in its own marker beside it,
     the artifact is rewritten with the counts recomputed, and an event of
     this kind says which slugs moved and why — a refusal the verifier
     discovers on the returning verdict of a correction or repair pass would
     otherwise be logged and then forgotten, with no brief filed for it, and a
     spent allowance met on such a verdict is exactly the same case: the pass
-    whose returning verdict it is was the last one the run had. A
+    whose returning verdict it is was the last one the run had. Two moments
+    reach the amendment: a later verdict of the attempt, and the repair block
+    of the verdict the accounting was written on, which is where that pass's
+    spent allowance is met and which the coordinator calls this from for the
+    reason its own comment there gives. A
     refused or abandoned slug the artifact already records in the remainder
     keeps the
     reason it was recorded with, and one the artifact does not record as
-    routed changes nothing. A later verdict refusing and abandoning nothing
+    routed changes nothing. A call refusing and abandoning nothing
     leaves the artifact byte-for-byte what the first verdict wrote.
 
     An attempt that routed nothing is not accounted: a findings artifact that
@@ -2390,11 +2394,19 @@ def _refusal_reasons(verdict, slugs) -> dict:
 def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
                       attempt: int, verdict, refused_slugs, label: str,
                       abandoned=None) -> None:
-    """Move the slugs the attempt's accounting records as acted on that this
-    verdict did not act on into its remainder, and say so.
+    """Move the slugs the attempt's accounting records as acted on that
+    nothing acted on into its remainder, and say so.
 
-    Reached only from a later verdict of an already-accounted attempt that
-    names a refusal or an abandonment. `refused_slugs` is the whole set to
+    Reached where an attempt is already accounted and a refusal or an
+    abandonment names a slug that accounting records as acted on. Two
+    moments reach it: a later verdict of the same attempt, which is where a
+    refusal discovered on the returning verdict of a pass arrives, and the
+    repair block of the verdict the accounting was written on, which is where
+    that pass's spent allowance is met — the clean-clone check between the
+    accounting and that block can route the verdict away, so the block records
+    its own abandonment rather than the accounting predicting one.
+
+    `refused_slugs` is the whole set to
     move, and `abandoned` is the subset a spent pass allowance refused a pass
     for — carried beside it so a moved entry records which of the two it was
     and why, in the marker the account in the completion report reads. The
@@ -2402,10 +2414,13 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     is the recorded one minus the moved slugs, the remainder is the routed
     findings less that, so everything the first verdict left stays exactly
     as it was recorded, reason included. Each moved slug gains a declined
-    entry carrying the refusal — read off the verdict's `declined_findings`,
-    where the coordinator wrote it — or the abandonment's own words, or
-    recorded as declined without a
-    reason where neither is there. The artifact is rewritten through
+    entry carrying the verdict's own reason for it where there is one — read
+    off `declined_findings`, where the coordinator writes a refusal — and
+    recorded as declined without a reason where there is none, which is what
+    an abandonment is: what refused the pass was the run's allowance rather
+    than the verdict, and its words go in `abandoned_because` beside them, on
+    exactly the terms `declined_accounting` records them on. The artifact is
+    rewritten through
     `write_accounting` with the counts recomputed, so `remainder_slugs` is
     what `file_at_completion` reads and the brief the refusal promised is
     filed. Where no recorded acted-on slug is refused there is nothing to
@@ -2420,6 +2435,11 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     byte as written and an event of this kind says the refusal could not be
     amended in and why, so the run's record carries the refusal even though
     the accounting does not.
+
+    A moved slug is left by the run whichever moment moved it, so what the
+    entry records is the same on both — which is what keeps the run's own
+    declined-with-reason and declined-without-reason counts meaning one thing
+    however the allowance was met.
     """
     abandoned = abandoned or {}
     accounting = _read_record(
@@ -2445,7 +2465,7 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     record = _read_findings_record(run_dir, artifact, attempt)
     if record is None:
         _say(run_dir,
-             f"{label}: not amended on a later verdict of attempt {attempt}; "
+             f"{label}: not amended after attempt {attempt} was accounted; "
              f"{cause}, of {', '.join(moved)}, which the "
              f"accounting records as acted on, but the attempt's findings "
              f"record {findings_artifact_file(artifact, attempt)} is absent "
@@ -2463,11 +2483,18 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     declined = [one for one in accounting.get("declined") or ()
                 if isinstance(one, dict)]
     for slug in moved:
-        # An abandoned slug's ground is the abandonment's own words: the
-        # verdict records no decline for it, because the verifier asked for
-        # the finding to be fixed and what refused was the run's allowance.
-        # A refused slug's is the verdict's, where the coordinator wrote it.
-        ground = abandoned.get(slug) or reasons.get(slug, "")
+        # `reason` is the verdict's own words and nothing else, which is the
+        # contract `declined_accounting` states and the writing path keeps: an
+        # abandoned slug the verdict declined by name carries that decline
+        # here, and one it did not carries no reason and records
+        # `reason_given` false, because the verifier asked for the finding to
+        # be fixed and what refused was the run's allowance. The abandonment's
+        # own words go in `abandoned_because` below, where the writing path
+        # puts them — folding them into `reason` would make the same situation
+        # a declined-with-reason on this path and a declined-without-reason on
+        # the other, so the run's own counts would mean different things
+        # depending on which verdict of the attempt met the allowance.
+        ground = reasons.get(slug, "")
         entry = {"slug": slug, "reason_given": bool(ground)}
         if ground:
             entry["reason"] = ground
@@ -2492,7 +2519,7 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
         for slug in moved
     )
     _say(run_dir,
-         f"{label}: amended on a later verdict of attempt {attempt}; "
+         f"{label}: amended after attempt {attempt} was accounted; "
          f"{len(moved)} moved from acted on to left for the run's completion "
          f"because {cause} — {why}; now "
          f"{len(acted)} acted on by the verdict, {len(remainder)} left by it; "

@@ -2498,15 +2498,19 @@ def test_the_accounting_offers_no_way_to_stop_a_run():
         story_inspection.inspect_after_story).parameters
     # `refused_slugs` (story-183) names the routed slugs the coordinator
     # refused a scope extension of, so the accounting leaves them: an input to
-    # the split, and not a way to stop anything.
+    # the split, and not a way to stop anything. `abandoned` (story-213) is the
+    # second reason a routed slug the verdict names was not acted on — the pass
+    # it named one for had no allowance left — and it is in the same shape and
+    # there for the same reason: an input to the split, carrying the words the
+    # record keeps, and no way to stop anything either.
     assert list(parameters) == [
         "run_dir", "target_root", "config", "harness_root", "story_id",
-        "artifact", "attempt", "verdict", "refused_slugs"]
+        "artifact", "attempt", "verdict", "refused_slugs", "abandoned"]
     # No stage list, because it inspects nothing, and no runner, because it
     # invokes nothing — the two the post-story sibling has that this does not.
     assert set(sibling) - set(parameters) == {"stages", "runner"}
     assert set(parameters) - set(sibling) == {
-        "artifact", "attempt", "verdict", "refused_slugs"}
+        "artifact", "attempt", "verdict", "refused_slugs", "abandoned"}
 
 
 @pytest.mark.parametrize("text", ["", "not json", "[1, 2]"],
@@ -2572,13 +2576,22 @@ def test_a_failure_inside_the_accounting_changes_no_routing_and_no_status(
     assert accounting_files(faulted) == []
 
 
-def test_the_coordinator_calls_the_accounting_once_and_reads_nothing_from_it():
-    """One call site, a bare statement — so nothing it answers can become a
-    decision — and the slugs read back off its artifact branch on nothing in
-    the stage loop: they word two events and decide nothing."""
+def test_every_accounting_call_site_reads_nothing_from_it():
+    """Each call site is a bare statement — so nothing any of them answers can
+    become a decision — and the slugs read back off the artifact branch on
+    nothing in the stage loop: they word two events and decide nothing.
+
+    Two call sites, and what the second is: the accounting made on the verdict,
+    and the amendment the repair block makes where it meets that pass's spent
+    allowance. That one is asked at the block rather than predicted above the
+    accounting because the clean-clone check sits between them and routes a
+    failed check away, so a prediction would record an abandonment by a pass
+    the run never reached. Both discard what they answer, which is the property
+    here; the count is what makes a third site somebody has to account for.
+    """
     calls = pre_stage_calls_in(
         COORDINATOR_SOURCE, story_inspection.account_after_verdict)
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert [node for node in calls if not isinstance(node, ast.Expr)] == []
 
     source = conftest.function_source(COORDINATOR_SOURCE, "run_story")

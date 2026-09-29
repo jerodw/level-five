@@ -2083,6 +2083,25 @@ def test_each_statement_extends_the_one_the_base_commit_carried(name):
 #: byte for byte against the revision it is being compared with.
 EFFORT_KEYS = ("effort", "effort_reason")
 
+#: The money ceilings, which are re-derived from a fresh window of run records
+#: whenever the workload grows under them — most recently on 2026-09-28, by the
+#: commit that raised the implementer's per-invocation allowance and the run
+#: ceiling with it. The run ceiling and its reason are declared at the top
+#: level of both definitions and the per-invocation ceiling and its reason on
+#: every stage, so the strip reaches both levels.
+#:
+#: These are stripped from *both* sides of the comparisons below where the
+#: effort keys are stripped from one, and the asymmetry is what each set is:
+#: story-209 added the effort keys, so the revisions being compared against
+#: declare none, while story-063 added these, so every revision declares them
+#: and what a re-derivation moves is the value. The reason for stripping them
+#: at all is EFFORT_KEYS' own: what each assertion is about is that nothing
+#: *else* about a definition moved, and a ceiling re-derived from a wider
+#: window of what runs actually cost is a fresh measurement rather than a
+#: change to what any stage does or to which stage does it.
+RUN_COST_KEYS = ("max_run_cost_usd", "max_run_cost_usd_reason")
+STAGE_COST_KEYS = ("max_execution_cost_usd", "max_execution_cost_usd_reason")
+
 
 def without_effort(definition: dict) -> dict:
     """`definition` with the effort declarations story-209 added removed."""
@@ -2099,13 +2118,33 @@ def without_effort(definition: dict) -> dict:
     return stripped
 
 
+def without_cost_ceilings(definition: dict) -> dict:
+    """`definition` with the money ceilings removed, at both levels they are
+    declared at."""
+    stripped = {key: value for key, value in definition.items()
+                if key not in RUN_COST_KEYS}
+    stripped["stages"] = [
+        {key: value for key, value in stage.items()
+         if key not in STAGE_COST_KEYS}
+        for stage in definition.get("stages", [])
+    ]
+    return stripped
+
+
+def as_pinned(definition: dict) -> dict:
+    """A definition reduced to what the two comparisons below hold byte for
+    byte: everything but the effort declarations and the money ceilings.
+    Applied to both sides, so what each equality is over is every other key of
+    every stage."""
+    return without_cost_ceilings(without_effort(definition))
+
+
 @pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
 def test_everything_but_the_statement_is_byte_identical_to_the_base_commit(name):
-    before = baseline_definition(name)
-    after = without_effort(raw_definition(name))
+    before = as_pinned(baseline_definition(name))
+    after = as_pinned(raw_definition(name))
     assert set(before) == set(after)
-    for key in ("stages", "escalation_rules", "max_run_cost_usd",
-                "max_run_cost_usd_reason", "name"):
+    for key in ("stages", "escalation_rules", "name"):
         assert key in before
         assert after[key] == before[key], key
     assert {key for key in after if after[key] != before[key]} == {"applies_when"}
@@ -2136,6 +2175,32 @@ def definition_where_story_172_started(name: str) -> str:
                               validation_file=Path(__file__), bound=ENDPOINT)
 
 
+@pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
+def test_the_cost_ceilings_are_the_only_other_thing_the_stripping_removes(name):
+    """Control for the same two comparisons, and the other half of what the
+    named-key loop in the first of them used to buy.
+
+    Every revision those comparisons read declares both ceilings at both
+    levels, so the strip removes something real on each side of each of them —
+    a strip that had quietly removed nothing would leave them passing while
+    checking less — and the values really do differ across each pair, which is
+    why stripping is what the comparisons need rather than an equality.
+    """
+    revisions = (raw_definition(name), baseline_definition(name),
+                 json.loads(definition_where_story_172_started(name)))
+    for definition in revisions:
+        bare = without_cost_ceilings(definition)
+        assert set(definition) - set(bare) == set(RUN_COST_KEYS)
+        assert definition["stages"], name
+        for stage, stripped in zip(definition["stages"], bare["stages"]):
+            assert set(stage) - set(stripped) == set(STAGE_COST_KEYS), \
+                stage["name"]
+    shipped, baseline, started = revisions
+    for older in (baseline, started):
+        assert shipped["max_run_cost_usd"] != older["max_run_cost_usd"]
+    assert as_pinned(shipped) != without_effort(shipped)
+
+
 def test_since_story_172_started_only_the_two_statements_changed():
     """The definitions stand as story-070 declared them: each shipped
     definition differs from where story-172 started in applies_when and in
@@ -2144,8 +2209,8 @@ def test_since_story_172_started_only_the_two_statements_changed():
     held story-workflow.json to that revision is rebounded here to the same
     claim its sibling was already held to."""
     for name in SHIPPED_DEFINITIONS:
-        started = json.loads(definition_where_story_172_started(name))
-        after = without_effort(raw_definition(name))
+        started = as_pinned(json.loads(definition_where_story_172_started(name)))
+        after = as_pinned(raw_definition(name))
         assert set(started) == set(after), name
         assert {key for key in after if after[key] != started[key]} == {
             "applies_when"}, name

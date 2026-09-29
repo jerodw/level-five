@@ -2266,6 +2266,21 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "lands on — the module builds it under tmp_path, and every absence it "
         "asserts of a shipped document is controlled by the same check against "
         "the same declaration with the violation planted in it",
+    "test_a_completed_run_says_what_became_of_its_findings.py":
+        "every run it drives goes through a workflow it derives from a built "
+        "one and a target it constructs, because the stage list, the artifact "
+        "names and the two pass allowances are inputs to what a spent allowance "
+        "leaves behind. The one thing it resolves live is what its last "
+        "criterion is about: the text of schemas/execution-history.schema.json "
+        "and schemas/cross-run-history.schema.json, whose descriptions of the "
+        "field carrying the count of what a run abandoned are two of the six "
+        "shipped texts the story brings into line, the claim being that no text "
+        "this repository ships still says the event stream is the whole of what "
+        "becomes of such a finding. A fixture schema would say back only what "
+        "the module had written into it and could say nothing about what this "
+        "repository ships, and the absence asserted of each of those texts is "
+        "controlled by the same reading over the same text with the superseded "
+        "sentence planted back into it",
     "test_a_completed_story_is_inspected.py":
         "every run it drives goes through a workflow it builds, against a "
         "target repository it constructs and configures, because the stage "

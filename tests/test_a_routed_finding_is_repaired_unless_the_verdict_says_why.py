@@ -511,11 +511,14 @@ def test_declined_accounting_marks_a_reason_given_or_not_per_left_finding():
     # `dropped` is story-202's addition beside `reason_given`, and it is false
     # here for the reason it is written at all: a caller that names no dropped
     # slug — which is every caller this test is about — records every left
-    # finding as one the run files rather than drops.
+    # finding as one the run files rather than drops. `abandoned` is
+    # story-213's, on exactly those terms: a caller that names no abandoned
+    # slug records every left finding as one a pass allowance did not refuse.
     assert declined == [
         {SLUG: OWN_FINDING["slug"], "reason_given": True,
-         REASON: DECLINED_ENTRY[REASON], "dropped": False},
-        {SLUG: BOTH_FINDING["slug"], "reason_given": False, "dropped": False},
+         REASON: DECLINED_ENTRY[REASON], "dropped": False, "abandoned": False},
+        {SLUG: BOTH_FINDING["slug"], "reason_given": False, "dropped": False,
+         "abandoned": False},
     ]
     assert story_inspection.declined_accounting([], reasons) == []
 
@@ -544,12 +547,14 @@ def test_write_accounting_without_declined_records_every_left_as_silent(
         FINDINGS_ARTIFACT, 1)).read_text(encoding="utf-8"))
     assert recorded["remainder_slugs"] == [OWN_FINDING["slug"],
                                            BOTH_FINDING["slug"]]
-    # `dropped` false on every entry, for the reason the test beside this one
-    # records: a caller that names no dropped slug records every left finding
-    # as one the run files.
+    # `dropped` and `abandoned` false on every entry, for the reason the test
+    # beside this one records: a caller that names no dropped slug and no
+    # abandoned one records every left finding as one the run files.
     assert recorded["declined"] == [
-        {SLUG: OWN_FINDING["slug"], "reason_given": False, "dropped": False},
-        {SLUG: BOTH_FINDING["slug"], "reason_given": False, "dropped": False},
+        {SLUG: OWN_FINDING["slug"], "reason_given": False, "dropped": False,
+         "abandoned": False},
+        {SLUG: BOTH_FINDING["slug"], "reason_given": False, "dropped": False,
+         "abandoned": False},
     ]
     assert recorded["declined_with_reason"] == 0
     assert recorded["declined_without_reason"] == 2

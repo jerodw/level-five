@@ -1205,8 +1205,19 @@ def test_no_stage_is_invoked_past_the_budget(exhausted_run):
 def test_the_spent_budgets_findings_are_recorded_in_the_event_stream(
     exhausted_run,
 ):
-    """The bound is not silence: what the run declines to repair is named
-    where a developer meets it, once, on the verdict the budget refused."""
+    """The bound is not silence: what the run declines to repair is named in
+    the event stream, once, on the verdict the budget refused.
+
+    Named there and no longer only there, on exactly the terms the correction
+    pass's own spent-budget test states: the event stream lives in a run
+    directory the story's cleanup deletes, so story-213 gave this entry a count
+    of what the spent allowance abandoned, which is what reaches the
+    repository's committed history, and made the completion report account for
+    each abandoned finding individually and say that it is going to the backlog
+    like every other finding the verdict left.
+    `tests/test_a_completed_run_says_what_became_of_its_findings.py` holds all
+    of that; what this test holds is the naming.
+    """
     _, _, run_dir = exhausted_run
     recorded = events_of_kind(run_dir, RECORDED)
     assert len(recorded) == 1

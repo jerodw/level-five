@@ -811,8 +811,18 @@ def test_no_stage_is_invoked_a_third_time(exhausted_run):
 def test_the_second_verdicts_findings_are_recorded_in_the_event_stream(
     exhausted_run,
 ):
-    """The bound is not silence: what the run declines to correct is named
-    where a developer meets it."""
+    """The bound is not silence: what the run declines to correct is named in
+    the event stream.
+
+    Named there and no longer only there. The event stream lives in the run
+    directory, which the story's cleanup deletes, so story-213 gave this entry
+    a count of what the spent allowance abandoned — that count is what reaches
+    the repository's committed history — and made the completion report account
+    for each abandoned finding individually and say that it is going to the
+    backlog like every other finding the verdict left. All of that is held by
+    `tests/test_a_completed_run_says_what_became_of_its_findings.py`; what this
+    test holds is the naming.
+    """
     _, _, run_dir = exhausted_run
     recorded = [e for e in history_of(run_dir)
                 if e["event"] == "correction-pass-recorded"]

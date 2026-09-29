@@ -134,6 +134,23 @@ DROPPED = "dropped"
 #: the accessor that reads them back rather than written twice.
 DROPPED_SLUGS = "dropped_slugs"
 
+#: What a *later* story added to the accounting artifact, and to each declined
+#: entry, beside what this story added. Named here rather than the two
+#: equalities below being loosened into containment checks, which is the shape
+#: `tests/test_a_brief_is_not_only_a_defect.py` uses for the same problem — and
+#: held shut from both sides, so a field the writers gain without an entry here
+#: fails on the equality and an entry naming a field they no longer write fails
+#: on the presence check beside it.
+#:
+#: story-213's three are the abandonment a spent pass allowance leaves: two
+#: lists on the artifact and a marker on every declined entry. They are not
+#: about dropping and this story's claim is only about what *it* added, so
+#: excluding them by name is what keeps that claim an equality. The claim they
+#: carry is held by
+#: `tests/test_a_completed_run_says_what_became_of_its_findings.py`.
+FIELDS_ADDED_SINCE = ("abandoned_slugs", "abandoned_by_spent_allowance")
+ENTRY_FIELDS_ADDED_SINCE = ("abandoned",)
+
 #: The module whose text this repository's history is asked about, and the
 #: relative path of each prompt, composed from what `verifier_prompts` found
 #: so nothing here names a prompt file.
@@ -740,6 +757,12 @@ def test_a_verdict_dropping_nothing_writes_the_artifact_it_wrote_before(
     accounting artifact carried before this story, with the values it had,
     and everything this story added is about dropping and says nothing
     happened. The line carries no drop clause and the filing is what it was.
+
+    What a later story added to the same two writers is named in
+    `FIELDS_ADDED_SINCE` and `ENTRY_FIELDS_ADDED_SINCE` and excluded here, so
+    both comparisons stay equalities rather than becoming containment checks:
+    the claim is about what *this* story added, and a field somebody else added
+    for another reason is neither evidence for it nor against it.
     """
     run = driven(findings=[OWN_FINDING, BOTH_FINDING])
 
@@ -747,7 +770,11 @@ def test_a_verdict_dropping_nothing_writes_the_artifact_it_wrote_before(
     recorded = accounting(run)
     before = keys_written_at_baseline("write_accounting")
     assert before <= set(recorded), before - set(recorded)
-    added = set(recorded) - before
+    # Held shut from the other side: every field declared as added since is one
+    # the writer still writes, so a name left there after its field went away
+    # fails here rather than quietly excusing nothing.
+    assert set(FIELDS_ADDED_SINCE) <= set(recorded)
+    added = set(recorded) - before - set(FIELDS_ADDED_SINCE)
     assert added, "this story added a field to the accounting artifact"
     for name in added:
         assert "drop" in name, name
@@ -760,7 +787,9 @@ def test_a_verdict_dropping_nothing_writes_the_artifact_it_wrote_before(
 
     entry_before = keys_written_at_baseline("declined_accounting")
     for entry in recorded["declined"]:
-        assert set(entry) - entry_before == {DROPPED}, entry
+        assert set(ENTRY_FIELDS_ADDED_SINCE) <= set(entry), entry
+        assert set(entry) - entry_before - set(ENTRY_FIELDS_ADDED_SINCE) \
+            == {DROPPED}, entry
         assert entry[DROPPED] is False
 
     assert "not worth filing" not in the_accounting_line(run)

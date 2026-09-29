@@ -765,6 +765,22 @@ def correction_pass_problems(stages: list[dict]) -> list[str]:
     A workflow carrying no declaration is not checked — that is how the whole
     mechanism is switched off. No stage name is written here; it comes off the
     loaded definition.
+
+    The budget is checked here too, and **zero is accepted where the repair
+    pass beside it refuses zero**. The asymmetry is what a zero means to each.
+    A declared correction budget of zero is a switch read at its other end: the
+    mechanism is on, no pass may be routed, and the findings are recorded in
+    the spent-budget event and abandoned to the backlog, which is a deliberate
+    setting a target can want. An *absent* or unusable budget is not a setting
+    at all — nobody declared an allowance — and `pass_budget` answers zero for
+    it, so every reader downstream reads a definition defect as an allowance
+    that has been spent: the run completes, and every finding the verdict
+    named for a correction is recorded as abandoned by an allowance that was
+    never declared. That is a run continuing in a degraded state on a
+    definition no run under it could ever use, so it stops here instead, where
+    it costs a refused run rather than a whole workflow. What counts as a
+    budget at all is `_is_a_pass_budget`, shared with the repair pass's check
+    and with `pass_budget`; only the reading of zero is this check's own.
     """
     declaration = correction_pass_declaration(stages)
     if not declaration:
@@ -781,6 +797,14 @@ def correction_pass_problems(stages: list[dict]) -> list[str]:
             f"the correction_pass declaration names stage '{entry}', which "
             f"the loaded workflow does not define; it defines: "
             f"{', '.join(names)}"
+        ]
+    budget = declaration.get("budget")
+    if not _is_a_pass_budget(budget):
+        return [
+            f"the correction_pass declaration carries the budget {budget!r}, "
+            f"which is not a non-negative integer; a declared zero means no "
+            f"pass may be routed, and a missing or unusable one would be read "
+            f"as an allowance that is already spent"
         ]
     return []
 
@@ -807,7 +831,10 @@ def repair_pass_problems(stages: list[dict]) -> list[str]:
         if not declaration:
             continue
         budget = declaration.get("budget")
-        if isinstance(budget, bool) or not isinstance(budget, int) or budget < 1:
+        # Through the shared predicate plus this check's own reading of zero,
+        # so what counts as a budget at all is one rule and only the zero
+        # differs between the two passes.
+        if not _is_a_pass_budget(budget) or budget < 1:
             problems.append(
                 f"stage '{stage['name']}' declares a repair_pass budget of "
                 f"{budget!r}, which is not a positive integer"
@@ -7695,6 +7722,74 @@ def self_route(
 # off the loaded definition, as every other route does.
 
 
+def _is_a_pass_budget(value) -> bool:
+    """Whether a declared pass budget is a value a budget can take.
+
+    A non-negative integer, and not a bool: `isinstance(True, int)` holds, so a
+    bare integer test would accept a declaration of `true` as an allowance of
+    one. Sitting beside `_is_a_ceiling`, which asks the same kind of question
+    of a money ceiling, and written once because three readers ask it — the two
+    pre-flights that refuse a declaration carrying no usable budget, and
+    `pass_budget`, which answers zero for one. Two spellings of it would be two
+    spellings that can disagree about what a run may be started under, and the
+    disagreement would show up as a run refused for a budget another reader was
+    happy with, or worse, one admitted for a budget nothing can spend. What it
+    does *not* decide is whether zero is acceptable: that differs between the
+    two passes, so each check says so for itself.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def pass_budget(declaration: dict) -> int:
+    """How many passes of one kind a run may take, off that pass's declaration.
+
+    The one reading, and the reason it is one is that the coordinator asks the
+    same question in three places — the correction block, the repair block, and
+    `abandoned_routed_slugs`, which says what a spent allowance leaves behind.
+    Two readings of one declaration are two readings that can come to disagree
+    about what an absent or unusable value means, and the disagreement is
+    invisible: a block indexing the key raises where a predicate defaulting it
+    to zero reads every finding as abandoned, so the same run would crash and
+    record an abandonment for findings nothing ever refused a pass for.
+
+    A declaration carrying no usable count answers zero, which every reader
+    then reads as an allowance with nothing left: no pass is routed for it and
+    the findings it named are recorded as abandoned, so nothing goes silently
+    nowhere. **A run under a definition declaring either pass once reaches
+    here with no such declaration**, because both pre-flights refuse one before
+    any run state is created — `correction_pass_problems` and
+    `repair_pass_problems`, each naming the value — so the zero this answers
+    for an unusable count is what a caller outside a run gets rather than what
+    a run is decided by. Declaring one pass twice is out of contract for the
+    older reason `correction_pass_declaration` records, and is the one shape
+    that could still reach here. What counts as a budget at all is
+    `_is_a_pass_budget`, the one predicate the two pre-flights are decided by
+    too, so this and they cannot come to disagree about what is unusable.
+    A *declared* zero is a different thing and is answered as itself: the
+    correction pass admits it as the switch that routes no pass, and the repair
+    pass's pre-flight refuses it, each for the reason its own check records.
+    """
+    budget = declaration.get("budget")
+    return budget if _is_a_pass_budget(budget) else 0
+
+
+def pass_allowance_spent(declaration: dict, findings, count: int) -> bool:
+    """Whether the pass this declaration names has no allowance left to run
+    for `findings`.
+
+    The one predicate behind both pass blocks and behind the record of what a
+    spent allowance abandoned, for `pass_budget`'s reason: what makes an
+    allowance spent is one rule rather than one per reader. A declaration
+    naming no result artifact and a verdict naming no finding of that kind are
+    each a pass there is nothing to run, so neither is spent — the mechanism is
+    switched off by the declaration's absence, and a verdict asking for nothing
+    meets no allowance.
+    """
+    if not declaration.get("result") or not findings:
+        return False
+    return count >= pass_budget(declaration)
+
+
 def correction_pass_declaration(stages: list[dict]) -> dict:
     """The workflow's correction-pass declaration, wherever a stage carries it.
 
@@ -8077,11 +8172,19 @@ def _correction_pass_recorded(
     story is cleaned up, so a finding named there and nowhere else went
     nowhere; `abandoned` is projected into the cross-run inspection log, where
     it outlives the run and is what tells this record apart from the three
-    kinds of record beside it. What became of each of them, and the account a
-    developer reads, is in the completion report: a finding abandoned here is
-    left by the verdict, so the accounting after that verdict carries it in
-    the remainder and the filing at the run's completion sends it to the
-    backlog like every other finding the verdict left.
+    kinds of record beside it.
+
+    **It counts every finding the verdict named for the pass, and the
+    completion report's account covers the routed ones.** The verifier may
+    name a finding of its own in the same array as one the inspection routed
+    to the story — the prompt says so outright — and both are abandoned here.
+    A routed one is left by the verdict, so the accounting after that verdict
+    carries it in the remainder, the report's account names it and the filing
+    at the run's completion sends it to the backlog like every other finding
+    the verdict left. A verifier's own has no routed finding for the account
+    to be about and reaches no backlog, so this count and the message beside
+    it are the whole of what is recorded for it — which is a gap this record
+    makes visible rather than one it closes.
     """
     named = "; ".join(
         f"{finding.get('location')}: {finding.get('finding')}"
@@ -8351,11 +8454,16 @@ def _repair_pass_recorded(
     `_correction_pass_recorded` states above: the event stream lives in a
     gitignored run directory that the story's cleanup deletes, and `abandoned`
     is projected into the cross-run inspection log, where it outlives the run
-    and is the field that tells this record from the three kinds beside it. A
-    finding abandoned here is left by the verdict, so the accounting after
-    that verdict carries it in the remainder, the filing at the run's
-    completion sends it to the backlog like every other finding the verdict
-    left, and the completion report's account says which of them it was.
+    and is the field that tells this record from the three kinds beside it.
+
+    It counts every finding the verdict named for the pass, which the section
+    above states in full and which is the same split here: a routed finding is
+    left by the verdict, so the accounting after that verdict carries it in the
+    remainder, the completion report's account names it, and the filing at the
+    run's completion sends it to the backlog like every other finding the
+    verdict left — while a finding the verifier raised itself was routed by
+    nothing, so the account has no routed finding to be about and this count is
+    the whole of what is recorded for it.
     """
     named = "; ".join(
         f"{finding.get('location')}: {finding.get('finding')}"
@@ -8775,87 +8883,6 @@ def refused_routed_slugs(
     return tuple(named)
 
 
-def abandoned_routed_slugs(
-    stage: dict, verdict: dict, state: RunState, routed_slugs=()
-) -> dict[str, str]:
-    """The routed slugs the verdict named for a pass its allowance refuses,
-    each with the reason, in the order the findings were named.
-
-    A verdict that asks for a finding to be corrected or repaired and meets a
-    spent allowance leaves that finding nowhere: the pass the verifier asked
-    for cannot be run, the verdict named the slug so the accounting would read
-    it as acted on, and the filing at completion skips anything already marked
-    as answered. So the slugs are handed to the accounting through the seam a
-    refused scope extension already uses, and the reason travels with each so
-    the account in the completion report can say which allowance ran out.
-
-    Decided from the state, the stage's own declarations and the verdict, all
-    of which this reads and none of which it changes: it is asked before the
-    accounting, which runs before the pass blocks check their own budgets, and
-    the blocks below still make the decision that acts. A verdict that did not
-    pass abandons nothing, because both pass blocks are on the passing route.
-
-    The repairable findings are put to their allowance only where the
-    correction block does not route, which is what the coordinator does one
-    block further down: a correction pass that routes defers them to the
-    verification it returns to rather than leaving them, and the repair
-    allowance is asked about there. Where the correction allowance is spent
-    the correction block records and falls through, so both allowances can be
-    met on one verdict and both abandonments are accounted.
-    """
-    if verdict.get("status") != "passed":
-        return {}
-    correction = stage.get("correction_pass") or {}
-    repair = stage.get("repair_pass") or {}
-    correctable = verdict.get("correctable_findings") or []
-    repairable = verdict.get("repairable_findings") or []
-    correction_declared = bool(correction.get("result")) and bool(correctable)
-    correction_spent = (
-        correction_declared
-        and state.correction_pass_count >= correction.get("budget", 0)
-    )
-    abandoned: dict[str, str] = {}
-    if correction_spent:
-        abandoned.update(_abandoned_among(
-            correctable, routed_slugs,
-            f"the correction pass allowance of "
-            f"{correction.get('budget')} was already spent, so no pass could "
-            f"be run for it",
-        ))
-    # Reached where the correction block does not route — either because it
-    # declared or carried nothing, or because its own allowance is spent and
-    # it records and falls through.
-    if not (correction_declared and not correction_spent):
-        if (repair.get("result") and repairable
-                and state.repair_pass_count >= repair.get("budget", 0)):
-            abandoned.update(_abandoned_among(
-                repairable, routed_slugs,
-                f"the repair pass allowance of {repair.get('budget')} was "
-                f"already spent, so no pass could be run for it",
-            ))
-    return abandoned
-
-
-def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
-    """The routed slugs a set of abandoned findings' locations name, each with
-    `reason`, first naming winning.
-
-    Decided by `names_a_slug`, the one rule `refused_routed_slugs` beside it
-    is decided by, so a refusal and an abandonment cannot disagree about which
-    routed finding a verdict entry was about.
-    """
-    named: dict[str, str] = {}
-    for finding in findings:
-        if not isinstance(finding, dict):
-            continue
-        location = finding.get("location")
-        for slug in routed_slugs:
-            if (isinstance(slug, str) and slug and slug not in named
-                    and story_inspection.names_a_slug(location, (slug,))):
-                named[slug] = reason
-    return named
-
-
 def verdict_after_refusals(
     verdict: dict, check: ScopeExtensionCheck, routed_slugs=()
 ) -> dict:
@@ -8975,6 +9002,103 @@ def scope_extension_grant_line(stage_name: str, granted: GrantedExtension) -> st
         f"judged that reason to speak to another concern: "
         f"{granted.judgement.entry} — {granted.judgement.reading}"
     )
+
+
+# These two sit below the scope-extension section rather than among it, and
+# the placement is the assertion's rather than taste: story-183's rule that no
+# budget key is read for an extension is held by slicing this module's source
+# between `def scope_extension_check` and `def repair_pass_extensions`, and a
+# function reading a pass allowance inside that window is reported by it. What
+# the rule says is still true — an extension reads no budget — and these read
+# one because they are about an allowance rather than about an extension.
+#: Which declaration key, which of the verdict's finding arrays, which count
+#: on the state and which words name one pass. One row per pass rather than a
+#: parameter per part, so a caller names the pass it is asking about and
+#: nothing at a call site spells the four halves of one kind separately.
+PASSES = {
+    "correction_pass": ("correctable_findings", "correction_pass_count",
+                        "correction pass"),
+    "repair_pass": ("repairable_findings", "repair_pass_count",
+                    "repair pass"),
+}
+
+
+def abandoned_routed_slugs(
+    stage: dict, verdict: dict, state: RunState, routed_slugs=(), *, kind: str
+) -> dict[str, str]:
+    """The routed slugs the verdict named for the pass `kind` where that pass's
+    allowance refuses to run, each with the reason, in the order the findings
+    were named.
+
+    A verdict that asks for a finding to be corrected or repaired and meets a
+    spent allowance leaves that finding nowhere: the pass the verifier asked
+    for cannot be run, the verdict named the slug so the accounting would read
+    it as acted on, and the filing at completion skips anything already marked
+    as answered. So the slugs are handed to the accounting through the seam a
+    refused scope extension already uses, and the reason travels with each so
+    the account in the completion report can say which allowance ran out.
+
+    Decided from the state, the stage's own declarations and the verdict, all
+    of which this reads and none of which it changes; whether the allowance is
+    spent is `pass_allowance_spent` and the number is `pass_budget`, the same
+    two readings the blocks that act branch on, so this and they cannot come
+    to disagree about what a spent allowance is. A verdict that did not pass
+    abandons nothing, because both pass blocks are on the passing route.
+
+    **It is asked about one pass at a time, by whichever site can answer for
+    that pass without predicting what the run will do next.** The ordering
+    between the two blocks was transcribed here once, and the transcription
+    was wrong twice in a way nothing could see. Writing a finding into the
+    record as dealt with when nothing dealt with it is the class of false
+    record this whole mechanism exists to remove, and a prediction made above
+    the accounting does exactly that for every route that ends the run before
+    the block it predicted — the findings are recorded as abandoned and no
+    spent-budget event fires for them, so the count and the accounting
+    disagree. The clean-clone check was the first such route: it sits between
+    the two blocks and takes a failed check away before the repair block is
+    reached, which is why the repair pass's question is asked **at its block**,
+    where it amends the accounting the seam above already wrote. Two
+    escalations were the second: a malformed verdict and a correctable
+    category the routing table does not define each ended the run between the
+    accounting and the correction block. Those were moved **above** the
+    accounting instead, so the correction pass's question can still be asked
+    there — and the reason it is safe there is now a property of the code
+    rather than a claim made here, since every refusal that could stand
+    between is made before anything about the verdict is recorded.
+    """
+    findings_key, count_field, name = PASSES[kind]
+    if verdict.get("status") != "passed":
+        return {}
+    declaration = stage.get(kind) or {}
+    findings = verdict.get(findings_key) or []
+    if not pass_allowance_spent(declaration, findings,
+                                getattr(state, count_field)):
+        return {}
+    return _abandoned_among(
+        findings, routed_slugs,
+        f"the {name} allowance of {pass_budget(declaration)} was already "
+        f"spent, so no pass could be run for it",
+    )
+
+
+def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
+    """The routed slugs a set of abandoned findings' locations name, each with
+    `reason`, first naming winning.
+
+    Decided by `names_a_slug`, the one rule `refused_routed_slugs` is decided
+    by, so a refusal and an abandonment cannot disagree about which routed
+    finding a verdict entry was about.
+    """
+    named: dict[str, str] = {}
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        location = finding.get("location")
+        for slug in routed_slugs:
+            if (isinstance(slug, str) and slug and slug not in named
+                    and story_inspection.names_a_slug(location, (slug,))):
+                named[slug] = reason
+    return named
 
 
 # --------------------------------------------------------------------------
@@ -10414,17 +10538,23 @@ def _findings_account_section(account) -> str:
                 "the backlog with the rest: "
                 + _named_findings(account.abandoned) + "."
             )
-        if not body:
+        if body:
+            # Where the outcome of the filing is recorded, rather than what it
+            # was: this report is written and committed before the filing runs,
+            # so a count here would claim something that has not happened yet.
+            # It is said only where something was named above, because a run
+            # with nothing to send on has no filing outcome to point at.
+            body.append(
+                "Which of the briefs above reached the queue is not known when "
+                "this report is written, because the filing runs after the "
+                "completion commit: it is recorded in this run's events.log and "
+                "in the story's inspection log under the committed history."
+            )
+        else:
             body.append(
                 "This run's inspection found nothing to route to the story "
                 "and nothing to send on."
             )
-        body.append(
-            "Which of the briefs above reached the queue is not known when "
-            "this report is written, because the filing runs after the "
-            "completion commit: it is recorded in this run's events.log and "
-            "in the story's inspection log under the committed history."
-        )
     return "## Findings\n" + "\n\n".join(body) + "\n\n"
 
 
@@ -10531,12 +10661,14 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
             f"{account.problem}",
             file=sys.stderr,
         )
+        # A note, which is append_event's default kind: one kind is spelled
+        # in one function, and `note` is already run_story's to spell — the
+        # same reason the end-of-run note above names no kind either.
         append_event(
             run_dir,
             f"the account of what became of this run's findings could not be "
             f"derived: {account.problem}; the completion report says so in "
             f"place of the account",
-            kind="note",
         )
     append_event(
         run_dir,
@@ -12684,25 +12816,127 @@ def run_story(
                 )
                 refused_slugs = refused_routed_slugs(extensions, routed_named)
                 verdict = verdict_after_refusals(verdict, extensions, routed_named)
-            # And the routed slugs a spent pass allowance abandons. The same
-            # seam as the refusals for the same reason: the verdict names the
-            # slug, so the accounting would read it as acted on and the filing
-            # at completion would skip it, and the finding would go nowhere.
-            # Decided here, above the accounting, because the accounting runs
-            # before the pass blocks check their own budgets; the blocks below
-            # still make the decision that acts, and this reads the state and
-            # the declarations and changes neither. Both the writing path and
-            # the amending path of the accounting are handed it, since a
-            # verdict can find an allowance spent on its first pass through an
-            # attempt and on the returning verdict of a later one.
+            # Every refusal a passing verdict can meet before its correction
+            # block is made here, above everything the run records about that
+            # verdict, and the ordering is the record's rather than taste. The
+            # accounting below reads a routed slug the verdict named for a pass
+            # as acted on unless the coordinator says otherwise, and one of the
+            # things that says otherwise is the correction pass's allowance
+            # being spent — decided just below. A verdict the run is about to
+            # escalate on must therefore meet its refusals before any of that
+            # is written, or a finding is recorded as abandoned by a pass the
+            # run never reached, with no spent-budget event beside it, which is
+            # the false record this accounting exists to remove written the
+            # other way round. Two refusals move up here for it: a finding of
+            # either kind the routing table cannot route, and a correctable
+            # category that table does not define. Each is read once and the
+            # correction block acts on what this settled, so there is one
+            # reading of each rather than one per site.
+            #
+            # The declarations below are what both refusals and both pass
+            # blocks are decided from, hoisted with them so each is spelled
+            # once. The repairable findings the first refusal is asked about
+            # are the ones the verifier wrote rather than the ones the bounds
+            # above left, for the reason recorded where they were read.
+            declared = ", ".join(routes) or "no retry categories"
+            correction = stage.get("correction_pass") or {}
+            correction_artifact = correction.get("result")
+            findings = verdict.get("correctable_findings") or []
+            repair = stage.get("repair_pass") or {}
+            repair_artifact = repair.get("result")
+            repairable = verdict.get("repairable_findings") or []
+            correction_routing = None
+            if verdict.get("status") == "passed":
+                # A malformed verdict stops before the correction pass routes
+                # and before the clean-clone check spends a suite run on it:
+                # the categories of both kinds of finding are held to the
+                # routing table, and a path of either kind that ends in a
+                # slash — a directory where the rule grants one file — is
+                # refused naming the path. Each escalates through _escalate,
+                # so retry_count is untouched and nothing is archived, for the
+                # reason the unroutable-retry escalations sit above the
+                # ceiling: a defect in what the verifier produced is the reason
+                # a developer should read, not the budget. Each kind is
+                # validated only where its pass is declared, so a workflow
+                # declaring neither routes the verdict exactly as it did before
+                # this existed. The routing and budget decisions for each kind
+                # stay in the two blocks below.
+                malformed = _malformed_findings(
+                    correction_artifact and findings or [],
+                    repair_artifact and repairable_as_written or [],
+                    routes,
+                )
+                if malformed is not None:
+                    return _escalate(
+                        run_dir,
+                        state,
+                        f"{malformed}; {workflow['name']} defines: {declared}",
+                        target_root=target_root,
+                        harness_root=harness_root,
+                        duration_seconds=elapsed(),
+                        verifier_outcome=verdict.get("status"),
+                        retry_decision="escalate",
+                        retry_reason=malformed,
+                    )
+                if correction_artifact and findings:
+                    # Where a correction pass would enter, resolved once here
+                    # so the block below routes on what this settled. Its
+                    # unknown-category refusal is unreachable after the
+                    # validation beside it and is kept as the routing's own
+                    # strictness — this block would refuse such a category even
+                    # if nothing above had — and it moved up with that
+                    # validation rather than staying below the record, because
+                    # a refusal left behind is a refusal the record precedes.
+                    correction_routing = correction_destination(
+                        correction, findings, routes
+                    )
+                    if correction_routing.unknown:
+                        named = ", ".join(
+                            f"'{one}'" for one in correction_routing.unknown
+                        )
+                        return _escalate(
+                            run_dir,
+                            state,
+                            f"a correctable finding named {named}, which is "
+                            f"not a retry category {workflow['name']} defines; "
+                            f"it defines: {declared}",
+                            target_root=target_root,
+                            harness_root=harness_root,
+                            duration_seconds=elapsed(),
+                            verifier_outcome=verdict.get("status"),
+                            retry_decision="escalate",
+                            retry_reason=(
+                                f"a correctable finding named the unknown "
+                                f"category {named}"
+                            ),
+                        )
+            # And the routed slugs the correction pass's spent allowance
+            # abandons. The same seam as the refusals for the same reason: the
+            # verdict names the slug, so the accounting would read it as acted
+            # on and the filing at completion would skip it, and the finding
+            # would go nowhere. Both the writing path and the amending path of
+            # the accounting are handed it, since a verdict can find an
+            # allowance spent on its first pass through an attempt and on the
+            # returning verdict of a later one.
+            #
+            # The *correction* pass alone is asked about here, and it is asked
+            # here only because the block above has already made every refusal
+            # that stood between this point and the correction block, so what
+            # that block will do with its allowance is settled. The repair pass
+            # is not asked about here: the clean-clone check sits between the
+            # two blocks and a failed check takes the retry route, so an
+            # abandonment predicted here would be recorded against a pass the
+            # run never reached. It is recorded in the repair block instead,
+            # where the allowance is met.
+            if declared_inspection and not routed_named:
+                routed_named = story_inspection.findings_slugs(
+                    run_dir, declared_inspection, attempt
+                )
             abandoned: dict = {}
             if declared_inspection:
-                if not routed_named:
-                    routed_named = story_inspection.findings_slugs(
-                        run_dir, declared_inspection, attempt
-                    )
                 abandoned = abandoned_routed_slugs(
-                    stage, verdict, state, routed_named
+                    stage, verdict, state, routed_named,
+                    kind="correction_pass",
                 )
             routed_slugs: tuple = ()
             if declared_inspection:
@@ -12718,7 +12952,6 @@ def run_story(
             # The artifacts an entry names come off the stage's declared
             # outputs in the loaded workflow, never a list written here.
             outputs = stage.get("outputs", [])
-            declared = ", ".join(routes) or "no retry categories"
             target = verdict.get("retry_target")
             if verdict.get("status") == "passed":
                 append_event(
@@ -12764,75 +12997,18 @@ def run_story(
                 # writes. Both names come off the one declaration, exactly as
                 # clean_clone's do, so removing that key disables the whole
                 # mechanism with no change here and the same verdict completes
-                # the run as it did before this existed.
-                correction = stage.get("correction_pass") or {}
-                correction_artifact = correction.get("result")
-                findings = verdict.get("correctable_findings") or []
-                repair = stage.get("repair_pass") or {}
-                repair_artifact = repair.get("result")
-                repairable = verdict.get("repairable_findings") or []
-
-                # A malformed verdict stops here, before the correction pass
-                # routes and before the clean-clone check spends a suite run
-                # on it: the categories of both kinds of finding are held to
-                # the routing table, and a path of either kind that ends in a
-                # slash — a directory where the rule grants one file — is
-                # refused naming the path. Each escalates through _escalate,
-                # so retry_count is untouched and nothing is archived, for the
-                # reason the unroutable-retry escalations sit above the
-                # ceiling: a defect in what the verifier produced is the
-                # reason a developer should read, not the budget. Each kind is
-                # validated only where its pass is declared, so a workflow
-                # declaring neither routes the verdict exactly as it did
-                # before this existed. The routing and budget decisions for
-                # each kind stay in the two blocks below. The repairable
-                # findings are asked about as the verifier wrote them, not
-                # as the bounds above left them — see where they were read.
-                malformed = _malformed_findings(
-                    correction_artifact and findings or [],
-                    repair_artifact and repairable_as_written or [],
-                    routes,
-                )
-                if malformed is not None:
-                    return _escalate(
-                        run_dir,
-                        state,
-                        f"{malformed}; {workflow['name']} defines: {declared}",
-                        target_root=target_root,
-                        harness_root=harness_root,
-                        duration_seconds=elapsed(),
-                        verifier_outcome=verdict.get("status"),
-                        retry_decision="escalate",
-                        retry_reason=malformed,
-                    )
-
+                # the run as it did before this existed. The declaration, the
+                # findings and where a pass would enter were all read above,
+                # where the refusals this block would otherwise have made are
+                # now made.
                 if correction_artifact and findings:
-                    routing = correction_destination(correction, findings, routes)
-                    if routing.unknown:
-                        # Unreachable since the validation above, and kept as
-                        # the routing's own strictness: a category the table
-                        # does not define is a bug in what the verifier
-                        # produced, and this block would refuse it even if
-                        # nothing above had.
-                        named = ", ".join(f"'{one}'" for one in routing.unknown)
-                        return _escalate(
-                            run_dir,
-                            state,
-                            f"a correctable finding named {named}, which is "
-                            f"not a retry category {workflow['name']} defines; "
-                            f"it defines: {declared}",
-                            target_root=target_root,
-                            harness_root=harness_root,
-                            duration_seconds=elapsed(),
-                            verifier_outcome=verdict.get("status"),
-                            retry_decision="escalate",
-                            retry_reason=(
-                                f"a correctable finding named the unknown "
-                                f"category {named}"
-                            ),
-                        )
-                    budget = correction["budget"]
-                    if state.correction_pass_count >= budget:
+                    routing = correction_routing
+                    # The allowance and the number through the two readings the
+                    # record of what a spent one abandons is decided by, so the
+                    # decision that acts and the record of it cannot disagree.
+                    budget = pass_budget(correction)
+                    if pass_allowance_spent(correction, findings,
+                                            state.correction_pass_count):
                         _correction_pass_recorded(run_dir, name, findings, budget)
                     else:
                         state.correction_pass_count += 1
@@ -13071,11 +13247,42 @@ def run_story(
                                 f"category {named}"
                             ),
                         )
-                    repair_budget = repair["budget"]
-                    if state.repair_pass_count >= repair_budget:
+                    # Through the same two readings the correction block above
+                    # branches on and the record of an abandonment is decided
+                    # by, so all three agree about what a spent allowance is.
+                    repair_budget = pass_budget(repair)
+                    if pass_allowance_spent(repair, repairable,
+                                            state.repair_pass_count):
                         _repair_pass_recorded(
                             run_dir, name, repairable, repair_budget
                         )
+                        # And the accounting is amended here, where the
+                        # allowance was met, rather than from a prediction made
+                        # above the clean-clone check: a verdict whose check
+                        # failed took the retry route above and never arrives,
+                        # so nothing is recorded as abandoned by a pass the run
+                        # did not reach. The accounting for this attempt was
+                        # written above with these slugs read as acted on —
+                        # the verdict named them for a pass — so it is corrected
+                        # through the seam a refusal discovered on a returning
+                        # verdict already uses: each moves from acted on to left
+                        # for the run's completion, carrying the allowance that
+                        # ran out as its ground, and the filing at completion
+                        # sends it on. A verdict naming no routed finding
+                        # abandons nothing and amends nothing.
+                        if declared_inspection:
+                            left = abandoned_routed_slugs(
+                                stage, verdict, state, routed_named,
+                                kind="repair_pass",
+                            )
+                            if left:
+                                story_inspection.account_after_verdict(
+                                    run_dir, target_root, config or {},
+                                    harness_root, state.story_id,
+                                    artifact=declared_inspection,
+                                    attempt=attempt, verdict=verdict,
+                                    abandoned=left,
+                                )
                     else:
                         state.repair_pass_count += 1
                         clean_clone_checked = bool(artifact)
