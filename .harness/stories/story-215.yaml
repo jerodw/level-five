@@ -1,0 +1,331 @@
+story:
+  id: story-215
+  title: The stage that writes a repaired fix's missing assertion is asked for it by name
+  description: |
+    The reviewing stage was recently told that when it finds a real problem
+    whose fix needs a new test, it should have the run fix the problem rather
+    than send it to the backlog — because the run re-enters at the stage that
+    owns the fix and then carries on through a stage whose only job is writing
+    tests. But nothing tells the reviewer to ask that stage for anything. On
+    such a pass the test stage is told, by the harness in its own voice and
+    again by its own instructions, that nothing names it and so there is
+    nothing for it to do. The promise is made and none of the texts that would
+    have to keep it agree to. The cost is invisible: a problem routed for
+    repair is recorded as dealt with, so nothing is filed for it afterwards,
+    and no line anywhere says the assertion was never written.
+
+    This story has the reviewer ask for the assertion by name. Where the fix it
+    is sending back needs standing validation that does not exist yet, it
+    records a second item beside the first, naming the file the assertion
+    belongs in and the category that owns that file, tied to the first by the
+    same problem. The run then enters at the stage that owns the code, carries
+    forward to the stage that writes tests, and that stage arrives holding an
+    item that names its file. No machinery moves: the harness already routes
+    one item per file under one problem, and already hands each stage the items
+    that name it.
+
+    It leaves alone which problems a run may repair in place, the limit of two
+    such passes, and the rule that a repair pass is not an invitation to
+    revisit the work — the assertion is asked for by name rather than taken as
+    licence. It leaves alone the reviewing stage's promise itself, which is
+    correct; what was missing is the instruction that makes it deliverable. One
+    claim in the request this was planned from turns out to be wrong and is
+    recorded here rather than carried forward: a test stage that wrote the
+    assertion unbidden would keep it, because nothing undoes an edit inside the
+    directory that stage is confined to. The gap is that it is told not to,
+    twice. So this is a story about an instruction, and its validation is
+    shaped so that it cannot pass on a change that merely looks right.
+
+    This story was planned from the brief filed under 374.
+
+    The surfaces. The instruction goes into the `repairable_findings` paragraph
+    of `prompts/story-verifier.md`, beside the sentence that already reads "A
+    fix spanning files is one finding per file, each naming the same slug in
+    `location` and carrying its own category" — the mechanism it extends. It
+    names no stage and no category, which is the constraint story-214
+    established for the two statements it added: the routing vocabulary reaches
+    that prompt only through `{{retry_routes}}`. The routing it rests on
+    already exists and is untouched. `repair_destination` resolves each
+    finding's category through the verifier's `retry_routing` table and enters
+    at the earliest resolved stage; the stage loop runs every later stage;
+    `_repair_pass_findings` hands each stage the findings whose resolved stage
+    is its own, and `repair_pass_grants` records their paths as that stage's to
+    change for that pass.
+
+    Consequences traced before the tasks and criteria were written. Another
+    path has to move in step, and it is the one that shapes this story: the
+    repairable paragraph is held byte-identical between
+    `prompts/story-verifier.md` and `prompts/refactor-verifier.md` by the
+    parity walk in
+    `tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py`,
+    which permits exactly one divergent sentence — story-214's, found by
+    `PERMITTED_DIVERGENCE_PHRASE` — so a second story-only sentence in a walked
+    passage is reported as drift. The walk is widened from one blessed sentence
+    to a list of them rather than dropped, and the reason is what it actually
+    holds: it does not pin the paragraphs whole, it sets aside the blessed
+    sentences and holds every remaining sentence of each walked passage to
+    reading the same in both prompts. Those remaining sentences are shared
+    mechanism — one file per finding, never a directory, never a blocked path,
+    the three bounds on reaching outside the story's scope, both kinds routing
+    as a correction pass — which the same coordinator runs for both workflows.
+    What needed to diverge was one sentence, not the paragraph.
+
+    On being right the second time through: the prompt text is static and
+    rendered on every verifier invocation — first verdict, retry, resume,
+    correction pass and repair pass alike — so nothing here behaves differently
+    on a later entry. The pair of findings costs one pass and not two, because
+    the `repair_pass` budget counts passes rather than findings, and that budget
+    of two is untouched. What is not obvious is that recording the pair moves
+    the entry to the *earliest* of the two resolved stages, which is why the
+    instruction carries the same hedge story-214's promise already carries — a
+    fix owned by a stage that runs before the one whose work is validation.
+    Without that bound, a pass whose fix belonged to a later stage would have
+    the assertion written before the fix it validates landed, and the suite run
+    after that stage's turn would go red.
+
+    On whether the validation can fail if the change is wrong: the text claims
+    carry controls against copies of the whole shipped prompt, as story-214's
+    do. The run claims are set beside the same run carrying only the first
+    finding, where the validating stage is granted nothing and is told it has
+    nothing to repair. What a run cannot discriminate is survival alone: a file
+    inside that stage's confinement is governed by no restriction, so it
+    survives whether or not it was granted. The discriminating claims are
+    therefore the grant record and the text the stage is handed; the survival
+    claim is asserted as the end state rather than as evidence of the grant,
+    and is recorded here as such so that a later reader does not take it for
+    more than it is.
+
+    Two written statements are made untrue. `.harness/docs/ARCHITECTURE.md`
+    says the repairable-findings passage is untouched between the two prompts,
+    and describes what the parity module asserts and what its recorded claim
+    says; the documenter corrects all of it. `tests/test_baseline_honesty.py`
+    records the parity module's claim as the prompts agreeing apart from one
+    statement each is separately held to, which a list of permitted statements
+    makes false.
+
+    Two of the questions found nothing, and they are these: no second
+    implementation is added, because no code is added at all and the fixture
+    driver the new module needs is per-module by this suite's own convention
+    with its plumbing taken from `tests/conftest.py`; and nothing new is read
+    from disk or from configuration, so there is no value that can be absent,
+    unwritable or unreadable and nobody new to be told about one. Adjacent to
+    the second but not an answer to it: no check can see a verdict that should
+    have recorded the second finding and did not. That is a judgement like
+    every other field of a verdict, held by the prompt and by the reviewer who
+    reads the pass record, not by a gate.
+  workflow: story-workflow
+
+tasks:
+  - Add to the repairable_findings paragraph of prompts/story-verifier.md the
+    instruction that where the fix a finding names needs standing validation that
+    does not exist yet, a second finding is recorded beside it naming the file the
+    assertion belongs in and the category that owns that file, tied to the first
+    by the same location — bounded to a fix owned by a stage that runs before the
+    one whose work is validation, and naming no stage and no category.
+  - Widen the parity walk's exemption from one blessed sentence to a list of them,
+    declaring the new statement's identifying phrase in the same one place
+    story-214's is declared, keeping every walked passage in the comparison and
+    removing no existing assertion or control.
+  - Write the standing validation in a module named for the claim: that the shipped
+    prompt of the workflow declaring a validating stage carries the instruction and
+    the other shipped verifier prompt does not, that the shipped routing reaches the
+    confined stage from the stage owning a fix to the code, and that a driven run
+    whose verdict carries the pair delivers the promise.
+  - Give that module the control the claim needs: the same run carrying only the
+    first finding, where the confined stage is granted nothing and is told it has
+    nothing to repair.
+  - Correct the recorded claim in tests/test_baseline_honesty.py for the parity
+    module, which says today that the two prompts agree apart from one statement
+    each is separately held to.
+  - Record the change in .harness/docs/ARCHITECTURE.md, including that its own
+    account of the repairable passage as untouched between the two prompts, and its
+    account of what the parity module asserts, are no longer true.
+
+acceptance_criteria:
+  - The repairable_findings paragraph of the verifier prompt of the workflow that
+    declares a stage whose work is validation instructs that where a fix needs
+    standing validation that does not exist yet, a second finding is recorded
+    beside the first, naming the file the assertion belongs in and the category
+    that owns that file, tied to the first by the same location.
+  - That instruction is bounded to a fix owned by a stage that runs before the one
+    whose work is validation, so it does not ask for an assertion a pass would
+    write before the fix it validates lands.
+  - The instruction names no stage and no category: the routing vocabulary still
+    reaches that prompt only through the rendered routes.
+  - The verifier prompt of the workflow that declares no stage whose work is
+    validation carries no such instruction.
+  - Every rule the repairable paragraph already stated is still stated in both
+    shipped verifier prompts.
+  - The parity walk permits a list of divergent statements rather than a single
+    one, and each permitted statement is still asserted present in the prompt
+    whose workflow it is true of and absent from the other.
+  - Every sentence of every walked passage that neither prompt diverges on is
+    still held to reading the same in both: a sentence the two share, reworded in
+    a copy of either prompt, is still reported as drift.
+  - The phrase identifying each permitted divergence is declared in one place and
+    read both by the walk and by the claims about those statements, so the two
+    cannot disagree about which sentences may differ.
+  - In the workflow this repository ships that declares a stage confined to its
+    tests directory, the category that owns a defect in the code resolves to a
+    stage earlier in workflow order than that one, so a pass entering at the first
+    reaches the second.
+  - A driven run whose passing verdict carries two repairable findings under one
+    location — one whose category resolves to the stage that owns the fix, one
+    whose category resolves to the stage confined to the tests directory — takes
+    one pass, entering at the first of those stages.
+  - In that run the stage confined to the tests directory is invoked within the
+    pass, is handed the finding naming its file in the text the coordinator gives
+    it, and is not told it has nothing to repair.
+  - In that run the harness records the file that finding names as that stage's to
+    change for that pass.
+  - The file that stage wrote is in the target tree when the returning
+    verification runs.
+  - The same run carrying only the first finding is the control: the stage
+    confined to the tests directory is recorded as granted nothing and is told it
+    has nothing to repair.
+  - tests/test_baseline_honesty.py's recorded claim for the parity module
+    describes what the widened walk asserts.
+  - .harness/docs/ARCHITECTURE.md's account of the two verifier prompts'
+    repairable passage, and of what the parity module asserts, matches what they
+    now carry.
+
+technical_plan:
+  implementation_steps:
+    - Write the instruction into the repairable_findings paragraph of
+      prompts/story-verifier.md, immediately after the sentence saying a fix
+      spanning files is one finding per file sharing one location — that sentence
+      is the mechanism the instruction extends, and putting it there is what makes
+      the ask reach the verifier where it composes the field rather than a hundred
+      lines above it.
+    - Widen the parity walk in
+      tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py from
+      one permitted phrase to a list. Keep the existing singular name bound to
+      story-214's statement, so the module that imports it needs no change, and
+      declare the new phrase beside it. The count check becomes one per phrase and
+      the sentence-setting-aside drops a sentence carrying any of them; every other
+      sentence of every walked passage stays in the comparison.
+    - Write the new module. Its text claims read the shipped prompts through the
+      helpers that sibling module declares, as story-214's module does. Its run
+      claims build their own workflow through tests/conftest.py's builder, with the
+      validating stage confined to a tests directory and two categories routing to
+      the stage that owns the fix and to that confined stage.
+    - Correct the recorded claim for the parity module in
+      tests/test_baseline_honesty.py.
+    - Record the change in .harness/docs/ARCHITECTURE.md and correct its account of
+      the repairable passage and of what the parity module asserts.
+  likely_file_changes:
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: Carries the instruction, in the paragraph where a repairable finding
+        is composed and beside the sentence about a fix spanning files that it
+        extends.
+    - file: tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      stage: tester
+      reason: Declares the parity walk and the one permitted divergent statement,
+        which becomes a list of them, and is where the new statement's identifying
+        phrase is declared so the walk and the new module's claims cannot disagree.
+    - file: tests/test_a_verdict_asks_for_the_assertion_its_repair_needs.py
+      stage: tester
+      reason: The standing validation for the new claim — the shipped prompts, the
+        shipped routing, and a driven run whose verdict carries the pair, with the
+        control that carries only the first finding.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: Records the parity module's claim as the two prompts agreeing apart
+        from one statement, which a list of permitted statements makes false.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records this change and corrects its own account of the repairable
+        passage as untouched between the two prompts and of what the parity module
+        asserts.
+
+scope:
+  modify:
+    - prompts/story-verifier.md
+    - tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+    - tests/test_a_verdict_asks_for_the_assertion_its_repair_needs.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/refactor-verifier.md (that workflow declares no stage whose work is
+      validation, so an instruction to name the file an assertion belongs in would
+      name a file no stage there could be sent to write; its statement that it
+      authors no validation is the mirror this instruction is written against)
+    - prompts/story-tester.md (its repair-pass paragraph stays true exactly as
+      written: under this shape the test stage arrives holding a finding that names
+      its file, which is what that paragraph already tells it to act on, so the
+      contradiction the request located there is closed by the other prompt rather
+      than by editing this one)
+    - schemas/verification-result.schema.json (the repairable_findings description
+      is injected into both verifier prompts, so it cannot carry an instruction
+      true of only one workflow — the reason story-214 recorded for
+      declined_findings.reason)
+    - repair_pass_statement in orchestration/story_coordinator.py (its sentence
+      about a stage no finding names stays true; under this arrangement such a
+      stage really does have nothing to do, which is what makes the instruction
+      the whole remedy)
+    - tests/test_a_verdict_repairs_a_finding_needing_new_validation.py (its
+      assertions are about story-214's own statement, and the widening keeps the
+      name it imports bound to that statement, so leaving it untouched and green
+      is the evidence that the exemption was widened rather than rewritten)
+    - workflows/story-workflow.json and workflows/refactor-workflow.json (the
+      route this instruction rests on is already declared, so no routing table,
+      budget or restriction needs to move, and changing one would make the story
+      about the machinery instead of the ask)
+    - The repair_pass budget of two (how many in-place repairs a run may make is a
+      separate judgement the request deliberately excludes, and a verdict that has
+      spent it cannot repair in place whatever the instruction says)
+    - The other grounds a verdict may decline a routed finding on (they carry the
+      cases where filing is genuinely right, above all a fix that needs a design
+      choice nobody has made)
+    - Granting a stage a file no finding named, and widening what a stage no
+      finding named may do (the request argues against both: something would have
+      to decide which file and nothing knows, and both would break the property
+      that every granted file traces to a named finding)
+
+verification_requirements:
+  - That the shipped prompts/story-verifier.md carries the instruction, and that
+    every rule its repairable paragraph already stated is still stated in both
+    shipped verifier prompts.
+  - That prompts/refactor-verifier.md, prompts/story-tester.md,
+    schemas/verification-result.schema.json, both workflow definitions and
+    everything under orchestration/ are unchanged against the story's base.
+  - That the parity walk was widened rather than hollowed out: a sentence the two
+    prompts share, reworded in a copy of either of them, is still reported; every
+    passage it walked is still in the comparison; and no assertion or control was
+    removed.
+  - That tests/test_a_verdict_repairs_a_finding_needing_new_validation.py is
+    unchanged and passing.
+  - That the new module's run-level claims fail when the second finding is dropped
+    from the verdict, so the validation can fail if the change is wrong.
+  - That the whole suite passes, including the new module.
+  - That .harness/docs/ARCHITECTURE.md's account of the repairable passage and of
+    what the parity module asserts matches what they now carry.
+
+constraints:
+  - Nothing under orchestration/ or workflows/ changes: the routing, the grant and
+    the accounting this instruction rests on already exist and already run.
+  - The instruction names no stage, no category and no destination; the routing
+    vocabulary reaches the verifier prompt only through the rendered routes.
+  - The repair_pass budget of two stays as it is.
+  - Every sentence the repairable paragraph already carried stays as it is in both
+    shipped verifier prompts.
+  - The widening adds permitted sentences and removes no assertion and no control;
+    every passage the walk compares stays in the comparison.
+  - The new module reaches the shipped prompts through the helpers its sibling
+    declares rather than resolving a workflow itself, so it stays outside
+    tests/test_baseline_honesty.py's declared live-artifact readers for the reason
+    story-214's module does.
+  - No test bounds how slow the machine is allowed to be; the run-level claims are
+    read off what a driven run wrote and not off how long it took.
+  - Every route a verdict already has for a finding it acts on or declines keeps
+    working as it does now; this story adds no field and changes no routing.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-29 15:25:04
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 374
