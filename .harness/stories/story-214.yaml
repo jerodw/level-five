@@ -1,0 +1,293 @@
+story:
+  id: story-214
+  title: A story-workflow verdict repairs a finding whose fix needs new standing validation rather than declining it
+  description: |
+    When a run reviews its own work and finds a real problem with it, it can
+    either fix the problem before finishing or write it up and send it to the
+    backlog. Fixing it in place costs a few minutes. Writing it up costs a
+    planning conversation, a whole second run, a review and a merge. Twice in
+    one recent run the reviewing stage chose to write it up, and the reason it
+    gave was that fixing the problem would mean writing a new test to hold the
+    fix, and that writing a test alongside a fix is not something a run can do.
+    That reason is wrong. When a run fixes something in place it restarts at
+    the stage that owns the file and then carries on through the stages after
+    it, and one of those later stages does nothing but write tests. The same
+    run used exactly that route twice and had new tests written by that stage
+    both times, while arguing in the same review that the route did not exist.
+    So two problems the run had already found, understood and could have fixed
+    went to the backlog instead.
+
+    This story closes that reason off in the text that tells the reviewing
+    stage which reasons it may decline for, and adds beside it the sentence
+    that is missing there — that a fix sent back into the run reaches the stage
+    whose work is validation, so the test the fix needs is written by a stage
+    other than the one whose change it validates. It then holds both
+    statements closed with a test, so a later review cannot reach for the same
+    reason again.
+
+    It deliberately leaves the other legitimate reasons for declining exactly
+    as they are, above all that the fix needs a design choice nobody has made,
+    which is the reason that should carry the cases where filing really is
+    right. It leaves the other workflow alone, because there the reason is
+    sound: that workflow has no stage whose work is validation. It does not
+    change how many in-place fixes a run is allowed, and it does not revisit
+    whether either of the two findings that prompted it would have been fixed
+    once this reason is closed — both stay the reviewing stage's judgement on
+    the other grounds.
+
+    This story was planned from the brief filed under 371.
+
+    The surfaces. Both statements go into `prompts/story-verifier.md`. The
+    first goes into the paragraph opening "A finding routed to this story",
+    which is where the grounds a verdict may decline a routed finding on are
+    enumerated, and which already says that size is not one of them and that a
+    fix being out of the story's declared scope is not one either. The second
+    goes into the retry-routes paragraph, whose counterpart in
+    `prompts/refactor-verifier.md` already carries "This workflow has no stage
+    that authors validation, so it declares no category for a defect in the
+    tests as such"; the new sentence states that same distinction from this
+    workflow's side, in text the verifier is actually given. The routing both
+    statements rest on is declared in `workflows/story-workflow.json`: the
+    verifier's `repair_pass` carries a budget of two, and its `retry_routing`
+    table sends a finding to the stage that owns its file, from which the pass
+    runs forward through the stages after it — `validation` is one of the
+    categories that table declares.
+
+    Consequences traced before the criteria were written. Another path has to
+    move in step, and it is the one that shapes this story: the paragraph
+    holding the grounds is byte-identical between `prompts/story-verifier.md`
+    and `prompts/refactor-verifier.md` today, and
+    `test_the_passages_are_identical_between_the_shipped_prompts` in
+    `tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py`
+    pins that identity over the whole paragraph. The new statement is true of
+    this workflow alone, so that pin is rebounded rather than satisfied: it
+    keeps asserting that every sentence the two prompts share still matches,
+    and gains the claim that the new statement is in the story prompt and
+    absent from the refactor one. Rebounding it is what makes this work end in
+    a standing claim nothing asserts today, and the assertion is written by a
+    stage other than the one whose change it validates.
+
+    The sweep found three further texts stating the same grounds, and each is
+    left alone for a reason recorded in `do_not_modify` rather than by default:
+    `prompts/refactor-verifier.md`, where the ground is sound;
+    `declined_findings.reason` in `schemas/verification-result.schema.json`,
+    which is injected into both verifier prompts and so cannot carry a ground
+    true of only one workflow; and `applies_when` in
+    `workflows/refactor-workflow.json`, the mirror the new sentence is written
+    against. `applies_when` in `workflows/story-workflow.json` is the sentence
+    the reviewing stage quoted in both declines, and it is left alone too: it
+    is true, and it reaches only `prompts/workflow-selector.md`,
+    `prompts/inspector.md` and `prompts/assist.md`, through
+    `{{workflow_candidates}}`, all of them choosing a workflow before any run
+    exists. A review-time caveat there would reach the wrong readers and would
+    break the symmetry stories 172 and 174 were spent establishing between the
+    two statements.
+
+    Two written statements are made untrue. `.harness/docs/ARCHITECTURE.md`
+    enumerates the grounds as stories 202 and 183 left them, and the
+    documenter corrects it. `tests/test_baseline_honesty.py` records the
+    rebounded module's claim as the two prompts agreeing "character for
+    character in the passages the story changed", which the rebound makes
+    false.
+
+    On being right the second time through: the prompt text is static and
+    rendered on every verifier invocation — first verdict, retry, resume,
+    correction pass and repair pass alike — so nothing here behaves
+    differently on a later entry. What is not per-verdict is the `repair_pass`
+    budget of two, which this story leaves alone: a verdict that has spent it
+    cannot repair in place whatever the grounds say, so the new statement must
+    not promise a route that is exhausted.
+
+    On whether the validation can fail if the change is wrong: the rebound is
+    where that is easiest to lose. A rebound that dropped the paragraph from
+    the comparison would leave a guard that catches nothing, so the module
+    keeps the control it already carries — a shared sentence reworded in a copy
+    of one shipped prompt is still reported as drift — and the new claim
+    carries the control this suite's convention asks for, planting the closed
+    ground back into a copy of the whole prompt rather than into an extracted
+    string.
+
+    On a second implementation: no code is added, and the parity helpers the
+    new assertions need are already declared once in
+    `tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py`
+    and imported by two sibling modules, so the new module imports them the
+    same way rather than redefining them. One of the questions found nothing:
+    nothing new is read from disk or from configuration, so there is no value
+    that can be absent, unwritable or unreadable and nobody new to be told
+    about one.
+  workflow: story-workflow
+
+tasks:
+  - Add to the paragraph of prompts/story-verifier.md that enumerates the grounds
+    a verdict may decline a routed finding on a statement that a fix needing new
+    standing validation is not among them, leaving the grounds it already names
+    and the rule that size is not a ground unchanged.
+  - State in the retry-routes paragraph of the same prompt that this workflow
+    declares a stage whose work is validation, so a repair pass entering at the
+    stage that owns the fix runs forward through that stage and the assertion the
+    fix needs is written by a stage other than the one whose change it validates.
+  - Rebound the whole-paragraph parity pin over the two shipped verifier prompts
+    so that it permits exactly the statement this workflow's prompt now carries
+    and still reports every other divergence between them, keeping the paragraph
+    in the comparison and removing no existing assertion or control.
+  - Declare the phrase that identifies the permitted divergence in one place, so
+    the parity guard and the new claim's assertions cannot disagree about which
+    sentence may differ.
+  - Write the standing validation for the new claim in a module named for it,
+    importing the parity helpers and that phrase from the module that declares
+    them, with the control that plants the closed ground back into a copy of the
+    whole prompt.
+  - Correct the claim tests/test_baseline_honesty.py records for the rebounded
+    module, which says today that the two prompts agree character for character
+    in the passages that story changed.
+  - Record the change in .harness/docs/ARCHITECTURE.md, including that its own
+    enumeration of the grounds no longer matches this workflow's verifier prompt.
+
+acceptance_criteria:
+  - The paragraph of prompts/story-verifier.md that enumerates the grounds a
+    verdict may decline a routed finding on states that a fix needing new
+    standing validation is not among them.
+  - The same prompt states that a repair pass reaches the stage whose work is
+    validation, so an assertion the fix needs is written by a stage other than
+    the one whose change it validates.
+  - The grounds that paragraph already named are all still named there: a fix
+    that is a design decision the plan did not make, a reasoned do_not_modify
+    entry protecting the file where its reason speaks to the fix, and a finding
+    wrong on the evidence. The rule that size is not a ground is unchanged.
+  - prompts/refactor-verifier.md states neither of the two things above, and its
+    own statement that its workflow authors no validation is unchanged.
+  - The parity guard over the two shipped verifier prompts reports any divergence
+    between them other than the statement this story gives the story prompt: a
+    sentence the two share, reworded in a copy of either prompt, is still
+    reported as drift.
+  - The parity guard also reports the new statement missing from the story
+    prompt, and reports it present in the refactor prompt.
+  - The phrase identifying the permitted divergence is declared in one place and
+    read by both the parity guard and the new claim's assertions, so the two
+    cannot disagree about which sentence may differ.
+  - A test fails when the statement closing the ground is removed from the
+    shipped prompt, and the control showing it plants that ground back into a
+    copy of the whole prompt rather than into an extracted string.
+  - The parity-walked passages other than the grounds paragraph are still
+    byte-identical between the two shipped verifier prompts.
+  - The claim tests/test_baseline_honesty.py records for the rebounded module
+    describes what that module now asserts about the two prompts.
+  - .harness/docs/ARCHITECTURE.md's account of the grounds a verdict may decline
+    on matches what the shipped prompt now says.
+
+technical_plan:
+  implementation_steps:
+    - Write the two statements into prompts/story-verifier.md. The first belongs
+      in the paragraph opening "A finding routed to this story", beside the
+      sentence saying a fix that is only out of scope is not a reason either; the
+      second belongs in the retry-routes paragraph, which is already the place
+      the two prompts differ and carries no parity pin.
+    - Rebound test_the_passages_are_identical_between_the_shipped_prompts in
+      tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py.
+      That module declares the parity helpers and the passage openings, so the
+      phrase identifying the permitted divergence is declared there too and
+      imported by the new module — the reverse direction would be a circular
+      import, because the new module imports the helpers from it.
+    - Write the new module. Its claim is the two statements' presence in this
+      workflow's prompt, their absence from the refactor prompt, and that the
+      rebounded guard still reports drift in a shared sentence.
+    - Correct the recorded claim in tests/test_baseline_honesty.py for the
+      rebounded module.
+    - Record the change in .harness/docs/ARCHITECTURE.md and correct its
+      enumeration of the grounds.
+  likely_file_changes:
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: Carries both statements — the closed ground in the paragraph that
+        enumerates them, and the sentence saying a repair pass reaches the stage
+        whose work is validation.
+    - file: tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      stage: tester
+      reason: Holds the whole-paragraph parity pin this story rebounds, and
+        declares the parity helpers and the phrase identifying the permitted
+        divergence that the new module imports.
+    - file: tests/test_a_verdict_repairs_a_finding_needing_new_validation.py
+      stage: tester
+      reason: The standing validation for the new claim, with the control that
+        plants the closed ground back into a copy of the whole prompt.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: Records the rebounded module's claim as the two prompts agreeing
+        character for character in the passages that story changed, which the
+        rebound makes false.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records this change and corrects its own enumeration of the grounds
+        a verdict may decline a routed finding on.
+
+scope:
+  modify:
+    - prompts/story-verifier.md
+    - tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+    - tests/test_a_verdict_repairs_a_finding_needing_new_validation.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/refactor-verifier.md (the ground is sound for that workflow, which
+      declares no stage whose work is validation, so a fix needing new standing
+      validation genuinely has no stage there to write it; its own statement of
+      that fact is the mirror this story's new sentence is written against)
+    - workflows/refactor-workflow.json (its applies_when states correctly that
+      that workflow has no stage whose work is to write an assertion, and it is
+      the other half of the symmetry stories 172 and 174 established)
+    - workflows/story-workflow.json (its applies_when is the sentence the
+      reviewing stage quoted, and it is true; it reaches only the prompts that
+      choose a workflow before any run exists, so a review-time caveat there
+      would reach the wrong readers and break that same symmetry)
+    - schemas/verification-result.schema.json (declined_findings.reason
+      enumerates the same grounds, but one schema is injected into both verifier
+      prompts, so it cannot carry a ground true of only one workflow)
+    - The repair_pass budget of two declared on the verifier (how many in-place
+      fixes a run may make is a separate judgement the brief deliberately
+      excludes from this story)
+    - The other grounds a verdict may decline a routed finding on (they carry
+      the cases where filing is genuinely right, above all a fix that needs a
+      design choice nobody has made)
+    - Whether either of the two findings that prompted this story would be fixed
+      once this ground is closed (each decline also rested on the fix needing a
+      design choice, which stands on its own and stays the reviewing stage's
+      judgement)
+
+verification_requirements:
+  - That the shipped prompts/story-verifier.md carries both statements, and that
+    every ground the paragraph named before is still named there.
+  - That prompts/refactor-verifier.md, workflows/refactor-workflow.json,
+    workflows/story-workflow.json and schemas/verification-result.schema.json
+    are unchanged against the story's base.
+  - That the rebounded parity guard was narrowed rather than hollowed out: it
+    still reports drift when a sentence the two prompts share is reworded in a
+    copy of one of them, and the grounds paragraph is still in the comparison.
+  - That no assertion or control was removed from the rebounded module.
+  - That the new module's assertions fail when the closed ground is removed from
+    the shipped prompt, so the validation can fail if the change is wrong.
+  - That the whole suite passes, including the new module.
+  - That .harness/docs/ARCHITECTURE.md's account of the grounds matches the
+    shipped prompt.
+
+constraints:
+  - The grounds the paragraph already enumerates stay as they are, and the rule
+    that size is a reason to fix rather than a reason to decline is unchanged.
+  - The parity-walked passages other than the grounds paragraph stay
+    byte-identical between the two shipped verifier prompts.
+  - The rebound narrows the parity guard so that it names what may differ; it
+    does not drop the paragraph from the comparison, and it removes no existing
+    assertion or control.
+  - The new statements are confined to this workflow's verifier prompt; nothing
+    is added to the refactor workflow's prompt or definition.
+  - The repair_pass budget of two stays as it is.
+  - Every route a verdict already has for a finding it acts on or declines keeps
+    working as it does now; this story adds no field and changes no routing.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-29 12:43:51
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 371
