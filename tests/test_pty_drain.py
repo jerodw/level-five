@@ -37,7 +37,12 @@ reports the violation it exists to catch:
     stripped of the assertion entirely, both of which the same reader
     reports;
   * "no module that imports `drain` carries its own copy of it" sits beside a
-    module source that defines one, which the same reader reports.
+    module source that defines one, which the same reader reports;
+  * "a child that registers its exit-time callback only after announcing
+    itself writes nothing at shutdown" sits beside the same child with the
+    same registration ordered *ahead* of the announcement, which does write --
+    so the empty read is the placement of the registration and not a pty this
+    module has stopped reading.
 
 The children driven here are of this module's making: short scripts run under
 `sys.executable` on a pty this module opens. One precondition below does depend
@@ -50,8 +55,10 @@ failure would say the teardown is broken when what happened is that the run
 could not be conducted. Nothing else here depends on machine load, on the rest
 of the suite, or on any timing a test cannot control: `HANDLER_DELAY` and
 `WINDOWED_TEARDOWN_SILENCE` order two events by construction rather than by
-winning a race, and the deadline case drives `drain` against a child that never
-exits at all.
+winning a race, `before_announcing` orders a child's own setup ahead of the
+signal the same way and the control beside it puts that setup behind a sleep no
+signalled child returns from, and the deadline case drives `drain` against a
+child that never exits at all.
 """
 import ast
 import inspect
@@ -108,7 +115,19 @@ ANNOUNCE_DEADLINE = 30.0
 WINDOWED_TEARDOWN_SILENCE = 0.5
 
 
-def child_source(body: str) -> str:
+def _appended(fragment: str) -> str:
+    """A fragment ready to append at column zero, or nothing where it is empty.
+
+    Appended rather than interpolated into the indented templates below: a
+    multi-line fragment substituted there would carry the template's
+    indentation on its first line and none on the rest, which
+    `textwrap.dedent` cannot repair and the child would refuse to run.
+    """
+    dedented = textwrap.dedent(fragment).strip("\n")
+    return dedented + "\n" if dedented else ""
+
+
+def child_source(body: str, *, before_announcing: str = "") -> str:
     """A child that announces itself, then runs `body`.
 
     The announcement is flushed so the parent can wait for the child to be
@@ -116,8 +135,24 @@ def child_source(body: str) -> str:
     newline and so stays in the interpreter's own buffer, which is the
     condition the substitution needs -- output that has left the buffer for
     the kernel is already written and there is nothing left to fail at exit.
+
+    `before_announcing` is where a case puts whatever its child must already
+    have in place to be signalled at all -- an exit-time callback registered,
+    say. The announcement is the child's claim to be *ready for the signal*
+    rather than merely to have started, because the parent signals the instant
+    it reads "ready": setup left in `body` is setup a child descheduled
+    between the flush and its first line has not reached when the signal
+    arrives, and the case then observes a child signalled too early rather
+    than the teardown it exists to be about. That is not hypothetical -- a
+    registration in `body` cost a clean-clone run of this suite one failure,
+    the child taking the signal with nothing registered, exiting with the
+    signal's own status and writing nothing at all. The window is a couple of
+    bytecodes wide and an `import` sits inside it, which is enough under a
+    loaded machine; closing it is cheaper than tolerating it, and a bound
+    would only have moved the load at which it reopens. A case with nothing to
+    set up passes nothing and gets exactly the child it got before.
     """
-    announcing = textwrap.dedent(f"""\
+    setting_up = textwrap.dedent(f"""\
         import signal, sys, time
 
         def handler(signum, frame):
@@ -130,14 +165,13 @@ def child_source(body: str) -> str:
         # as the only way a closed master can reach this child, so what the
         # control below demonstrates is the flush and nothing else.
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        """)
+    announcing = textwrap.dedent("""\
         sys.stdout.write("ready\\n")
         sys.stdout.flush()
         """)
-    # The body is appended already at column zero rather than interpolated into
-    # the indented template above: a multi-line body substituted there would
-    # carry the template's indentation on its first line and none on the rest,
-    # which `textwrap.dedent` cannot repair and the child would refuse to run.
-    return announcing + textwrap.dedent(body).strip("\n") + "\n"
+    return (setting_up + _appended(before_announcing)
+            + announcing + _appended(body))
 
 
 #: Buffers a short line and waits for the signal.
@@ -159,6 +193,51 @@ CHILD_SILENT_THEN_EXITING = child_source(
     'sys.stdout.write("after the silence\\n")\n'
     'sys.stdout.flush()\n'
     'sys.exit(7)')
+
+#: What a child writes at interpreter shutdown, after its status is settled.
+#: Named once because two cases below read for it and a third asserts where in
+#: a child's source the write is arranged.
+EXIT_TIME_OUTPUT = "written as it exits"
+
+#: The registration that arranges that write. Shared by the pair of children
+#: below so the two of them differ in where this sits and in nothing else.
+REGISTERS_AT_EXIT = (
+    'import atexit\n'
+    f'atexit.register(lambda: sys.stdout.write("{EXIT_TIME_OUTPUT}"))')
+
+#: The two markers the pair is told apart by. Substrings of `child_source`'s
+#: own output rather than of any body, so a reader can say which side of the
+#: announcement a child's registration fell on.
+ANNOUNCEMENT = 'sys.stdout.write("ready'
+REGISTRATION = "atexit.register("
+
+#: Registers its exit-time callback *before* announcing itself, so a signal
+#: that reaches this child at all reaches it with the callback in place. This
+#: is the child the shipped teardown is read through.
+CHILD_REGISTERING_BEFORE_ANNOUNCING = child_source(
+    'time.sleep(30)', before_announcing=REGISTERS_AT_EXIT)
+
+#: The same child with the registration after the announcement instead, which
+#: is where it sat when a clean-clone run of this suite read back the signal's
+#: status and an empty pty. The sleep the registration follows is the same
+#: thirty seconds every child here gives the parent to signal within, so this
+#: child reaches its registration for no signal the parent sends at all --
+#: which is what makes the control below ordered by construction rather than
+#: by winning a race.
+CHILD_REGISTERING_AFTER_ANNOUNCING = child_source(
+    'time.sleep(30)\n' + REGISTERS_AT_EXIT)
+
+
+def without_the_registration(source: str) -> str:
+    """`source` with the exit-time registration's own lines taken out.
+
+    What is left is everything the pair of children above shares, so two
+    sources that agree here differ in where the registration sits and in
+    nothing else.
+    """
+    dropped = REGISTERS_AT_EXIT.splitlines()
+    return "\n".join(line for line in source.splitlines()
+                     if line not in dropped)
 
 
 def start_child(source: str):
@@ -305,17 +384,87 @@ def test_the_shipped_teardown_closes_the_master_only_after_reaping():
     Read from the pty rather than from the source: the child's last write is
     made at interpreter shutdown, after the status is settled, and it arrives.
     A master closed before the reap could not have carried it.
+
+    The callback is registered `before_announcing` rather than in the body, so
+    a signal that reaches this child at all reaches it with the callback in
+    place. Registered in the body it is a race the parent can win, and winning
+    it produces a child that exits with the signal's own status and writes
+    nothing -- which is an empty pty read as a teardown that closed the master
+    early, the opposite of what this case would then be reporting. The two
+    cases below are that arrangement driven deliberately and the placement
+    asserted where no load can hide it.
     """
-    process, master, _ = start_child(child_source(
-        'import atexit\n'
-        'atexit.register(lambda: sys.stdout.write("written as it exits"))\n'
-        'time.sleep(30)'))
+    process, master, _ = start_child(CHILD_REGISTERING_BEFORE_ANNOUNCING)
     os.killpg(os.getpgid(process.pid), signal.SIGINT)
 
     status, output = drain(process, master)
 
     assert status == SIGNAL_STATUS
-    assert "written as it exits" in output
+    assert EXIT_TIME_OUTPUT in output
+
+
+def test_a_child_registering_after_announcing_writes_nothing_as_it_exits():
+    """The control for the absence the case above would otherwise not notice.
+
+    The same child and the same teardown; the only difference is that the
+    registration sits after the announcement, which is where it sat when a
+    clean-clone run of this suite read back the signal's status and an empty
+    pty. The parent signals the instant it reads "ready", so this child takes
+    the signal inside the sleep its registration follows and never reaches the
+    registration at all: it exits with the signal's own status having arranged
+    no write at shutdown.
+
+    Nothing here races. The sleep is the same thirty seconds every child in
+    this module gives the parent to signal within, so the registration is out
+    of reach for any signal the parent sends rather than for one that happens
+    to be quick.
+
+    What the pair demonstrates is why the case above orders its registration
+    ahead of its announcement: an empty read *here* is indistinguishable from
+    the empty read a master closed before the reap produces, so the case above
+    run on this child would report a broken teardown on the evidence of a
+    child of its own making.
+    """
+    process, master, _ = start_child(CHILD_REGISTERING_AFTER_ANNOUNCING)
+    os.killpg(os.getpgid(process.pid), signal.SIGINT)
+
+    status, output = drain(process, master)
+
+    assert status == SIGNAL_STATUS
+    assert EXIT_TIME_OUTPUT not in output, (
+        "the child was expected to take the signal before reaching its "
+        "registration and to write nothing at shutdown, and wrote anyway -- "
+        "so this control no longer demonstrates the arrangement the case "
+        f"above exists to avoid: {output!r}")
+
+
+def test_the_pair_differs_only_in_which_side_of_the_announcement_it_registers():
+    """The half of the pair above that no machine load can hide.
+
+    Both behavioural cases pass on an idle machine whichever side of the
+    announcement the registration sits on -- which is exactly what made the
+    original arrangement a flake the suite went green over rather than a
+    defect it caught, and why reverting the repair left the suite passing.
+    This case asserts the placement itself, so moving the registration back
+    into the body reddens the suite on the next run rather than on the next
+    loaded one.
+    """
+    before, after = (CHILD_REGISTERING_BEFORE_ANNOUNCING,
+                     CHILD_REGISTERING_AFTER_ANNOUNCING)
+
+    # `index` raises rather than comparing on a source that has quietly lost
+    # its registration or its announcement, so neither placement below can be
+    # asserted of a child that no longer carries the thing being placed.
+    assert before.index(REGISTRATION) < before.index(ANNOUNCEMENT)
+    assert after.index(REGISTRATION) > after.index(ANNOUNCEMENT)
+
+    # And the placement is the whole of the difference: everything else the two
+    # children do, they do identically, so the behavioural pair above varies
+    # one thing.
+    assert without_the_registration(before) != before, (
+        "taking the registration out changed nothing, so the comparison "
+        "below would hold for two children that never carried one")
+    assert without_the_registration(before) == without_the_registration(after)
 
 
 # --------------------------------------------------------------------------

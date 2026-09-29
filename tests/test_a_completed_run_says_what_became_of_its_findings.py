@@ -29,13 +29,15 @@ The subjects, in the order the criteria state them:
     file beside the change — and the account's four clauses are read back out
     of the report the run left.
 
-  * **the abandonment.** Two runs spend an allowance: one meets both allowances
-    on the verdicts its own passes return to, which is the amending path, and
-    one meets an allowance already spent on the first verdict of a later
-    attempt, which is the writing path. In both, what the allowance abandoned is
-    recorded nowhere as acted on, is filed at the run's completion through the
-    same call every other producer files through, and is named in the report
-    with the allowance that ran out as its ground.
+  * **the abandonment**, driven by the runs that spend one. One meets both
+    allowances on the verdicts its own passes return to, which is the amending
+    path; one meets an allowance already spent on the first verdict of a later
+    attempt, which is the writing path; and one meets both spent allowances on
+    a single verdict, where the repair block's amendment reads the record the
+    correction block's amendment has just written. In each of them, what the
+    allowance abandoned is recorded nowhere as acted on, is filed at the run's
+    completion through the same call every other producer files through, and is
+    named in the report with the allowance that ran out as its ground.
 
   * **the durable record.** The count travels into the committed cross-run
     history under the story, is told apart from the three kinds of record beside
@@ -56,7 +58,18 @@ The subjects, in the order the criteria state them:
     routed away before the repair block; and a verdict the correction block
     routes on defers its repairable findings rather than leaving them. Each is
     driven as a run, each beside a run differing from it in one respect only,
-    where the same spent allowance *is* met and recorded.
+    where the same spent allowance *is* met and recorded. The same question for
+    the correction pass is asked of a verdict the routing refuses, whose
+    escalation is made above the record rather than after it — on a later
+    verdict of an accounted attempt, where the record already written is left
+    as it was, and on an attempt's only verdict, where there is no record of it
+    at all.
+
+  * **a run that was interrupted and resumed**, whose filing at completion
+    reaches back into the entry the interruption closed. The account is derived
+    through the same assembly, so it names that entry's final attempt and the
+    resumed entry's alike, and names neither of the readings the interrupted
+    entry superseded.
 
   * **the two accounting paths**, which record one abandonment identically. A
     spent allowance can be met on the verdict an attempt is first accounted on
@@ -87,12 +100,26 @@ Every absence asserted here is demonstrated to be able to fail:
     routed something, where the same reading does not find that sentence;
   * "the report states no count of what was filed" sits beside the completion
     event of the same run, which does carry one;
+  * "a verdict the routing refuses leaves the attempt with no accounting, no
+    record that the verification passed and no report" sits beside the same
+    verdict made routable, where every one of those is written;
+  * "the account of a resumed run names neither reading the interrupted entry
+    superseded" sits beside that entry's final attempt, which the same reading
+    finds in the account and in what the filing was offered;
   * "no shipped text still says the event stream is the whole of what becomes of
     an abandoned finding" sits beside each of those same texts with the sentence
     planted back into it, which the same reading reports — and beside two
     accurate sentences carrying one half of that claim each, which the same
     reading does not report, so the silence is the claim being absent rather
-    than a phrase this repository happens not to have written lately.
+    than a phrase this repository happens not to have written lately;
+  * and that same silence is held to two things the reading promises about how
+    it reads. A sentence ends however it ends, shown against the cut that ended
+    one only where a full stop is followed by a space: that cut reports the
+    arrangement a contract puts two of its own accurate descriptions in, and
+    the reading does not. And the claim is found however its halves are
+    spelled, shown against the match that did not fold case: the same claim
+    written with its second half opening the sentence is reported now and was
+    reported nowhere before.
 
 Nothing here reaches a model: the sibling module's guard on
 `agent_runner.run_agent` is installed for every test here too, and every run
@@ -119,6 +146,7 @@ from __future__ import annotations
 import ast
 import dataclasses
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -152,13 +180,16 @@ ABANDONED = "abandoned"
 
 #: The event kinds the readings below look for by name — the check that sits
 #: between the two pass blocks failing, each pass meeting its spent allowance,
-#: and the correction pass routing. Each is held against the execution
-#: history's own enum in the premise test, so a renamed kind fails there rather
-#: than leaving a reading that quietly matches nothing.
+#: the correction pass routing, and a verdict being recorded as passed, which is
+#: what says the two spent allowances were met on one verdict rather than on
+#: two. Each is held against the execution history's own enum in the premise
+#: test, so a renamed kind fails there rather than leaving a reading that
+#: quietly matches nothing.
 CLEAN_CLONE_FAILED = "clean-clone-failed"
 REPAIR_RECORDED = "repair-pass-recorded"
 CORRECTION_RECORDED = "correction-pass-recorded"
 CORRECTION_ROUTED = "correction-pass-routed"
+VERIFICATION_PASSED = "verification-passed"
 
 
 # ==========================================================================
@@ -306,7 +337,7 @@ def test_the_event_kinds_this_module_looks_for_are_kinds_the_history_declares():
     route rather than a name nothing has answered to since it was renamed."""
     declared = HISTORY_SCHEMA["items"]["properties"]["event"]["enum"]
     for kind in (CLEAN_CLONE_FAILED, REPAIR_RECORDED, CORRECTION_RECORDED,
-                 CORRECTION_ROUTED):
+                 CORRECTION_ROUTED, VERIFICATION_PASSED):
         assert kind in declared, kind
 
 
@@ -878,6 +909,112 @@ def test_the_account_of_a_retried_run_says_which_attempts_finding_ended_where(
 
 
 # ==========================================================================
+# A run that was interrupted and resumed
+#
+# A run stopped part way and started again leaves everything the interrupted
+# entry wrote in that entry's own directory, and the filing at the run's
+# completion goes and gets it: a finding raised before the interruption — one a
+# verifier looked at and reasonably declined, which is exactly what is meant to
+# become a backlog item — is sent on rather than left in the archive. The
+# account is derived through the same assembly, so it has to name those
+# findings too. An account of the current entry alone would tell a developer
+# that a defect already on its way to the backlog was never found, which is the
+# omission this story exists to close, said of a different set of findings.
+# ==========================================================================
+
+
+#: What the interrupted entry's inspection read on each of its attempts, and
+#: what its final attempt found about the file beside the change. A slug of its
+#: own each, the slug being part of what a brief is filed under, so nothing
+#: below turns on the queue's dedupe.
+INTERRUPTED = tuple(
+    finding(f"zzz-account-interrupted-{reading}", [CHANGED],
+            f"MARKER-INTERRUPTED-{reading} the change is wrong")
+    for reading in (1, 2, 3))
+INTERRUPTED_BESIDE = finding(
+    "zzz-account-interrupted-beside", [BESIDE_THE_CHANGE],
+    "MARKER-INTERRUPTED-BESIDE the neighbour was always wrong")
+
+#: And what the entry after the resume read.
+AFTER_THE_RESUME = finding("zzz-account-after-the-resume", [CHANGED],
+                           "MARKER-AFTER-THE-RESUME the change is wrong still")
+
+
+@pytest.fixture
+def interrupted_and_resumed(target, harness, tmp_path, filings):
+    """A run that spent its retries and escalated, was resumed, and completed.
+
+    The idiom the sibling filed-once module established for exactly this: three
+    attempts whose verdicts all fail, a change committed in the run's own tree
+    so the resume has something to see, and a second entry that completes on its
+    first attempt. The interrupted entry filed nothing — an escalated run leaves
+    the queue as it found it — so everything it raised is still in its own
+    directory and nowhere else when the resumed entry completes.
+    """
+    escalated = filed_once.drive(
+        target, harness, tmp_path,
+        per_attempt=[[INTERRUPTED[0]], [INTERRUPTED[1]],
+                     [INTERRUPTED[2], INTERRUPTED_BESIDE]],
+        verdicts=filed_once.TO_THE_CEILING, name="interrupted")
+    assert escalated.code == 2
+    assert escalated.state["status"] == "escalated"
+    assert filings == []
+    assert not (escalated.run_dir / COMPLETION_REPORT).exists()
+
+    filed_once.ready_to_resume(escalated,
+                               "MARKER-RESUMED the developer decided")
+    resumed = filed_once.drive(
+        target, harness, tmp_path, per_attempt=[[AFTER_THE_RESUME]],
+        verdicts=[inspected.PASS], name="resumed")
+    assert resumed.code == 0
+    assert resumed.state["status"] == "completed"
+    assert resumed.state["resume_count"] == 1
+    return resumed
+
+
+def test_the_account_of_a_resumed_run_names_what_the_filing_recovers(
+        interrupted_and_resumed, filings):
+    """The report and the filing agree on a run that was interrupted, which is
+    the case the two readers could most easily have come apart on: the filing
+    reads the earlier entry, and an account derived from the current one would
+    have looked right on every run that was never interrupted.
+
+    What the account names under the backlog is exactly what the one filing call
+    was offered, and that set holds the interrupted entry's final attempt — both
+    the finding routed to the story and the one its inspection made about the
+    file beside the change — beside what the entry after the resume raised.
+    """
+    run = interrupted_and_resumed
+    (offered,) = filings
+    report = report_of(run)
+    assert sorted(named_in(report, "backlog")) == sorted(offered)
+    assert set(offered) == {INTERRUPTED[2]["slug"], INTERRUPTED_BESIDE["slug"],
+                            AFTER_THE_RESUME["slug"]}
+    # Nothing was repaired, discarded or abandoned on either entry, so the
+    # backlog is the whole account and the equality above is over all of it.
+    assert dispositions(report) == {"backlog"}
+
+
+def test_the_account_of_a_resumed_run_leaves_out_the_readings_it_superseded(
+        interrupted_and_resumed, filings):
+    """The control in the other direction, and the rule it protects: an entry
+    contributes its own final attempt and no earlier reading of it, so what the
+    interrupted entry's first two attempts found is offered to no filing and
+    named under no disposition.
+
+    Their absence is not a claim about an account that named nothing, because
+    the same readings find that entry's third attempt in both places — which is
+    what the test above asserts of the same run.
+    """
+    run = interrupted_and_resumed
+    report = report_of(run)
+    (offered,) = filings
+    for superseded in INTERRUPTED[:2]:
+        assert superseded["slug"] not in offered, superseded["slug"]
+        assert superseded["slug"] not in report, superseded["slug"]
+
+
+# ==========================================================================
 # One abandonment, recorded the same way whichever path recorded it
 #
 # The accounting is written on the first verdict of an attempt and amended by a
@@ -977,6 +1114,133 @@ def test_an_abandoned_finding_the_verdict_declined_records_both_grounds(
     assert GROUND not in entry["abandoned_because"]
     assert named_in(report_of(abandoned_and_declined), "abandoned") == {
         FOR_CORRECTION["slug"]: entry["abandoned_because"]}
+
+
+# ==========================================================================
+# Both spent allowances met on one verdict
+#
+# One verdict can meet both, and the story says so: the correction block
+# abandons the finding no correction pass was left to run for and amends the
+# attempt's accounting, and the repair block below it abandons another and
+# amends the record that first amendment has just written. Every other run here
+# meets one allowance per verdict, so this is the only arrangement in which the
+# amending path reads a record another abandonment amended — and what it is
+# worth is that the second amendment carries the first's entry forward instead
+# of writing over it, since the run's counts of how its left findings were
+# declined are computed from those entries.
+# ==========================================================================
+
+
+@pytest.fixture
+def on_one_verdict_harness(tmp_path) -> Path:
+    """A harness root carrying the same definition, under the same ceiling, so
+    the run below stands on ground of its own for `retried_harness`'s reason."""
+    return inspected.materialize(WORKFLOW, tmp_path / "on-one-verdict-harness",
+                                 rules=filed_once.RULES)
+
+
+@pytest.fixture
+def on_one_verdict_target(tmp_path) -> Path:
+    return inspected.build_target(tmp_path / "on-one-verdict-target",
+                                  workflow=WORKFLOW["name"])
+
+
+@pytest.fixture
+def both_allowances_met_on_one_verdict(on_one_verdict_target,
+                                       on_one_verdict_harness, tmp_path,
+                                       filings):
+    """A run whose last verdict meets both spent allowances at once.
+
+    The first verdict asks for one routed finding to be corrected and another to
+    be repaired, so the attempt is accounted with both recorded as acted on, and
+    the correction pass it routes spends that allowance. The verdict that pass
+    returns to asks for the repair alone — nothing for the correction block to
+    meet an allowance about, so what the first verdict recorded is left as it
+    was — and the repair pass routes, spending the other. The verdict *that*
+    pass returns to asks for both again with nothing left for either: the
+    correction block abandons the first finding and the repair block below it
+    abandons the second, on the one verdict.
+    """
+    asking_for_both = passing(correctable=[correcting(FOR_CORRECTION)],
+                              repairable=[repairing_entry(FOR_REPAIR)])
+    run = inspected.drive(
+        on_one_verdict_target, on_one_verdict_harness, tmp_path,
+        findings=[FOR_CORRECTION, FOR_REPAIR],
+        verdicts=[asking_for_both,
+                  passing(repairable=[repairing_entry(FOR_REPAIR)]),
+                  asking_for_both],
+        name="both-allowances-on-one-verdict")
+    assert run.code == 0
+    assert run.state["status"] == "completed"
+    assert run.state["correction_pass_count"] == ALLOWANCE
+    assert run.state["repair_pass_count"] == ALLOWANCE
+    # The premise this run exists for, and the whole of what distinguishes it
+    # from the one above: each allowance was met once, and both were met on one
+    # verdict — the correction block's record first, the repair block's after
+    # it, with no verification recorded in between for the second to belong to.
+    kinds = [one["event"] for one in story_coordinator.load_history(run.run_dir)]
+    assert kinds.count(CORRECTION_RECORDED) == 1
+    assert kinds.count(REPAIR_RECORDED) == 1
+    assert kinds.index(CORRECTION_RECORDED) < kinds.index(REPAIR_RECORDED)
+    assert VERIFICATION_PASSED not in kinds[
+        kinds.index(CORRECTION_RECORDED):kinds.index(REPAIR_RECORDED)]
+    return run
+
+
+def test_a_verdict_meeting_both_spent_allowances_accounts_for_both(
+        both_allowances_met_on_one_verdict, filings):
+    """Both findings come out of the accounting recorded as left rather than
+    acted on, each carrying its own allowance's words as its ground, and the
+    counts of how the left findings were declined agree with what the report's
+    account names.
+
+    That agreement is what the second amendment carrying the first's entry
+    forward buys. An amendment writing over what the one before it recorded
+    would leave the finding it replaced in the remainder with no entry of its
+    own: the report would name it as being sent on with no ground rather than
+    as abandoned, and the counts would say one where the account names two.
+
+    The control for the two counts is `abandoned_and_declined` above, where the
+    verdict did decline an abandoned finding and the same fields record its
+    reason and say one was given — so the zero here is the allowance having
+    refused the pass rather than a field that is always zero.
+    """
+    run = both_allowances_met_on_one_verdict
+    recorded = inspected.accounting(run)
+    assert recorded["acted_on_slugs"] == []
+    assert sorted(recorded["abandoned_slugs"]) == sorted(
+        [FOR_CORRECTION["slug"], FOR_REPAIR["slug"]])
+    assert sorted(recorded["remainder_slugs"]) == sorted(
+        recorded["abandoned_slugs"])
+    assert recorded["abandoned_by_spent_allowance"] == 2
+
+    # Each entry survived the amendment made after it, and carries the words of
+    # the allowance that abandoned it rather than the other allowance's. Held
+    # against what `abandoned_by` — the reading the coordinator itself decides an
+    # abandonment by — answers when asked about each pass, so "its own
+    # allowance" is that pass's own words rather than two grounds that merely
+    # differ from each other.
+    asking_for_both = passing(correctable=[correcting(FOR_CORRECTION)],
+                              repairable=[repairing_entry(FOR_REPAIR)])
+    spent = state_with(corrections=ALLOWANCE, repairs=ALLOWANCE)
+    for found, kind in ((FOR_CORRECTION, CORRECTION), (FOR_REPAIR, REPAIR)):
+        entry = declined_entry(recorded, found["slug"])
+        assert entry[ABANDONED] is True, found["slug"]
+        assert entry["reason_given"] is False, found["slug"]
+        assert entry["abandoned_because"] == \
+            abandoned_by(asking_for_both, spent, kind)[found["slug"]], kind
+
+    # And the counts those entries feed say what the account says.
+    named = named_in(report_of(run), "abandoned")
+    assert named == {one["slug"]: one["abandoned_because"]
+                     for one in recorded["declined"]}
+    assert recorded["declined_without_reason"] == len(named)
+    assert recorded["declined_with_reason"] == 0
+    assert dispositions(report_of(run)) == {"abandoned"}
+    # Both are sent on like every other finding the verdict left, in the one
+    # call every producer files through.
+    assert [sorted(call) for call in filings] == \
+        [sorted([FOR_CORRECTION["slug"], FOR_REPAIR["slug"]])]
 
 
 # ==========================================================================
@@ -1321,6 +1585,65 @@ def test_the_same_verdict_the_routing_can_route_does_record_the_abandonment(
     (record,) = abandonment_records(run)
     assert record[ABANDONED] == 2
     assert set(named_in(report_of(run), "abandoned")) == {FOR_CORRECTION["slug"]}
+
+
+@pytest.mark.parametrize("shape", sorted(UNROUTABLE))
+def test_a_first_verdict_the_routing_refuses_is_recorded_nowhere_at_all(
+        shape, target, harness, tmp_path, filings):
+    """The same refusal met on the run's *first* verdict, where the attempt has
+    no accounting yet — which is what says the refusal is made before anything
+    about the verdict is recorded, rather than before one more field of a record
+    the run had already written.
+
+    The pair above can only show that an existing record was left alone: their
+    accounting was written by an earlier verdict that really did act on the
+    finding, so an escalation that wrote nothing and one that wrote the wrong
+    thing after it would look alike. Here the refused verdict is the only one
+    the attempt had, so the attempt is left with no accounting at all, no record
+    that the verification passed, and nothing in the committed history — while
+    the findings record the inspection wrote is still there, which is what says
+    the run reached the verdict rather than never getting that far.
+    """
+    run = inspected.drive(
+        target, harness, tmp_path, findings=[FOR_CORRECTION],
+        verdicts=[passing(correctable=[
+            correcting(FOR_CORRECTION),
+            {**inspected.CORRECTABLE_FINDING, **UNROUTABLE[shape]}])],
+        name=f"first-unroutable-{shape.replace(' ', '-')}")
+
+    assert run.code == 2
+    assert run.state["status"] == "escalated"
+    assert [one["slug"] for one in run.findings_record(1)["findings"]] == \
+        [FOR_CORRECTION["slug"]]
+    assert not inspected.accounting_path(run, 1).exists()
+    assert inspected.accounting_events(run) == []
+    assert "verification passed" not in run.messages
+    assert abandonment_records(run) == []
+    assert not (run.run_dir / COMPLETION_REPORT).exists()
+    assert filings == []
+
+
+def test_the_same_first_verdict_the_routing_can_route_is_recorded(
+        target, harness, tmp_path, filings):
+    """The control for the absences above. The same verdict with the second
+    entry's category one the definition declares: the attempt is accounted, the
+    verification is recorded as passed, the correction pass routes and the run
+    completes with a report — so each absence above is the refusal preceding the
+    record rather than a run that records none of these things anyway.
+    """
+    run = inspected.drive(
+        target, harness, tmp_path, findings=[FOR_CORRECTION],
+        verdicts=[passing(correctable=[correcting(FOR_CORRECTION),
+                                       dict(inspected.CORRECTABLE_FINDING)]),
+                  inspected.PASS],
+        name="first-routable")
+
+    assert run.code == 0
+    assert run.state["status"] == "completed"
+    assert inspected.accounting_path(run, 1).is_file()
+    assert inspected.accounting_events(run) != []
+    assert "verification passed" in run.messages
+    assert (run.run_dir / COMPLETION_REPORT).is_file()
 
 
 # ==========================================================================
@@ -1723,7 +2046,8 @@ def test_a_workflow_declaring_no_inspection_leaves_the_report_it_left_before(
     without = inspected.drive(
         inspected.build_target(tmp_path / "no-inspection-target",
                                workflow=undeclared["name"]),
-        inspected.materialize(undeclared, tmp_path / "no-inspection-harness"),
+        inspected.materialize(undeclared, tmp_path / "no-inspection-harness",
+                              rules=filed_once.RULES),
         tmp_path, findings=[GROUNDED],
         verdicts=[passing(declining=[declined(GROUNDED)])],
         name="inspection-undeclared")
@@ -1924,6 +2248,16 @@ SUPERSEDED_SENTENCE = (
     "developer meets them, and the run completes."
 )
 
+#: The same claim with its second half opening the sentence, which is how a
+#: docstring or a field description says it most naturally. It makes the
+#: superseded claim exactly, and a reading that looked for the halves as they
+#: are spelled above — lower-case, mid-sentence — reported it nowhere, so the
+#: reading folds case and the control below is what says so.
+SUPERSEDED_SENTENCE_CAPITALISED = (
+    "A developer meets each such finding in the event stream, which is the "
+    "whole of what becomes of it."
+)
+
 #: Two accurate sentences carrying one half each about something that is not
 #: an abandoned finding — the run's cost total, which
 #: `.harness/docs/ARCHITECTURE.md` states in almost these words today, and the
@@ -1936,6 +2270,22 @@ UNRELATED_BUT_ACCURATE = (
     "completion report's own cost section.",
     "Both renderings of the event stream are inside the commit the escalation "
     "makes, so a repository that tracks its run directory is not left dirty.",
+)
+
+#: Two more accurate sentences carrying one half each, arranged the way a JSON
+#: contract arranges its fields: a `"description"` closes on a full stop and a
+#: quotation mark, and the next field's opens a character later, so there is no
+#: blank line between them and no full stop followed by a space either. This is
+#: the arrangement `planted_with` below deliberately does not make, and the one
+#: the cut has to survive — a sentence that ends any other way than in a full
+#: stop and a space still has to end, or two accurate sentences in two
+#: different fields are read as one claim and reported as one. That is what the
+#: cut this module shipped first did, over this repository's own contracts.
+FLUSH_NEIGHBOURS = (
+    '"description": "The sequence is the 1-based position in the event '
+    'stream."',
+    '"description": "What a developer meets as the wall-clock time the event '
+    'was appended."',
 )
 
 #: What each of those texts says instead, and what makes the absence above
@@ -1966,6 +2316,15 @@ THE_ROUTED_ONES = "routed"
 SWEPT_DIRECTORIES = ("orchestration", "schemas")
 
 
+#: Where a sentence of a flowed passage ends: after a full stop, a question
+#: mark or an exclamation mark, whatever stands next to it — a space, the
+#: quotation mark that closes a JSON string, a closing bracket or brace, a
+#: comma, or the end of the passage. Both halves are lookarounds, so the
+#: terminator stays on the sentence it ends and the character after it opens
+#: the next.
+SENTENCE_ENDS = re.compile(r"""(?<=[.!?])(?=[\s"')\]},]|\Z)""")
+
+
 def flowed(text: str) -> str:
     """`text` with its line wrapping removed, so a sentence that straddles a
     newline — which every one of these did, being wrapped source — is still
@@ -1973,22 +2332,75 @@ def flowed(text: str) -> str:
     return " ".join(text.split())
 
 
+def passages(text: str) -> list[str]:
+    """`text` cut where a blank line ends a passage, each passage flowed.
+
+    A passage carrying no terminator at all — a heading, an item of a list, a
+    clause that runs to the blank line — ends here, where no reading of its
+    punctuation could end it.
+    """
+    return [flowed(one) for one in text.split("\n\n") if one.strip()]
+
+
 def sentences(text: str) -> list[str]:
-    """`text` flowed and cut where its sentences end, so the reading below is
-    over one claim at a time.
+    """`text` cut into one claim at a time: into passages, and each passage at
+    every sentence end it carries.
 
     A file is not a claim: two unrelated sentences supplying one half of the
     superseded one each say nothing about an abandoned finding, and a reading
     over the whole text could not tell that from a sentence making the claim.
+
+    Neither can a reading that ends a sentence only where a full stop is
+    followed by a space, which is what this was. A contract's `"description"`
+    closes on `."`, so every description in a schema arrived here glued to its
+    neighbour — two accurate sentences in two different fields read as one
+    claim — and the longest piece that cut produced over the swept corpus
+    spanned whole function bodies. The passage cut and `SENTENCE_ENDS` are both
+    here for that, and it is
+    `test_the_reading_ends_a_sentence_however_it_ends` that holds it rather
+    than this paragraph.
     """
-    return [one for one in flowed(text).split(". ") if one.strip()]
+    return [one.strip() for passage in passages(text)
+            for one in SENTENCE_ENDS.split(passage) if one.strip()]
 
 
 def says_the_event_stream_is_the_whole(text: str) -> bool:
     """Whether `text` still claims the event stream is where a developer meets
     a finding a spent pass allowance abandoned — one sentence of it saying both
-    halves of that claim, rather than the file carrying them somewhere."""
-    return any(all(half in one for half in SUPERSEDED) for one in sentences(text))
+    halves of that claim, rather than the file carrying them somewhere.
+
+    Case is folded, because where a half falls in its sentence is not what the
+    claim is: written with its second half opening one it says exactly the
+    same thing, and the match that read the halves as they are spelled above
+    reported that spelling nowhere.
+    """
+    return any(all(half.lower() in one.lower() for half in SUPERSEDED)
+               for one in sentences(text))
+
+
+def said_by_the_cut_that_ended_only_at_a_full_stop_and_a_space(
+        text: str) -> bool:
+    """The same conjunction over the same halves, asked of the pieces the
+    superseded cut left: the whole text flowed, ended only where a full stop is
+    followed by a space.
+
+    Kept because "the reading does not report this arrangement" is an absence,
+    and what makes that absence worth asserting is that the reading it replaced
+    does report it. Written here rather than recovered from this repository's
+    history, on the terms `SUPERSEDED_SENTENCE` above is written on: the control
+    needs a cut and not a commit, so nothing moves under it when something is
+    rebased.
+    """
+    pieces = [one for one in flowed(text).split(". ") if one.strip()]
+    return any(all(half.lower() in one.lower() for half in SUPERSEDED)
+               for one in pieces)
+
+
+def said_where_the_halves_are_spelled_as_they_are_here(text: str) -> bool:
+    """The same conjunction over the same cut, matched without folding case:
+    the reading before the fold, kept as the other half of the same control."""
+    return any(all(half in one for half in SUPERSEDED)
+               for one in sentences(text))
 
 
 def planted_with(text: str, sentence: str) -> str:
@@ -2000,6 +2412,19 @@ def planted_with(text: str, sentence: str) -> str:
     between them instead of about the plant.
     """
     return f"{text.rstrip().rstrip('.')}.\n\n{sentence}"
+
+
+def planted_flush(text: str, sentence: str) -> str:
+    """`text` with `sentence` put hard against its tail, which is left ending
+    however it ended.
+
+    The arrangement `planted_with` above avoids, and the one the reading has to
+    survive: no blank line, and no full stop followed by a space at the join. A
+    contract's fields sit next to each other exactly this way, which is why the
+    cut this module shipped first read the descriptions of this repository's
+    own schemas as run-ons.
+    """
+    return f"{text.rstrip()} {sentence}"
 
 
 def swept_texts() -> dict[str, str]:
@@ -2179,3 +2604,73 @@ def test_the_reading_reports_neither_half_of_the_claim_on_its_own():
             relative for relative, text in swept.items()
             if says_the_event_stream_is_the_whole(planted_with(text, sentence)))
         assert reported == [], (sentence, reported)
+
+
+def test_the_reading_ends_a_sentence_however_it_ends():
+    """What the sweep above promises about how it reads, held by an assertion
+    rather than by the docstring that states it.
+
+    The two sentences below are accurate, carry one half of the claim each and
+    say nothing about an abandoned finding — and they are arranged the way a
+    contract arranges two of its own fields: no blank line between them, and no
+    space after the full stop that ends the first. The cut that ended a
+    sentence only at a full stop and a space read them as one run-on piece and
+    reported that piece as the claim, which is a false report about a
+    repository whose contracts are written this way throughout.
+
+    The control is that cut, asked about the same arrangement, which does
+    report it — so the silence is the sentence ending where it ends rather than
+    a reading that has stopped seeing. The arrangement is put to the whole
+    sweep as well, appended to every swept file, because a false report over
+    this corpus is what the defect cost and the cheapest way out of one is to
+    reword a true sentence.
+    """
+    for neighbour in FLUSH_NEIGHBOURS:
+        # The premise: each really does carry one half, so a reading that
+        # glues them *would* report the pair.
+        carried = [half for half in SUPERSEDED if half in neighbour]
+        assert len(carried) == 1, neighbour
+        assert not says_the_event_stream_is_the_whole(neighbour), neighbour
+
+    arranged = planted_flush(*FLUSH_NEIGHBOURS)
+    assert not says_the_event_stream_is_the_whole(arranged)
+    assert said_by_the_cut_that_ended_only_at_a_full_stop_and_a_space(arranged)
+
+    swept = swept_texts()
+    assert swept, "the sweep read nothing at all"
+    arranged_into = {}
+    for relative, text in swept.items():
+        for neighbour in FLUSH_NEIGHBOURS:
+            text = planted_flush(text, neighbour)
+        arranged_into[relative] = text
+    assert sorted(relative for relative, text in arranged_into.items()
+                  if says_the_event_stream_is_the_whole(text)) == []
+    assert sorted(
+        relative for relative, text in arranged_into.items()
+        if said_by_the_cut_that_ended_only_at_a_full_stop_and_a_space(text)) \
+        == sorted(swept)
+
+
+def test_the_reading_finds_the_claim_however_its_halves_are_spelled():
+    """The other half of the same guarantee. The claim says the same thing with
+    its second half opening the sentence, which is how a docstring or a field
+    description says it most naturally, and the match that read the halves as
+    this module spells them reported that spelling nowhere.
+
+    The control is that match, asked about the same sentence and silent on it,
+    and the sweep is asked too: planted into every swept file the capitalised
+    claim is reported, so the criterion is about the claim rather than about
+    one spelling of it.
+    """
+    assert all(half.lower() in SUPERSEDED_SENTENCE_CAPITALISED.lower()
+               for half in SUPERSEDED)
+    assert says_the_event_stream_is_the_whole(SUPERSEDED_SENTENCE_CAPITALISED)
+    assert not said_where_the_halves_are_spelled_as_they_are_here(
+        SUPERSEDED_SENTENCE_CAPITALISED)
+
+    swept = swept_texts()
+    assert swept, "the sweep read nothing at all"
+    planted = {relative: planted_with(text, SUPERSEDED_SENTENCE_CAPITALISED)
+               for relative, text in swept.items()}
+    assert sorted(relative for relative, text in planted.items()
+                  if says_the_event_stream_is_the_whole(text)) == sorted(swept)

@@ -2,3 +2,7 @@
 {"story_id": "story-213", "timestamp": "2026-09-28 17:11:59", "filed": 0, "dropped": 0, "routed": 4, "acted_on": 4}
 {"story_id": "story-213", "mode": "narrow", "cost_usd": 9.642575999999998, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-28 19:01:07", "findings": 3, "filed": 0, "dropped": 0, "dedupe_ran": true, "inspection_made": true}
 {"story_id": "story-213", "timestamp": "2026-09-28 19:15:19", "filed": 0, "dropped": 0, "routed": 3, "acted_on": 2}
+{"story_id": "story-213", "mode": "narrow", "cost_usd": 11.487873999999994, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-28 21:06:09", "findings": 1, "filed": 0, "dropped": 0, "dedupe_ran": true, "inspection_made": true}
+{"story_id": "story-213", "timestamp": "2026-09-28 21:16:58", "filed": 0, "dropped": 0, "routed": 1, "acted_on": 1}
+{"story_id": "story-213", "mode": "narrow", "cost_usd": 7.920592499999999, "scope_files": 60, "invocations": 1, "timestamp": "2026-09-28 23:22:13", "findings": 4, "filed": 0, "dropped": 0, "dedupe_ran": true, "inspection_made": true}
+{"story_id": "story-213", "timestamp": "2026-09-28 23:33:07", "filed": 0, "dropped": 0, "routed": 4, "acted_on": 2}
