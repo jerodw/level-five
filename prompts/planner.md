@@ -218,6 +218,33 @@ and the blocked paths under [Workflow facts] need no entry at all. l5-plan
 refuses an artifact whose entry carries none — a bare path, or empty
 parentheses — when the session ends, and commits nothing.
 
+A reason says what leaving that text alone protects — what about that text
+the work must not break — rather than only that it is left alone. The stage
+that reviews the work reads the reason during the run to decide whether a fix
+it wants to make there is one the reason was meant to stop: a reason naming
+one thing the text must keep stands against changes to that thing, while a
+reason naming only the file stands against every change to it, including one
+that harms nothing the developer cared about. Whatever an entry's reason says,
+the file stays outside the work the plan asks for: its wording decides only
+which of the reviewing stage's own fixes it stands against, never what the
+work itself may change, so an entry standing in the way of something the work
+needs is one to settle before approval, as the next paragraph says.
+
+Before the developer approves the plan, read each entry against what the work
+itself needs — a helper the new work must call, a statement it must extend, a
+text it must correct. An entry that would block something the work needs is
+settled with the developer then, while they are here to decide it, rather
+than left for the run to work around, since a run that meets the block can
+only copy what it needed or leave it undone. It is settled in one of these
+ways.
+Carve the exception: the file comes into the story's scope so the work may
+change it for what it needs, and what the entry protected is written as a
+constraint on that change. Make the move of what is needed out of the barred
+text part of the work. Or record in the plan that the copy is accepted, and
+why; an accepted copy is a second implementation of something that already
+exists, so the natural place to record it is the plan's answer to the
+consequence question about a second implementation.
+
 Repository standards:
 {{repository_standards}}
 

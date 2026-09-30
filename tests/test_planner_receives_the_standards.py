@@ -95,6 +95,33 @@ on the prompt l5-plan hands the session, controlled in both directions: the
 baseline template, which carries none of it, and a copy of the shipped step
 with the statement cut out, on which the same reader reports it missing.
 
+story-218 extended the reason rule story-177 wrote. A do_not_modify entry's
+reason now says what leaving the text alone protects — what about it the
+work must not break — rather than only that it is left alone, because the
+stage that reviews the work reads the reason during the run to decide whether
+a fix it wants to make there is one the reason was meant to stop, and a
+reason naming only the file stands against every change to it. Whatever an
+entry's reason says, though, the file stays outside the work the plan asks
+for: the reason's wording decides only which of the reviewing stage's own
+fixes it stands against, never what the work itself may change. So before the
+plan is approved each entry is read against what the work itself needs: one
+that would block something the work needs is settled with the developer then,
+in one of the ways the prompt names, rather than left for the run. The story
+schema's description of scope.do_not_modify says what a reason protects as
+well. The section "story-218: a reason says what it protects, and a blocking
+entry is settled at approval" holds each statement on the prompt l5-plan
+hands the session, on the template and on the schema, and holds the prompt's
+statements in the reason rule's own passage rather than anywhere in the
+prompt. Each is controlled in both directions: the baseline, which carries
+none of it, and a copy of the shipped text with that statement cut out, where
+the same reader reports it missing while the reason rule's older statements
+are still found. What those assertions establish is the wording and where it
+stands, and not what it means. The test the brief asked for, driving the
+reviewing stage with reasons worded each way, is not built: the only reader
+of a reason's words is that stage's model, the suite never invokes a model,
+and in a driven run the test writes the verdict itself, so such a test would
+pass whether or not this story changed anything.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -2199,6 +2226,405 @@ def test_the_consequence_step_sends_the_two_questions_past_the_swept_places(
     for statement, phrases in STEP_STATES.items():
         expected = list(phrases) if statement in WIDENING_STATES else []
         assert unsaid(without, phrases) == expected, statement
+
+
+# --------------------------------------------------------------------------
+# story-218: a reason says what it protects, and a blocking entry is settled
+# at approval
+#
+# The reason rule story-177 wrote says every do_not_modify entry carries the
+# developer's reason and that the reason records why the text is left alone.
+# Statements now follow it. One says what a reason says — what leaving the
+# text alone protects, what about it the work must not break — and why: the
+# stage that reviews the work reads the reason during the run to decide
+# whether a fix it wants there is one the reason was meant to stop, and a
+# reason naming only the file stands against every change to it. Another says
+# that whatever an entry's reason says, the file stays outside the work the
+# plan asks for: the reason's wording decides only which of the reviewing
+# stage's own fixes it stands against, never what the work itself may change,
+# so an entry standing in the way of something the work needs is one to
+# settle before approval. It is held because the statement before it, read
+# alone, lets a planner take an entry with a precise reason as blocking
+# nothing the work needs. Another says that before the plan is approved each
+# entry is read against what the work itself needs, that an entry blocking
+# something the work needs is settled with the developer then rather than
+# left for the run, and names the ways it is settled. The story schema's
+# description of scope.do_not_modify says what a reason protects as well,
+# since the planner is handed that description whole.
+#
+# Each statement of the prompt is read in the reason rule's passage — the
+# rule and what follows it, up to the heading the standards are rendered
+# beneath — rather than anywhere in the prompt. The criterion is that the
+# statements are made with the rule they extend, and a copy of the text with
+# a statement moved out of that passage is shown reported missing there while
+# the text as a whole still carries it. It matters on the rendered prompt as
+# well, because that prompt carries the story schema whole and the schema's
+# description says some of the same things in some of the same words: a
+# reading of the whole prompt could be answered by the schema after the
+# template had lost the statement.
+#
+# Every absence here has its control, in the idiom of story-217's section:
+# the baseline template and the baseline description, neither of which ever
+# carried any of this, and a copy of the shipped text with one statement cut
+# out as one span, where the same reader reports every part of that statement
+# missing while the other statements and every statement the reason rule made
+# before this story are still found. So the cut took that statement and
+# nothing else, and the older statements are held on the same prompt.
+#
+# What this does not establish is meaning, for the reason story-217's section
+# gives: a phrase match reads no subject and no polarity. Nor does it say
+# anything about what the harness does with an entry, which this story left
+# alone and other modules hold — the plan-time refusal of an entry carrying no
+# reason in tests/test_plan_time_validation.py, and the run-time bar and the
+# reviewing stage's recorded judgement in
+# tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py. The
+# skeleton's do_not_modify item and the single occurrence of that key are
+# held by story-177's section above, and that the template names no workflow
+# stage and no restricted path of its own by tests/test_planner_injection.py.
+# --------------------------------------------------------------------------
+
+
+#: What the reason rule said before this story, each statement as the phrases
+#: a reader would look for in it. Held in every reading below beside the new
+#: statements, so a new statement that displaced or reworded one of these is
+#: caught where it was written.
+REASON_RULE_STATES = {
+    "an entry is a path or area followed by the developer's reason": (
+        "do_not_modify entry is a path or area followed by the developer's "
+        "reason",),
+    "the reason sits in a closing parenthetical": (
+        "in a closing parenthetical",),
+    "the reason lets a later reader tell a decision from a default": (
+        "what a later reader uses to tell a decision the developer made from "
+        "a default",),
+    "it records why the text is left alone rather than that it is": (
+        "records why that text is left alone rather than that it is",),
+    "a path a stage may not write is not itself a reason": (
+        "a path a stage may not write is not itself a reason",),
+    "the blocked paths need no entry": (
+        "the blocked paths under [Workflow facts] need no entry",),
+    "an artifact whose entry carries no reason is refused when the session "
+    "ends": (
+        "l5-plan refuses an artifact whose entry carries none",
+        "when the session ends"),
+}
+
+#: What a reason says since this story, and why. In the order the prompt says
+#: it, because `statement_span` builds the cut from the first phrase and the
+#: last.
+REASON_PROTECTS_STATES = {
+    "a reason says what leaving the text alone protects": (
+        "A reason says what leaving that text alone protects",),
+    "what about that text the work must not break": (
+        "what about that text the work must not break",),
+    "rather than only that it is left alone": (
+        "rather than only that it is left alone",),
+    "the stage that reviews the work reads the reason during the run": (
+        "The stage that reviews the work reads the reason during the run",),
+    "to decide whether a fix it wants is one the reason was meant to stop": (
+        "whether a fix it wants to make there is one the reason was meant to "
+        "stop",),
+    "a reason naming only the file stands against every change to it": (
+        "a reason naming only the file stands against every change to it",
+        "including one that harms nothing the developer cared about"),
+}
+
+#: That whatever an entry's reason says, the file stays outside the work the
+#: plan asks for, so an entry in the way of what the work needs is settled
+#: before approval. In the order the prompt says it, for the same reason.
+REASON_BARS_THE_WORK_STATES = {
+    "whatever its reason says, the file stays outside the work the plan asks "
+    "for": (
+        "Whatever an entry's reason says, the file stays outside the work the "
+        "plan asks for",),
+    "its wording decides only which of the reviewing stage's own fixes it "
+    "stands against": (
+        "its wording decides only which of the reviewing stage's own fixes it "
+        "stands against",),
+    "never what the work itself may change": (
+        "never what the work itself may change",),
+    "an entry in the way of what the work needs is settled before approval": (
+        "an entry standing in the way of something the work needs is one to "
+        "settle before approval, as the next paragraph says",),
+}
+
+#: When an entry that would block the work is settled, and the ways it is
+#: settled. In the order the prompt says it, for the same reason.
+REASON_SETTLED_STATES = {
+    "before the plan is approved each entry is read against what the work "
+    "needs": (
+        "Before the developer approves the plan",
+        "read each entry against what the work itself needs"),
+    "an entry blocking something the work needs is settled with the "
+    "developer then": (
+        "An entry that would block something the work needs",
+        "is settled with the developer then"),
+    "rather than left for the run to work around": (
+        "rather than left for the run to work around",),
+    "carving the exception lets the work change the file for what it needs": (
+        "Carve the exception",
+        "the work may change it for what it needs"),
+    "what the entry protected is written as a constraint on that change": (
+        "what the entry protected is written as a constraint on that change",),
+    "moving what is needed out of the barred text is made part of the work": (
+        "Make the move of what is needed out of the barred text part of the "
+        "work",),
+    "the plan records that the copy is accepted, and why": (
+        "record in the plan that the copy is accepted, and why",),
+    "an accepted copy is recorded where the second implementation question "
+    "is answered": (
+        "consequence question about a second implementation",),
+}
+
+#: Every statement the reason rule's passage makes today, old and new.
+REASON_PASSAGE_STATES = {**REASON_RULE_STATES, **REASON_PROTECTS_STATES,
+                         **REASON_BARS_THE_WORK_STATES,
+                         **REASON_SETTLED_STATES}
+
+#: The statements this story added to the passage, each cut and moved on its
+#: own below.
+REASON_ADDED_STATEMENTS = (REASON_PROTECTS_STATES, REASON_BARS_THE_WORK_STATES,
+                           REASON_SETTLED_STATES)
+
+#: What the schema's description of scope.do_not_modify said before this
+#: story, which the task asked be kept sentence for sentence.
+DO_NOT_MODIFY_RULE_STATES = {
+    "an entry is followed by the developer's reason in a closing "
+    "parenthetical": (
+        "each followed by the developer's reason in a closing parenthetical",),
+    "the reason is the developer's decision, for a later reader to tell from "
+    "a default": (
+        "The reason is the developer's decision",
+        "recorded for a later reader to tell it from a planner's default"),
+    "it lives inside the string because of how the parser reads a list": (
+        "it lives inside the string rather than in a second field",
+        "reads a list's items as one type"),
+    "an entry carrying no reason is refused at plan time": (
+        "An entry carrying no reason", "is refused at plan time",
+        "where the developer is still present to supply one"),
+    "artifacts committed before the rule are not held to it": (
+        "l5-run's pre-flight does not refuse it",
+        "artifacts committed before this rule are not held to it"),
+}
+
+#: What that description says a reason protects, and why it matters to the
+#: stage that reviews the work, in the order it says it.
+DO_NOT_MODIFY_PROTECTS_STATES = {
+    "the reason says what leaving the path or area alone protects": (
+        "The reason says what leaving the path or area alone protects",),
+    "what about it the work must not break": (
+        "what about it the work must not break",),
+    "rather than only that it is left alone": (
+        "rather than only that it is left alone",),
+    "the stage that reviews the work reads the reason during the run": (
+        "the stage that reviews the work reads the reason during the run",),
+    "to decide whether a fix it wants is one the reason was meant to stop": (
+        "whether a fix it wants to make there is one the reason was meant to "
+        "stop",),
+    "a reason naming only the path stands against every change to it": (
+        "a reason naming only the path stands against every change to it",),
+}
+
+DO_NOT_MODIFY_STATES = {**DO_NOT_MODIFY_RULE_STATES,
+                        **DO_NOT_MODIFY_PROTECTS_STATES}
+
+
+def reason_rule_passage(text: str) -> str:
+    """The reason rule and what follows it, up to the heading the standards
+    are rendered beneath, collapsed into one line.
+
+    Found by the pattern story-177's section already recognises the rule by,
+    and required to be followed by that heading, so a template rearranged
+    into a shape this no longer reads reddens here rather than quietly
+    handing the readings below an empty passage.
+    """
+    collapsed = one_line(text)
+    rule = re.search(REASON_RULE_FORM, collapsed)
+    assert rule is not None, "the text states no reason rule"
+    end = collapsed.find(STANDARDS_HEADING, rule.start())
+    assert end != -1, "no standards heading follows the reason rule"
+    return collapsed[rule.start(): end]
+
+
+def do_not_modify_description(schema: dict) -> str:
+    return schema["properties"]["scope"]["properties"]["do_not_modify"][
+        "description"]
+
+
+def cut_reports_only(text: str, cut_out: dict[str, tuple[str, ...]],
+                     states: dict[str, tuple[str, ...]]) -> None:
+    """Cut `cut_out` from `text` as one span, and assert the same reader
+    reports every phrase of it missing from what is left while every other
+    statement of `states` is still found there."""
+    without, cut = statement_span(cut_out).subn("", one_line(text))
+    assert cut == 1, "the statement is no longer one span of the text"
+    for statement, phrases in states.items():
+        expected = list(phrases) if statement in cut_out else []
+        assert unsaid(without, phrases) == expected, statement
+
+
+def test_the_rendered_prompt_says_what_a_reason_protects_with_the_reason_rule(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session: in the reason rule's passage, a
+    reason says what leaving the text alone protects rather than only that it
+    is left alone, and why — the stage that reviews the work reads it during
+    the run, and a reason naming only the file stands against every change to
+    it. The reason rule's older statements are found in the same passage.
+
+    The control is the same reader over that passage with the statement cut
+    out, which must report the whole statement missing while the rule's
+    older statements and every other statement this story added are still
+    found."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    passage = reason_rule_passage(prompt)
+    for statement, phrases in {**REASON_RULE_STATES,
+                               **REASON_PROTECTS_STATES}.items():
+        assert unsaid(passage, phrases) == [], statement
+
+    cut_reports_only(passage, REASON_PROTECTS_STATES, REASON_PASSAGE_STATES)
+
+
+def test_the_rendered_prompt_says_a_barred_file_stays_outside_the_work_whatever_its_reason(
+    plan_capture, tmp_path
+):
+    """On the same prompt and in the same passage: whatever an entry's reason
+    says, the file stays outside the work the plan asks for — the reason's
+    wording decides only which of the reviewing stage's own fixes it stands
+    against, never what the work itself may change — so an entry standing in
+    the way of something the work needs is one to settle before approval.
+    Without it, a planner reading that a precise reason stands only against
+    changes to what it names could take such an entry as blocking nothing the
+    work needs, and skip the settlement the passage goes on to ask for.
+
+    The control is that passage with this statement cut out, where the same
+    reader reports all of it missing and still finds everything else the
+    passage says, including the statement about what a reason protects that
+    it follows."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    passage = reason_rule_passage(prompt)
+    for statement, phrases in REASON_BARS_THE_WORK_STATES.items():
+        assert unsaid(passage, phrases) == [], statement
+
+    cut_reports_only(passage, REASON_BARS_THE_WORK_STATES,
+                     REASON_PASSAGE_STATES)
+
+
+def test_the_rendered_prompt_says_a_blocking_entry_is_settled_before_approval(
+    plan_capture, tmp_path
+):
+    """On the same prompt and in the same passage: before the plan is
+    approved each entry is read against what the work itself needs, an entry
+    that would block something the work needs is settled with the developer
+    then rather than left for the run, and the ways it is settled are named —
+    carving the exception with what the entry protected written as a
+    constraint on the change, making the move of what is needed part of the
+    work, and recording that the copy is accepted, and why.
+
+    The control is that passage with this statement cut out, where the same
+    reader reports all of it missing and still finds everything else the
+    passage says."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    passage = reason_rule_passage(prompt)
+    for statement, phrases in REASON_SETTLED_STATES.items():
+        assert unsaid(passage, phrases) == [], statement
+
+    cut_reports_only(passage, REASON_SETTLED_STATES, REASON_PASSAGE_STATES)
+
+
+def test_the_template_carries_the_statements_the_session_receives():
+    """The assertions above read a render; this reads the template, so a
+    regression in either the template or the rendering is caught by name."""
+    passage = reason_rule_passage(planner_template())
+    for statement, phrases in REASON_PASSAGE_STATES.items():
+        assert unsaid(passage, phrases) == [], statement
+
+
+def test_the_baseline_template_stated_none_of_the_added_statements():
+    """Control in the other direction, in this module's own idiom: the
+    template at this module's baseline carries no phrase of any statement
+    this story added anywhere in it, so the same reader reports every one of
+    them absent there, and green above is the text having been added rather
+    than the reader matching what was always written.
+
+    The whole template is read rather than a passage because that template
+    predates the reason rule, so it has no passage to read — which the
+    assertion beside this one shows."""
+    before = baseline_planner_template()
+    for statements in REASON_ADDED_STATEMENTS:
+        for statement, phrases in statements.items():
+            assert unsaid(before, phrases) == list(phrases), statement
+    assert re.search(REASON_RULE_FORM, before) is None
+
+
+def test_the_passage_reading_reports_a_statement_moved_away_from_the_rule():
+    """Control for "with the reason rule they extend": a copy of the template
+    with one statement moved ahead of the rule, and one with it moved to the
+    end of the template, beneath the standards heading. In each the passage
+    reading reports every phrase of the moved statement missing, while the
+    copy as a whole still carries all of it and the passage still carries
+    the rule's older statements — so what the reading reports is where the
+    statement stands rather than whether it is there at all."""
+    collapsed = one_line(planner_template())
+    for statements in REASON_ADDED_STATEMENTS:
+        span = statement_span(statements).search(collapsed)
+        assert span is not None, "the statement is no longer one span"
+        rest = collapsed[: span.start()] + collapsed[span.end():]
+        for moved in (f"{span.group(0)} {rest}", f"{rest} {span.group(0)}"):
+            passage = reason_rule_passage(moved)
+            for statement, phrases in statements.items():
+                assert unsaid(passage, phrases) == list(phrases), statement
+                assert unsaid(moved, phrases) == [], statement
+            for statement, phrases in REASON_RULE_STATES.items():
+                assert unsaid(passage, phrases) == [], statement
+
+
+def test_the_schemas_do_not_modify_description_says_what_a_reason_protects():
+    """The other statement of the rule the planner receives: the story
+    schema's description of scope.do_not_modify says what leaving the path or
+    area alone protects and why that matters to the stage that reviews the
+    work, and still says everything it said before — the form of an entry,
+    what the reason is for and why it lives in the string, the plan-time
+    refusal, and that artifacts committed before the rule are not held to it.
+
+    The control is that description with the new statement cut out as one
+    span, where the same reader reports all of it missing and still finds
+    every sentence the description carried before."""
+    description = do_not_modify_description(
+        schema_validator.load_schema("story"))
+    for statement, phrases in DO_NOT_MODIFY_STATES.items():
+        assert unsaid(description, phrases) == [], statement
+
+    cut_reports_only(description, DO_NOT_MODIFY_PROTECTS_STATES,
+                     DO_NOT_MODIFY_STATES)
+
+
+def test_the_baseline_do_not_modify_description_stated_none_of_it():
+    """Control in the other direction: the same field at this module's
+    baseline, which is text and not an empty string, carries no phrase of
+    the new statement."""
+    before = do_not_modify_description(json.loads(repository_file_at(
+        STORY_SCHEMA_REL, validation_file=Path(__file__), bound=BASELINE)))
+    assert before, "the field carried no description to search"
+    for statement, phrases in DO_NOT_MODIFY_PROTECTS_STATES.items():
+        assert unsaid(before, phrases) == list(phrases), statement
+
+
+def test_the_session_receives_the_schemas_statement_whole(
+    plan_capture, tmp_path
+):
+    """The description is only a statement to the planner if it reaches the
+    session, so the prompt l5-plan hands it is read for the description as
+    the schema file writes it, and what it finds there says what a reason
+    protects. Encoded the way the schema file encodes a string, so a
+    description carrying a character JSON escapes is still found."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    description = do_not_modify_description(
+        schema_validator.load_schema("story"))
+    as_written = json.dumps(description, ensure_ascii=False)[1:-1]
+    assert as_written in prompt
+    for statement, phrases in DO_NOT_MODIFY_PROTECTS_STATES.items():
+        assert unsaid(as_written, phrases) == [], statement
 
 
 # --------------------------------------------------------------------------
