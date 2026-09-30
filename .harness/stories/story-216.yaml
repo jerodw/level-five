@@ -1,0 +1,302 @@
+story:
+  id: story-216
+  title: The planner's duplication question is asked about test helpers as well as
+    the code under test
+  description: |
+    Before a plan is written, the planner works through a short list of
+    questions about what the change would break. One of them asks whether the
+    change adds a second implementation of something the system already has
+    instead of using the one that is there. It is meant to catch duplication
+    while the plan can still be written around it, because duplication found
+    once the run is underway is duplication the run cannot undo. The question
+    is worded about "code", and a recent story read that as the code being
+    changed: it answered "nothing found, because no code is added at all" while
+    adding over a thousand lines of test helpers copied from a neighbouring
+    test file. Those copies have already drifted apart from each other. The
+    answer was not dishonest — this repository keeps most of its shared
+    machinery in its test files, so the question aimed itself away from where
+    the duplication actually was.
+
+    This story has the question ask about the machinery that validates the
+    system as well as about the system itself — test helpers, fixtures and the
+    scaffolding validation is built from. It also stops "nothing found" being
+    sayable without saying where it looked: the sentence in which a planner
+    records the questions that found nothing can no longer carry a bare mention
+    of this one, but has to name the kinds of place that were searched. So an
+    answer of "nothing found" comes to mean nothing was found, rather than that
+    nowhere was looked.
+
+    It leaves the other five questions in the list exactly as they are, and it
+    leaves to the plan whether a particular duplicate is worth accepting — the
+    point is that the plan says so on purpose rather than by not looking.
+    Nothing scores the answer: no check reads a story's description, and what
+    holds this is the developer reading the plan before approving it. What
+    changes is that a narrowly-aimed answer is now visible in the text they
+    read.
+
+    This story was planned from the brief filed under 377.
+
+    The surfaces. The question is the first item of the step that opens "Trace
+    what the change breaks" in prompts/planner.md, and the rule about a
+    found-nothing answer is the closing prose of that same step. Both are
+    edited in place; the step keeps its numbering, its other five items, its
+    statement that two of the questions are answered from the sweep above, and
+    its closing rule against a criterion that names a stand-in. The
+    story.description field of schemas/story.schema.json describes the same
+    found-nothing sentence and is injected into the planner prompt whole, so it
+    states the added rule too; its existing claim that the sentence is the only
+    place a found-nothing answer is recorded stays true, which is why the rule
+    is written inside that sentence rather than as an exception to it. The
+    validation extends the story-212 section of
+    tests/test_planner_receives_the_standards.py, which already holds the
+    consequence step's claims against the prompt l5-plan hands a session, and
+    .harness/docs/ARCHITECTURE.md carries the account of that step and is
+    corrected.
+
+    Consequences traced before the tasks and criteria were written. A second
+    implementation: found, and it shapes the plan. A new test module for this
+    claim would need consequence_step_of, question_bullets, bullets_asking,
+    unsaid, one_line, planner_template and baseline_planner_template, plus the
+    plan_capture fixture and captured_prompt — every one of which
+    tests/test_planner_receives_the_standards.py already declares, and all of
+    them about the very step this story edits. A sibling module would be the
+    same copying this story exists to prevent. So the new assertions extend
+    that module's existing section and reuse its readers; the only readers that
+    are genuinely new are one for which kinds of place an item names, and one
+    for whether the found-nothing rule reaches a given question.
+
+    Another path that has to move in step: there is only one planner prompt and
+    both shipped workflows use it, so unlike the two verifier prompts there is
+    no parity pair to keep byte-identical. What moves in step are the two other
+    texts that state the same rule — the schema field above and the
+    architecture document. The structural-duplication category of
+    prompts/inspector.md is the other text about duplication the sweep turned
+    up, and it is already general: it is what caught the copied helpers after
+    the work shipped, so it needs no change.
+
+    Right the second time through: the planner prompt is a static template
+    rendered once, at the start of a planning session. A planning session has
+    no retry, no resume, no later entry and no verdict, and re-planning renders
+    the same text, so nothing here behaves differently on a second pass.
+
+    Validation that can fail if the change is wrong: this is the question that
+    most shapes the plan, because the module's existing entries for this
+    question stay green through the whole change. The pair of phrases it
+    requires in the duplication item — "second implementation" and "already" —
+    both survive a widened item, and the phrase it requires of the found-nothing
+    rule survives the added clause. Green today therefore says nothing about
+    this story, and the new assertions need discriminators of their own. Two are
+    available: the text as it stood before this story, reached through
+    tests/conftest.py's revision_carrying rather than a pinned revision, must
+    report the question naming one kind of place and the collective sentence
+    carrying every question unqualified; and a constructed copy of the step with
+    the new rule removed must be reported as absorbing the question, which is
+    this module's own control idiom, used four times already in the same
+    section.
+
+    A value that is absent, unwritable or unreadable: nothing new is read from
+    disk or from configuration. It is worth stating because there was a
+    tempting wrong turn here — the guidance could have named the target's tests
+    directory through the tests_dir placeholder, which renders None on a target
+    that declares none, and the question would then have read as nonsense on
+    such a target. It names the kinds of place in plain words instead and
+    interpolates nothing.
+
+    A written statement made untrue: two. .harness/docs/ARCHITECTURE.md
+    describes the question in its narrow form and the found-nothing instruction
+    without the added rule, so both accounts become incomplete; and the
+    story.description field of schemas/story.schema.json describes the
+    found-nothing sentence without the rule that one question's entry in it
+    names the places searched. Nothing else goes stale: the two recorded claims
+    for this module in tests/test_baseline_honesty.py are about why it reads
+    live artifacts and what its baseline reads are, and this story adds no new
+    kind of live read, so both stay true.
+
+    No question found nothing, so there is no found-nothing sentence to write
+    here.
+  workflow: story-workflow
+
+tasks:
+  - Widen the first item of the consequence step in prompts/planner.md so it asks
+    about a second implementation in the machinery that validates the system as
+    well as in the system itself, naming the kinds of place in plain words and
+    interpolating no configured value.
+  - Add to that step's closing prose the rule that where that one question found
+    nothing, its entry in the sentence recording the questions that found nothing
+    names which of those kinds of place were searched — written inside that
+    sentence's rule rather than as an exception to it.
+  - State the same rule in the story.description field of
+    schemas/story.schema.json, beside its existing account of the found-nothing
+    sentence and without disturbing its claim that the sentence is the only place
+    such an answer is recorded.
+  - Extend the story-212 section of tests/test_planner_receives_the_standards.py
+    with the new claims, reusing that module's readers and adding only the readers
+    no existing helper answers.
+  - Give those claims their discriminators: the text as it stood before this story,
+    reached through a search rather than a pinned revision, and a constructed copy
+    of the step with the new rule removed.
+  - Record the change in .harness/docs/ARCHITECTURE.md, correcting its account of
+    the question's scope and of the found-nothing instruction.
+
+acceptance_criteria:
+  - The question about a second implementation, as the planner receives it, asks
+    about the machinery that validates the system as well as about the system
+    itself, so a reader of that item cannot take it to be about only one of them.
+  - The step's rule about recording a found-nothing answer requires that
+    question's answer to say which of those kinds of place were searched, so a
+    bare mention of it among the questions that found nothing does not satisfy the
+    step.
+  - Each of the other five questions is still asked by exactly one item of the
+    step, asking what it asks today, and each is still recorded among the
+    questions that found nothing without further qualification.
+  - Every item of the step is still worded as a question; the step still states
+    where the two questions about other texts are answered, still names no filing
+    category and no file, and the process list is still numbered straight through.
+  - The story schema's account of what a description carries states the same rule
+    about that one question, and still says the sentence recording the questions
+    that found nothing is the only place such an answer is recorded.
+  - The planner's guidance interpolates no configured value, so it reads the same
+    on a target that declares no tests directory.
+  - The new assertions discriminate against the text this story changed: read
+    against that text as it stood before this story they report the question
+    asking about one kind of place and the found-nothing sentence carrying every
+    question unqualified, and the assertion about the new rule fails on a copy of
+    the step with that rule removed.
+  - Every assertion and control the module already carried about the consequence
+    step and about the schema's description is still there and still passes.
+  - The account in .harness/docs/ARCHITECTURE.md of the question's scope and of
+    the found-nothing instruction matches what those texts now carry.
+  - Nothing under orchestration/ or workflows/ changes.
+
+technical_plan:
+  implementation_steps:
+    - Widen the first item of the consequence step in prompts/planner.md. The
+      kinds of place go into the item itself rather than into a gloss beneath the
+      list, because the failure this story addresses was the question being aimed
+      narrowly while it was being answered, and the item is the text in front of
+      the planner at that moment. It is also what the existing reader searches: the
+      module collapses each dashed item to one line and requires a question's
+      phrases to appear together in one of them.
+    - Add the found-nothing rule to the closing prose of the same step, inside the
+      sentence that already tells the planner to answer the questions that found
+      nothing together, so that a found-nothing answer still has one home and the
+      schema's claim about that home survives.
+    - State the same rule in the story.description field of
+      schemas/story.schema.json, in the sentence that already describes the
+      found-nothing sentence, so the text the planner is injected and the text a
+      later reader of the schema finds cannot disagree.
+    - Extend the story-212 section of tests/test_planner_receives_the_standards.py.
+      The new claims read the prompt through that section's existing helpers —
+      consequence_step_of, question_bullets, bullets_asking, unsaid and the
+      plan_capture render — and add a reader for which kinds of place an item names
+      and a reader for whether the found-nothing rule reaches a given question.
+    - Give the new claims their discriminators. The before-this-story control reads
+      the template at the newest revision whose duplication item still carried its
+      narrow wording, through tests/conftest.py's revision_carrying, rather than at
+      this module's own baseline, which predates the whole step and so cannot show
+      the item present and narrow. The rule's control needs no history: a
+      constructed copy of the step with the rule removed is reported as absorbing
+      the question, which is how the four absence controls already in this section
+      are built.
+    - Record the change in .harness/docs/ARCHITECTURE.md and correct its account of
+      the question's scope and of the found-nothing instruction.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Carries the widened question and the added found-nothing rule, both
+        inside the step that traces what the change breaks.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: Its story.description field states the same rule about a found-nothing
+        answer, and is injected into the planner prompt whole.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: Already holds the consequence step's claims against the rendered
+        prompt and declares every reader the new claims need, so the validation
+        extends it rather than copying those readers into a sibling.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Records this change and corrects its own account of the question's
+        scope and of the found-nothing instruction, both of which become incomplete.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - schemas/story.schema.json
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The other five items of the consequence step (the brief excludes them, and
+      each is separately held to being asked by exactly one item of the step, so
+      disturbing one while widening the first would be reported as the widening
+      having spread beyond the question it was for)
+    - prompts/inspector.md (its structural-duplication category is already general
+      rather than narrowed to the code under test, and it is what caught the copied
+      helpers after the work shipped; this story moves the catch earlier rather
+      than changing what the Inspector looks for)
+    - The sweep step's list of the places it searches (which places the step's
+      questions are asked of is a separate gap, filed as its own work, and folding
+      it in would make this story about the search instead of the aim of one
+      question)
+    - Whether a duplicate is acceptable in a given story (the brief keeps that a
+      judgement for the plan, and a rule that decided it would refuse work a plan
+      should be allowed to accept on purpose)
+    - tests/test_baseline_honesty.py (its two recorded claims for this module are
+      about why it reads live artifacts and what its baseline reads are, and this
+      story adds no new kind of live read, so leaving it untouched and green is the
+      evidence that both stayed true rather than a claim that they were checked)
+    - tests/test_every_story_and_brief_opens_in_plain_english.py (it asserts that
+      the schema's description reaches the planner whole and that the field gained
+      no constraint beyond its description, both of which stay true of a prose
+      addition, so leaving it green is the evidence the addition stayed prose)
+    - orchestration/ and workflows/ (nothing routes on, reads or scores a story's
+      description, so there is no gate to move, and changing one would make the
+      story about machinery instead of about the question a planner is asked)
+
+verification_requirements:
+  - That the shipped prompts/planner.md carries the widened question and the added
+    rule, and that every other question of the step is still asked by exactly one
+    item.
+  - That the story.description field of schemas/story.schema.json states the rule
+    and still claims the found-nothing sentence is the only place such an answer is
+    recorded.
+  - That the before-this-story control reports the narrow question and the
+    unqualified sentence, so green is the text having changed rather than the
+    searches matching what was always written.
+  - That the assertion about the new rule fails on a copy of the step with that
+    rule removed.
+  - That no assertion and no control was removed or weakened, and that the suite
+    census does not fall.
+  - That prompts/inspector.md, the sweep step of prompts/planner.md, everything
+    under orchestration/ and both workflow definitions are unchanged against the
+    story's base.
+  - That the whole suite passes, including the extended module.
+  - That the account in .harness/docs/ARCHITECTURE.md of the question's scope and
+    of the found-nothing instruction matches what the prompt and the schema now
+    carry.
+
+constraints:
+  - Nothing under orchestration/ or workflows/ changes: nothing routes on, reads or
+    scores a story's description, so this story adds no gate and moves none.
+  - The other five items of the consequence step are untouched, and each is still
+    asked by exactly one item of that step.
+  - The guidance names the kinds of place in plain words and interpolates no
+    configured value, so it reads correctly on a target that declares no tests
+    directory.
+  - The found-nothing rule is written inside the existing sentence's rule rather
+    than as an exception to it, so a found-nothing answer still has one home.
+  - The validation extends the module that already holds the consequence step's
+    claims and adds no second copy of a reader that module already declares.
+  - The step still states its questions in its own words, naming no filing
+    category and no file.
+  - No existing assertion or control is weakened or removed.
+  - No test bounds how slow the machine is allowed to be.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-29 20:39:52
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 377
