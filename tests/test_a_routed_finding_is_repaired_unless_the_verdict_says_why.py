@@ -23,15 +23,28 @@ The subjects, in the order the criteria state them:
     one of the two prompts a statement that is true of its workflow alone: a
     fix needing new standing validation is no ground for declining there,
     because that workflow declares a stage whose work is validation and a
-    repair pass reaches it. The parity walk now names that one statement —
-    `PERMITTED_DIVERGENCE_PHRASE`, declared here and imported by the module
-    whose claim is that the statement is in the prompt — and sets it aside a
-    sentence at a time, keeping every other sentence of the same paragraph in
-    the comparison. It gains two claims for the one it narrows: the statement
-    is in the prompt of the workflow that declares a validating stage, and it
-    is in no other. So the walk reports a shared sentence reworded in either
-    prompt exactly as before, and reports the statement gone missing from the
-    prompt that should carry it or turning up in the one that should not.
+    repair pass reaches it. story-215 gave the same prompt a second such
+    statement, asking for the assertion a repaired fix needs by naming the file
+    it belongs in. So the parity walk names the statements it permits —
+    `PERMITTED_DIVERGENCE_PHRASES`, declared here and imported one phrase at a
+    time by the module whose claim is that its statement is in the prompt — and
+    sets each aside a sentence at a time, keeping every other sentence of the
+    same paragraph in the comparison. It gains two claims per permitted
+    statement for the one it narrows: the statement is in the prompt of the
+    workflow that declares a validating stage, and it is in no other. So the
+    walk reports a shared sentence reworded in either prompt exactly as before,
+    and reports any of the permitted statements gone missing from the prompt
+    that should carry it or turning up in the one that should not.
+
+    The widening from one blessed sentence to a list of them leaves what the
+    walk holds exactly where it was, because the walk never pinned the
+    paragraphs whole: it sets the blessed sentences aside and holds every
+    remaining sentence of each walked passage to reading the same in both
+    prompts. Those remaining sentences are shared mechanism — one file per
+    finding, never a directory, never a blocked path, the bounds on reaching
+    outside the story's scope, both kinds routing as a correction pass — which
+    one coordinator runs for both workflows. What needed to diverge was two
+    sentences, not the paragraph.
 
   * **the verdict schema** accepts a `declined_findings` entry carrying a slug
     and a reason, refuses one missing either, and still accepts every shape it
@@ -185,15 +198,32 @@ PASSAGE_PHRASES = {
     "repairable": REPAIRABLE_PHRASE,
 }
 
-#: The one statement the verifier prompt of the workflow that declares a
-#: validating stage carries and the other shipped verifier prompt does not,
-#: found by the words that occur in exactly one of the two. The parity walk
-#: below permits the sentence carrying this phrase to differ and permits
-#: nothing else, and `test_a_verdict_repairs_a_finding_needing_new_validation`
-#: imports the phrase from here for its own assertions about that sentence —
-#: one declaration, so the guard and the claim cannot disagree about which
-#: sentence may differ.
+#: story-214's statement: a fix needing new standing validation is no ground
+#: for declining a routed finding under the workflow that declares a validating
+#: stage. Kept under its own singular name because
+#: `test_a_verdict_repairs_a_finding_needing_new_validation` imports that name
+#: for its assertions about that sentence.
 PERMITTED_DIVERGENCE_PHRASE = "needs new standing validation"
+
+#: story-215's statement: where the fix a finding names needs validation that
+#: does not exist yet, a second finding is recorded beside it naming the file
+#: the assertion belongs in. Deliberately neither a substring nor a superstring
+#: of the one above — that one reads "needs *new* standing validation" — so the
+#: count check below holds each sentence to exactly one phrase and setting one
+#: aside never takes the other's sentence with it.
+#: `test_a_verdict_asks_for_the_assertion_its_repair_needs` imports this name
+#: for its assertions about that sentence.
+ASSERTION_REQUEST_PHRASE = "needs standing validation that does not exist yet"
+
+#: Every statement the verifier prompt of the workflow that declares a
+#: validating stage may carry and the other shipped verifier prompt may not,
+#: each found by words that occur in exactly one of the two. The parity walk
+#: below permits the sentence carrying any of these to differ and permits
+#: nothing else, and the module whose claim is that one of these statements is
+#: in the prompt imports its phrase from here — one declaration, so the guard
+#: and the claims cannot disagree about which sentences may differ.
+PERMITTED_DIVERGENCE_PHRASES = (PERMITTED_DIVERGENCE_PHRASE,
+                                ASSERTION_REQUEST_PHRASE)
 
 #: The sentence the correctable-findings bounds already carried and the
 #: repairable paragraph lacked, by its opening words.
@@ -373,39 +403,51 @@ def test_the_inspection_slot_points_at_the_passages_and_the_field(
 
 
 def without_the_permitted_divergence(passage: str) -> str:
-    """`passage` with the one sentence carrying `PERMITTED_DIVERGENCE_PHRASE`
-    taken out of it, and every other sentence left exactly as it is.
+    """`passage` with every sentence carrying one of
+    `PERMITTED_DIVERGENCE_PHRASES` taken out of it, and every other sentence
+    left exactly as it is.
 
     Sentence at a time rather than paragraph at a time: dropping the whole
-    paragraph from the comparison to make room for one statement would leave a
+    paragraph from the comparison to make room for a statement would leave a
     guard that catches nothing, and every other sentence of that paragraph is
     still held to reading the same in both prompts.
+
+    A list of phrases since story-215 rather than the single one story-214
+    declared, and the list is what makes the widening a widening: a second
+    story-only sentence in a walked passage is a divergence the walk must
+    permit by name, not a reason to stop comparing the passage it sits in.
     """
     return " ".join(one for one in sentences(passage)
-                    if PERMITTED_DIVERGENCE_PHRASE not in one)
+                    if not any(phrase in one
+                               for phrase in PERMITTED_DIVERGENCE_PHRASES))
 
 
 def parity_problems(texts: dict[str, str], permitted: set[str]) -> list[str]:
     """Every divergence the parity walk finds across the given prompt texts,
     keyed by prompt name. Empty means they agree.
 
-    Two kinds. The permitted statement must be in each prompt named in
-    `permitted` and in no other, so it neither goes missing from the prompt
-    whose workflow the statement is true of nor spreads to the one it is false
-    of. And each walked passage, once that one sentence is set aside, must read
-    the same in every prompt — so a sentence the prompts share, reworded in any
-    of them, is reported exactly as it was before the walk was narrowed.
+    Two kinds. Each permitted statement must be in each prompt named in
+    `permitted` and in no other, so none of them goes missing from the prompt
+    whose workflow the statement is true of and none spreads to the one it is
+    false of — counted per phrase, so a prompt carrying one of them and not the
+    other is reported rather than passing on a total. And each walked passage,
+    once those sentences are set aside, must read the same in every prompt — so
+    a sentence the prompts share, reworded in any of them, is reported exactly
+    as it was before the walk was narrowed.
 
     A function rather than a test body so the controls can put mutated copies
     of the shipped prompts through the same walk the shipped assertion makes.
     """
     problems = []
     for name, text in sorted(texts.items()):
+        whole = flowed(text)
         expected = 1 if name in permitted else 0
-        carried = flowed(text).count(PERMITTED_DIVERGENCE_PHRASE)
-        if carried != expected:
-            problems.append(f"{name}: carries the permitted statement "
-                            f"{carried} times, expected {expected}")
+        for phrase in PERMITTED_DIVERGENCE_PHRASES:
+            carried = whole.count(phrase)
+            if carried != expected:
+                problems.append(f"{name}: carries the permitted statement "
+                                f"{phrase!r} {carried} times, expected "
+                                f"{expected}")
     for key, phrase in PASSAGE_PHRASES.items():
         found = {}
         for name, text in texts.items():
@@ -445,13 +487,37 @@ def test_exactly_one_shipped_prompt_may_carry_the_permitted_divergence():
     assert permitted < set(verifier_prompts()), permitted
 
 
+def test_each_permitted_phrase_names_a_different_sentence():
+    """The premise the widened walk rests on: the declared phrases are a list of
+    distinct statements rather than several spellings of one.
+
+    In the prompt permitted to carry them, each phrase is carried by exactly one
+    sentence, no two phrases are carried by the same sentence, and neither is
+    found inside another. Without that, setting one phrase's sentence aside
+    could take another's with it and the per-phrase count could be satisfied by
+    a single sentence — either of which would make the widening a hole rather
+    than a list.
+    """
+    (carrier,) = prompts_that_may_carry_the_divergence()
+    whole = sentences(flowed(shipped_prompt_texts()[carrier]))
+    carried = {phrase: [one for one in whole if phrase in one]
+               for phrase in PERMITTED_DIVERGENCE_PHRASES}
+    for phrase, found in carried.items():
+        assert len(found) == 1, (phrase, found)
+    assert len({found[0] for found in carried.values()}) == len(carried)
+    for phrase in PERMITTED_DIVERGENCE_PHRASES:
+        others = [one for one in PERMITTED_DIVERGENCE_PHRASES if one != phrase]
+        assert not any(phrase in one or one in phrase for one in others), phrase
+
+
 def test_the_passages_are_identical_between_the_shipped_prompts():
     """The refactor workflow carries the same default: every passage this
     story changed, and the inspection slot, reads the same in each shipped
-    verifier prompt, apart from the one statement story-214 gives the prompt of
-    the workflow that declares a validating stage. Each passage is checked
-    non-empty and to carry its own phrase first, so equality is between two
-    found passages and not between two failures to find one."""
+    verifier prompt, apart from the statements `PERMITTED_DIVERGENCE_PHRASES`
+    declares for the prompt of the workflow that declares a validating stage.
+    Each passage is checked non-empty and to carry its own phrase first, so
+    equality is between two found passages and not between two failures to find
+    one."""
     texts = shipped_prompt_texts()
     assert len(texts) > 1, texts
     assert parity_problems(texts, prompts_that_may_carry_the_divergence()) == []

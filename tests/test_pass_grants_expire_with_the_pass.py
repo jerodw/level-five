@@ -102,6 +102,7 @@ from test_a_routed_finding_is_repaired_unless_the_verdict_says_why import (
     CORRECTABLE_PHRASE,
     REPAIRABLE_PHRASE,
     paragraph_containing,
+    without_the_permitted_divergence,
 )
 from test_repair_pass import (  # noqa: F401 - the fixtures the runs configure
     BEHAVIOUR_CATEGORY,
@@ -1321,10 +1322,50 @@ def test_the_correctable_section_says_a_trailing_slash_stops_the_run(prompt):
     assert "stops the run" in section
 
 
+def repairable_section_shared_by_both(prompt: str) -> str:
+    """The repairable section of one shipped verifier prompt, with the
+    statements the parity walk permits one of them alone to carry set aside.
+
+    Set aside through the sibling that declares which sentences those are,
+    rather than through a judgement written here: story-214 gave one prompt a
+    statement closing a ground for declining, and story-215 gave the same prompt
+    the instruction that asks for the assertion a repaired fix needs. Both are
+    in this paragraph and both are true of one workflow alone, so the equality
+    below is read with them out of the way — which leaves every sentence of
+    shared mechanism in the comparison, as the control below shows. What the
+    three bounds above assert is untouched by this: none of them is stated in a
+    permitted sentence, so that test reads the paragraph whole as it always did.
+    """
+    return without_the_permitted_divergence(
+        paragraph_containing(shipped_text(prompt), REPAIRABLE_PHRASE))
+
+
 def test_the_two_shipped_repairable_sections_read_identically():
-    sections = {paragraph_containing(shipped_text(prompt), REPAIRABLE_PHRASE)
+    sections = {repairable_section_shared_by_both(prompt)
                 for prompt in shipped_verifier_prompts()}
     assert len(sections) == 1
+
+
+#: A clause both shipped prompts carry in this paragraph, in a sentence neither
+#: is permitted to diverge on, and one word of it reworded. Rewording it is the
+#: drift setting the permitted sentences aside must not have stopped reporting.
+SHARED_IN_THE_SECTION = "not a licence to revisit"
+REWORDED_IN_THE_SECTION = "not a permit to revisit"
+
+
+def test_the_comparison_still_reports_a_sentence_the_two_prompts_share_reworded():
+    """Control for the equality above: with one word of a shared sentence
+    changed in a copy of one shipped prompt, the same reading finds two
+    different sections. Green above therefore says the sections agree rather
+    than that setting the permitted sentences aside left nothing to compare.
+    """
+    prompt = shipped_verifier_prompts()[0]
+    original = repairable_section_shared_by_both(prompt)
+    drifted = shipped_text(prompt).replace(SHARED_IN_THE_SECTION,
+                                           REWORDED_IN_THE_SECTION, 1)
+    assert drifted != shipped_text(prompt)
+    assert without_the_permitted_divergence(
+        paragraph_containing(drifted, REPAIRABLE_PHRASE)) != original
 
 
 @pytest.mark.parametrize("field", [CORRECTABLE, REPAIRABLE])

@@ -159,8 +159,18 @@ finding, which is bounded to words and enters at the declared correction
 stage whatever category it carries. A fix spanning files is one finding per
 file, each naming the same slug in `location` and carrying its own category:
 the coordinator routes them as one pass entering at the earliest of those
-stages in workflow order and running forward through the rest. Name the
-category that owns the fix, spelled exactly as the categories above are:
+stages in workflow order and running forward through the rest. Where the
+fix one of these findings names needs standing validation that does not
+exist yet, record a second finding beside it naming the file the assertion
+belongs in and the category that owns that file, tied to the first by the
+same slug in `location`, so the pass that makes the fix carries forward
+into the stage whose work is validation and the assertion is written
+within this run rather than left to a later story; ask for it only where
+the fix is owned by a stage that runs before that one, because the pair
+moves the entry to the earliest stage the two resolve to and an assertion
+asked for beside a later fix would be written before the fix it validates
+landed. Name the category that owns the fix, spelled exactly as the
+categories above are:
 unlike a correctable finding's category, this one chooses where the pass
 goes, because the coordinator resolves it through the routing table above to
 the stage that owns the file and re-enters there, running forward to
