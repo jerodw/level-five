@@ -69,6 +69,19 @@ session and the story schema's account of a description beside it, with the
 baseline template and the baseline schema — which carry none of it — as the
 controls.
 
+story-216 widened the first of those questions and the rule about answering it.
+It used to ask whether the change adds a second implementation of something
+"the system already has", which reads as the code being changed — and a story
+answered it "nothing found, because no code is added at all" while copying a
+thousand lines of test helpers out of a neighbouring module. It now asks about
+the machinery that validates the system as well, naming the kinds of place in
+plain words, and the step's rule about a found-nothing answer asks that one
+question's entry to name which of those kinds of place were searched. The
+section "story-216: the duplication question asks about what validates the
+system too" holds both, and holds them against the text as it stood before that
+widening rather than against this module's own baseline, which predates the
+step entirely and so cannot show the question present and narrow.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -96,7 +109,8 @@ from pathlib import Path
 import pytest
 
 import conftest
-from conftest import BASELINE, ENDPOINT, repository_file_at, story_diff
+from conftest import (BASELINE, ENDPOINT, repository_file_at,
+                      revision_carrying, story_diff)
 
 import context_assembler
 import filed_query
@@ -1215,14 +1229,20 @@ BRIEF_SCHEMA_REL = "schemas/story-brief.schema.json"
 #: no extension, as every script this repository ships does not.
 LAUNCHER_REL = str((SCRIPTS / "l5-plan").relative_to(REPO_ROOT))
 
+#: The question story-216 widened, named here as well as keyed below so the
+#: readings that are about that one question resolve it out of the table
+#: rather than spelling its words a second time — and so that a later story
+#: reordering the list moves nothing.
+DUPLICATION_QUESTION = ("a second implementation of something that already "
+                        "exists, in the system or in what validates it")
+
 #: The questions the step has to ask, each as the words a reader would look
 #: for in one of them. An entry is the phrases that have to appear in one
 #: bullet together rather than a sentence written out, so what is held is that
 #: the step asks about the thing rather than how it happens to word the
 #: asking — which is the rule the step itself states about a criterion.
 QUESTIONS = {
-    "a second implementation of what the system already has": (
-        r"second implementation", r"already"),
+    DUPLICATION_QUESTION: (r"second implementation", r"already"),
     "another path doing the same job that has to move in step": (
         r"another path", r"same job", r"move in step"),
     "still right on a retry, a resume, a later entry and every verdict": (
@@ -1235,11 +1255,19 @@ QUESTIONS = {
         r"written statement", r"untrue"),
 }
 
+#: What the step's found-nothing rule has to ask of one question's entry
+#: beyond naming it there: that naming it is not enough on its own, and that
+#: the entry says which of the kinds of place that question asks about were
+#: searched. Named here because three readings want it — what the step states,
+#: which question the rule reaches, and the control that cuts the demand out.
+QUALIFIED_ENTRY = ("not enough", "which of the kinds of place", "searched")
+
 #: What the step has to say beside its questions: where the questions about
 #: other texts are answered, that every question is answered and a question
-#: that found nothing answered too, where the answers are recorded, and the
-#: rule the step closes with. Phrases of the collapsed step, so none of them
-#: is about where a line happens to wrap.
+#: that found nothing answered too, what such an answer has to say for the
+#: duplication question, where the answers are recorded, and the rule the step
+#: closes with. Phrases of the collapsed step, so none of them is about where
+#: a line happens to wrap.
 STEP_STATES = {
     "the sweep is where the questions about other texts are answered": (
         "the sweep above is where they are answered",
@@ -1247,6 +1275,8 @@ STEP_STATES = {
     "every question is answered": ("Answer every question",),
     "a question that found nothing is answered too": (
         "found nothing is answered too",),
+    "a found-nothing answer for the duplication question names where it "
+    "looked": QUALIFIED_ENTRY,
     "the answers are recorded in the draft the developer approves": (
         "in the draft the developer approves",),
     "the answers are recorded in the artifact's description": (
@@ -1257,16 +1287,34 @@ STEP_STATES = {
     "the property is stated instead": ("State the property instead",),
 }
 
+#: The clause of the schema's account that gives a found-nothing answer its
+#: one home. The assertion in story-216's section finds the sentence carrying
+#: it and asks what else that sentence says, because the rule added to it is
+#: written inside that sentence rather than as an exception beside it — which
+#: is what leaves this clause true.
+DESCRIPTION_ONE_HOME = "the only place a found-nothing answer is recorded"
+
+#: What that account has to say about the duplication question's entry in that
+#: sentence: which kinds of place were searched, and what those kinds are.
+#: Named here because two readings want it — the table below, so the baseline
+#: control reports both phrases absent there, and the assertion that they sit
+#: inside the sentence the clause above belongs to.
+DESCRIPTION_QUALIFIED_ENTRY = ("which kinds of place were searched",
+                               "the machinery that validates the system")
+
 #: What the story schema's account of a description has to say since this
 #: story: that the consequence answers are among its later paragraphs, that a
 #: question which found nothing is recorded in the one sentence naming those
-#: together, that nothing scores an answer, and the clause that a description
-#: written before the rule is not held to it.
+#: together and what the duplication question's entry there says, that nothing
+#: scores an answer, and the clause that a description written before the rule
+#: is not held to it.
 DESCRIPTION_STATES = {
     "the consequence answers are recorded there": (
         "consequence questions", "before it writes tasks and criteria"),
     "a found-nothing answer has one home": (
         "one sentence naming together the ones that found nothing",),
+    "the duplication question's entry there names where it looked":
+        DESCRIPTION_QUALIFIED_ENTRY,
     "nothing scores whether a question was answered": (
         "whether a question was answered",),
     "a description written before the rule is not held to it": (
@@ -1703,6 +1751,332 @@ def test_the_baseline_description_stated_none_of_it():
     assert before["description"], "the field carried no description to search"
     for statement, phrases in DESCRIPTION_STATES.items():
         assert unsaid(before["description"], phrases) == list(phrases), statement
+
+
+# --------------------------------------------------------------------------
+# story-216: the duplication question asks about what validates the system too
+#
+# The first question of the step above used to ask whether the change adds a
+# second implementation of something "the system already has", which reads as
+# the code being changed. A story answered it "nothing found, because no code
+# is added at all" while copying a thousand lines of test helpers out of a
+# neighbouring module — an answer that was not dishonest, because most of this
+# repository's shared machinery lives in its test files and the question aimed
+# itself away from there. The question now asks about the machinery that
+# validates the system as well, naming the kinds of place in plain words, and
+# the step's found-nothing rule asks that one question's entry to name which of
+# those kinds of place were searched, so that finding nothing means nothing was
+# there rather than that nowhere was looked.
+#
+# The section above stays green through the whole of that, which is why every
+# claim here carries a discriminator of its own: the phrases the duplication
+# item is resolved by and the phrase the found-nothing rule is resolved by
+# survive the widening, so green there says nothing about this
+# change. Each claim is therefore read twice — once against the shipped text,
+# and once against the text as it stood before the widening, where the question
+# names one kind of place and the found-nothing sentence carries every question
+# unqualified. That text is found by searching the history for the narrow
+# wording rather than pinned to a sha, and the recovery is asserted to differ
+# from the working tree before anything is read off it.
+#
+# This module's own baseline, which the controls above read, is the wrong
+# control for both: it predates the step entirely, so the question is not there
+# to be narrow and the sentence is not there to carry it. Each claim has a
+# second control beside it that needs no history at all, built in the
+# constructed-copy idiom the absence controls above are written in: the shipped
+# rule cut at the clause its demand sits behind is reported as asking nothing
+# of any question, and the shipped item cut at the half of its clause about the
+# system's own code is reported as naming the validating machinery alone. The
+# history gives each claim one direction, and the copy gives it the other.
+# --------------------------------------------------------------------------
+
+
+#: The kinds of place the duplication question has to ask about, each as the
+#: phrases one item has to carry together for a reader to take it as asking
+#: about that kind. Two entries, because what this story is about is the item
+#: naming both, and the reading is held in both directions rather than one: it
+#: reports both of the shipped item, the system alone of the narrower wording
+#: the item carried before the widening, and the validating machinery alone of
+#: a copy of the shipped item with the system's half of its clause cut away.
+#:
+#: The system's entry looks for a mention of the system that is not the one
+#: inside its sibling's own subject — "the machinery that validates the
+#: system" — and that exclusion is the whole of why the reading can fail in
+#: both directions. A phrase matching that mention too would be satisfied by
+#: the sibling's words, so an item asking about the validating machinery alone
+#: would be reported as naming both, and the claim that the item names both
+#: would pass on the narrow question this story exists to widen.
+DUPLICATION_PLACES = {
+    "the system itself": (r"(?<!validates )the system",),
+    "the machinery that validates the system": (
+        r"validat", r"\btest", r"\bfixture"),
+}
+
+#: The kind of place whose half of the item the control below cuts away, named
+#: rather than spelled there so the cut is built out of the same phrase the
+#: reading decides on.
+SYSTEM_PLACE = "the system itself"
+
+#: How the item offers the other kind of place as the alternative to the
+#: system's own code: the mention of the system, whatever that half goes on to
+#: say, and the words joining it to the half that follows. The control cuts
+#: that span out of the shipped item, so what is left names the validating
+#: machinery alone while still carrying its sibling's words.
+SYSTEM_HALF_TAIL = r".*? or (?:in )?"
+
+#: The duplication question as one line of the template carried it before this
+#: story: a second implementation of something *the system* already has. This
+#: is what the revision holding that text is searched for. A search rather
+#: than a sha, for the reason `tests/conftest.py` states: a sha survives
+#: neither a rebase nor a squash merge, and a rebased-away sha is unreachable
+#: in a clean clone even while it still resolves in the working repository.
+NARROW_DUPLICATION_WORDING = ("second implementation",
+                              "something the system already")
+
+#: Where the step's rule about a found-nothing answer begins and ends: at the
+#: words saying such an answer is answered too, and where the step turns to
+#: recording the answers. Matched against the collapsed step, so it is about
+#: what the step says rather than where its lines wrap.
+FOUND_NOTHING_RULE = re.compile(
+    r"A question that found nothing is answered too.*?(?=Record the answers)")
+
+#: What a clause of that rule is joined to its sentence by. The control below
+#: cuts the rule at the last such boundary before its demand, which removes
+#: the demand and nothing else.
+CLAUSE_MARKER = re.compile(r"[;—]")
+
+
+def places_named_by(bullet: str) -> list[str]:
+    """Which of the kinds of place above one of the step's items names.
+
+    Decided by the same all-phrases-together reading every question in the
+    section above is resolved by, so the two readings cannot disagree about
+    what counts as an item saying something.
+    """
+    return [place for place, phrases in DUPLICATION_PLACES.items()
+            if bullets_asking([bullet], phrases)]
+
+
+def without_the_system_half(item: str) -> str:
+    """A copy of the duplication item naming only the machinery that validates
+    the system: the item with the system's half of its clause cut away.
+
+    Built out of the shipped item rather than written out here, so the control
+    differs from the live text in the one respect it is about, and the cut is
+    asserted to have found its span — a rewording the cut no longer finds
+    reddens here rather than quietly leaving the control asserting nothing.
+    """
+    phrase, = DUPLICATION_PLACES[SYSTEM_PLACE]
+    cut, found = re.subn(phrase + SYSTEM_HALF_TAIL, "", one_line(item), count=1)
+    assert found == 1, item
+    return cut
+
+
+def duplication_item(step: str) -> str:
+    """The one item of `step` asking the duplication question.
+
+    Resolved out of the table of questions above rather than by its position,
+    and required to be exactly one item, so the readings below are about the
+    question this story widened whatever order the list is written in.
+    """
+    found = bullets_asking(question_bullets(step),
+                           QUESTIONS[DUPLICATION_QUESTION])
+    assert len(found) == 1, found
+    return found[0]
+
+
+def found_nothing_rule_of(step: str) -> str:
+    """The step's rule about recording an answer that found nothing."""
+    match = FOUND_NOTHING_RULE.search(one_line(step))
+    assert match is not None, "the step states no found-nothing rule"
+    return match.group(0)
+
+
+def questions_qualified_by(rule: str) -> list[str]:
+    """Which of the step's questions that rule asks more of than a bare
+    mention among the ones that found nothing.
+
+    None are, unless the rule asks for more at all: a rule that only tells the
+    planner to name the questions together leaves every one of them satisfied
+    by being named, which is what it reported of the text before this story.
+    Where it does ask for more, the question reached is the one the rule
+    identifies in the step's own words — any of the words that resolve a
+    question above rather than all of them, because the rule refers to its
+    question rather than asking it again.
+    """
+    if unsaid(rule, QUALIFIED_ENTRY) != []:
+        return []
+    return [question for question, phrases in QUESTIONS.items()
+            if any(re.search(phrase, rule) for phrase in phrases)]
+
+
+def without_the_added_rule(rule: str) -> str:
+    """A copy of that rule asking nothing of any question beyond naming it:
+    the rule cut at the last clause boundary before its demand.
+
+    Built out of the shipped rule rather than written out here, so the control
+    differs from the live text in the one respect it is about. Both halves of
+    the cut are asserted — the demand is there to be removed, and it sits
+    behind a boundary — so a rule rewritten into a shape this cut no longer
+    finds reddens here rather than quietly leaving the control asserting
+    nothing.
+    """
+    assert unsaid(rule, QUALIFIED_ENTRY) == [], rule
+    demanded = min(rule.index(phrase) for phrase in QUALIFIED_ENTRY)
+    boundaries = [match.start() for match in CLAUSE_MARKER.finditer(rule)
+                  if match.start() < demanded]
+    assert boundaries, rule
+    return rule[: boundaries[-1]].strip()
+
+
+def planner_template_before_this_story() -> str:
+    """The template at the newest revision whose duplication question still
+    carried the narrow wording above, which is the revision before it was
+    widened.
+
+    Not this module's own baseline, which every control in the section above
+    reads: that predates the whole step, so a reading taken there reports the
+    absence of the step rather than the aim of one of its questions.
+    """
+    return repository_file_at(PLANNER_REL, revision=revision_carrying(
+        PLANNER_REL, *NARROW_DUPLICATION_WORDING))
+
+
+def test_the_recovered_template_is_the_text_before_the_widening():
+    """Everything below leans on this recovery, so it is asserted rather than
+    assumed: recovered, still carrying the step, and different from the
+    template in the working tree. A recovery that had silently resolved to
+    today's text would make both readings below statements about nothing."""
+    recovered = planner_template_before_this_story()
+    assert recovered != planner_template()
+    step = consequence_step_of(recovered)
+    assert len(question_bullets(step)) == len(QUESTIONS)
+
+
+def test_the_duplication_question_asks_about_what_validates_the_system_too(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session: the item asking that question names
+    the machinery that validates the system as well as the system itself, so a
+    reader of it cannot take it to be about only one of them. It is still one
+    item of the step, and the reading is the section's own — the phrases of a
+    question together in one collapsed item."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    item = duplication_item(consequence_step_of(prompt))
+    assert places_named_by(item) == list(DUPLICATION_PLACES), item
+
+
+def test_before_the_widening_that_question_named_one_kind_of_place():
+    """The discriminator for the claim above, and the reason it is worth
+    anything: the phrases that resolve the duplication item — a second
+    implementation, of something already there — were both in the narrow
+    wording too, so the item was found there just as easily. What the same
+    reading reports of it is one kind of place rather than both."""
+    item = duplication_item(
+        consequence_step_of(planner_template_before_this_story()))
+    assert places_named_by(item) == [SYSTEM_PLACE], item
+
+
+def test_the_place_reading_reports_the_machinery_alone_when_the_system_half_is_cut():
+    """The control in the other direction, which the history cannot give: the
+    discriminator above shows the reading reporting the system alone of an item
+    naming only the system, and this shows it reporting the validating
+    machinery alone of an item naming only that. Both are needed for the claim
+    above to be about the item naming both, because the phrase "the machinery
+    that validates the system" carries a mention of the system inside it — a
+    reading that took that mention would report both kinds of place of an item
+    asking about the validating machinery alone.
+
+    That the cut leaves the sibling's mention standing is asserted, so what is
+    reported here is the reading telling the two mentions apart rather than the
+    cut having removed every mention of the system. The copy is built out of
+    the shipped item, in this section's own constructed-copy idiom."""
+    item = one_line(duplication_item(consequence_step_of(planner_template())))
+    cut = without_the_system_half(item)
+    assert cut != item
+    assert "the system" in cut
+    assert places_named_by(cut) == ["the machinery that validates the system"]
+
+
+def test_the_found_nothing_rule_asks_that_one_question_where_it_looked(
+    plan_capture, tmp_path
+):
+    """On the same prompt: the rule about recording an answer that found
+    nothing asks the duplication question's entry to name which of those kinds
+    of place were searched, so a bare mention of it among the questions that
+    found nothing does not satisfy the step — and asks that of that question
+    alone, so every other question of the step is still recorded there with no
+    further qualification."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    rule = found_nothing_rule_of(consequence_step_of(prompt))
+    assert questions_qualified_by(rule) == [DUPLICATION_QUESTION]
+
+
+def test_before_the_widening_the_sentence_carried_every_question_unqualified():
+    """The discriminator for that claim: the same reading over the rule as it
+    stood before the widening reports no question qualified, so the result
+    above is the demand having been added rather than the reading answering
+    the same way whatever it is given."""
+    rule = found_nothing_rule_of(
+        consequence_step_of(planner_template_before_this_story()))
+    assert questions_qualified_by(rule) == []
+    assert unsaid(rule, QUALIFIED_ENTRY) == list(QUALIFIED_ENTRY)
+
+
+def test_the_rule_reading_reports_nothing_of_a_rule_with_the_demand_cut_out():
+    """The control that needs no history, in the idiom the absence controls
+    above are written in: the shipped rule with its demand cut away
+    at the clause boundary it sits behind is reported as asking nothing of any
+    question. So the claim two tests up fails on a step whose rule lacks that
+    clause, which is what makes it a claim about the clause."""
+    rule = found_nothing_rule_of(consequence_step_of(planner_template()))
+    cut = without_the_added_rule(rule)
+    assert rule.startswith(cut) and cut != rule
+    assert unsaid(cut, QUALIFIED_ENTRY) != []
+    assert questions_qualified_by(cut) == []
+
+
+def test_the_widened_question_interpolates_no_configured_value():
+    """The kinds of place are named in plain words rather than resolved from
+    the target's configuration, so the step reads the same on a target that
+    declares no tests directory as on one that declares one. A placeholder
+    there would have rendered the literal None on such a target, and the
+    question would have read as nonsense.
+
+    The control is the same render over a copy of the step carrying the
+    tests-directory placeholder: that copy comes back changed, so the step
+    coming back unchanged is the step carrying no placeholder rather than the
+    render doing nothing. The configuration without a tests directory is the
+    one the section below already builds.
+    """
+    step = consequence_step_of(planner_template())
+    assert PLACEHOLDER.findall(step) == []
+    doctored = (f"{step}\n   - is anything under {TESTS_DIR_PLACEHOLDER} "
+                f"duplicated?")
+    for config in (conftest.repository_config(),
+                   configuration_without_a_tests_directory()):
+        context = context_assembler.config_context(config)
+        assert context_assembler.render(step, context) == step
+        assert context_assembler.render(doctored, context) != doctored
+
+
+def test_the_schemas_account_states_the_rule_inside_the_sentence_holding_it():
+    """The field the planner is injected whole says what the step says, and
+    says it inside the sentence that already claimed the found-nothing
+    sentence is the only place such an answer is recorded — so that claim
+    still covers the qualified entry rather than standing beside an exception
+    to it.
+
+    The phrases are in the table above, so the baseline control there reports
+    every one of them absent at this module's baseline; what is asserted here
+    is where in the field they sit.
+    """
+    description = story_description_field(
+        schema_validator.load_schema("story"))["description"]
+    carrying = [sentence for sentence in sentences_of(description)
+                if DESCRIPTION_ONE_HOME in sentence]
+    assert len(carrying) == 1, carrying
+    assert unsaid(carrying[0], DESCRIPTION_QUALIFIED_ENTRY) == []
 
 
 # --------------------------------------------------------------------------

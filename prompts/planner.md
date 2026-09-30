@@ -73,8 +73,11 @@ cannot finish is the expensive thing this question exists to avoid.
    plan can be written around; the same problem found while the run is
    underway is one the run cannot repair, because repairing it would
    contradict the plan it was approved against. Ask of the change:
-   - does it add a second implementation of something the system already
-     has, rather than using the one that is there?
+   - does it add a second implementation of something that already
+     exists, rather than using the one that is there — whether what it
+     duplicates sits in the system itself or in the machinery that
+     validates the system, among its test helpers, its fixtures and the
+     scaffolding its checks are built from?
    - is there another path doing the same job that has to move in step
      with it?
    - is it still right the second time through — on a retry, after a
@@ -92,9 +95,13 @@ cannot finish is the expensive thing this question exists to avoid.
    that found nothing is answered too, in one sentence naming together
    the ones that found nothing, because that sentence is the only place
    a found-nothing answer has and without it a reader cannot tell a
-   question that was asked from one that was skipped. Record the answers
-   in the draft the developer approves, and in the artifact's
-   story.description after the plain-English opening.
+   question that was asked from one that was skipped; and where the
+   question about a second implementation is among them, naming it
+   there is not enough on its own — its entry names which of the kinds
+   of place that question asks about were searched, so that finding
+   nothing says nothing was there rather than that nowhere was looked.
+   Record the answers in the draft the developer approves, and in the
+   artifact's story.description after the plain-English opening.
    Then read the criteria you are about to write. A criterion that names
    a spelling, a text match or a fixed enumeration where what is wanted
    is a property binds the work to the stand-in rather than to the
