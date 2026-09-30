@@ -1,0 +1,276 @@
+story:
+  id: story-217
+  title: A sibling or a written statement outside the planner's sweep is still the planner's to find
+  description: |
+    Before the planner writes a plan it works through a standing set of
+    questions about what the change might break. Two of them ask about other
+    texts: is there another place in the system doing the same job that has to
+    change alongside this, and does this change make some written statement
+    untrue. The prompt does not ask the planner to go looking for either. It
+    points both back at a search the planner ran one step earlier, and tells it
+    not to search again. That search covers only the places the target's own
+    configuration declares — its source directories, its architecture documents
+    and its tests — and in this repository that leaves out the copy of the
+    tracker script the harness actually runs, the repository's own written
+    standards, the skill document agents are told to file briefs through, and
+    the repository-wide path rules the coordinator enforces. A change to any of
+    those gets "nothing found" from a planner following the prompt, and that
+    answer is written into the plan as though the question had been asked.
+
+    This story adds one statement to that step: the places the earlier search
+    covered are where those two questions start rather than where they stop. A
+    second place doing the same job, or another text carrying the same
+    statement, can sit outside every one of them, and one that does still has to
+    be found, landed in the story's scope, and named in the answer. The planner
+    is still told not to redo the earlier search over ground it already covered,
+    because that instruction exists to avoid a second sweep rather than to bound
+    the question. The effect is worst for exactly the two questions this is
+    about: every place left out is somewhere this repository has already filed a
+    defect of one of those two shapes, so the questions are aimed away from the
+    evidence that produced them. And a target that declares nothing about where
+    its source lives already gets the wider reading, since the undeclared case
+    means everything outside the tests directory — so the declared case is
+    currently searched less thoroughly than the undeclared one.
+
+    It leaves the earlier search alone. What that step looks at, and the
+    decision to name those places by what the target declares about itself
+    rather than by this repository's layout, are settled and not reopened here;
+    widening them is a different question about a different target's
+    configuration. The other four questions are asked of the change directly,
+    delegate nowhere, and are not touched.
+
+    This story was planned from the brief filed under 361.
+
+    The surfaces. The statement goes into the consequence step of
+    `prompts/planner.md`, in the paragraph beginning "Two of them" that today
+    reads "the sweep above is where they are answered: ask them of what that
+    search turned up rather than searching again". The sweep step it defers to,
+    and the list of places that step names — the source directories and tests
+    directory under `[Workflow facts]`, and the architecture documents under
+    `architecture_docs` — are unchanged. Three standing rules bound how the new
+    statement may be worded, each held by an existing test: the consequence step
+    names no path at all, it names none of the shapes this harness files its own
+    reviews under, and it restates none of the places the sweep searches; and
+    `prompts/planner.md` as a whole names no workflow stage and no restricted
+    path prefix. So the statement names kinds of place rather than paths, which
+    is the form the sweep step's own sentence about the kinds of text a rule is
+    written in already takes.
+
+    Consequences traced before the tasks and criteria were written. The sweep
+    for this story's own rule found three texts that state where the two
+    delegated questions are asked, and all three are in scope:
+    `prompts/planner.md` itself, `.harness/docs/ARCHITECTURE.md`, which records
+    the delegation as deliberate and says the step "restates none of the places
+    the sweep searches", and
+    `tests/test_planner_receives_the_standards.py`, which holds the delegation
+    as two phrase matches in its statement set and asserts that the step
+    restates none of the sweep's places. Searching the places the sweep does not
+    cover — the shipped skill documents, the standards directory, the execution
+    rules and the installed scripts, which is this story's whole subject —
+    turned up no other text stating it. `prompts/inspector.md` and
+    `schemas/story-brief.schema.json` carry this harness's own names for the two
+    finding shapes, but neither states where the planner's questions are asked,
+    so neither moves, and the step must go on naming none of those names.
+
+    On validation that can fail when the change is wrong: this is the real risk
+    and it shapes the story. The statement checks that module already carries
+    are phrase matches — the stand-in shape the step itself warns about — so an
+    assertion that only looked for a new phrase would pass on text that says the
+    words and means nothing. Three things make the new one able to fail. It is
+    held on the prompt the planning launcher actually hands a session rather
+    than on the template on disk. The template as it stood before this story is
+    its control and carries none of it. And the same reader, over a copy of the
+    step with the new statement taken out, must report it missing, so an empty
+    result is the step having said it rather than the reader having stopped
+    looking. Separately, the absence checks already in that module are what
+    catch the likeliest way to get this wrong, which is reaching for this
+    repository's own layout to make the point.
+
+    One written statement is made incomplete rather than false.
+    `.harness/docs/ARCHITECTURE.md` records the delegation with no
+    qualification, describing the step as naming the sweep as where the two
+    questions are answered; the documenter extends that account with what the
+    qualification says, why the searched population is not the population of
+    either question, and that the places the sweep searches did not change.
+    Nothing else states it.
+
+    Three of the questions found nothing, and they are these: no second
+    implementation of anything is added, because no code is added at all and the
+    new assertion reuses the step reader, the prompt capture and the baseline
+    resolver the module already declares; the prompt is static text rendered
+    once per planning session, and a resumed or retried run never re-renders it
+    at all, so there is no later entry and no second verdict on which the same
+    text could be right once and wrong again; and it reads no configuration
+    value and adds no template placeholder, so there is no value that can be
+    absent, unwritable or unreadable and nobody new to be told about one.
+  workflow: story-workflow
+
+tasks:
+  - Qualify the sentence in the consequence step of prompts/planner.md that sends
+    the question about another path and the question about written statements back
+    to the sweep, so that what the sweep searched bounds where that search looked
+    rather than where either question's answer can live, and say that one found
+    outside those places is landed in the story's scope and named in the answer
+    the same way the sweep's own findings are.
+  - Keep every statement that step already makes, including that the two questions
+    are answered from what the sweep turned up rather than by redoing that search
+    over the ground it covered, so the addition qualifies the delegation instead of
+    replacing it.
+  - Word the statement for a planner on any target: name kinds of place rather
+    than paths, so the step still names no path, no workflow stage, no restricted
+    path prefix and none of the names this harness files its own reviews under, and
+    still restates none of the places the sweep searches.
+  - Add to the module that already holds this step a standing assertion that the
+    prompt a planning session receives carries the new statement, with a control in
+    each direction: the pre-story template, which carries none of it, and a copy of
+    the shipped step with the statement removed, on which the same reader reports
+    it missing.
+  - Record the addition in .harness/docs/ARCHITECTURE.md, whose account of the
+    step describes the delegation without the qualification.
+
+acceptance_criteria:
+  - The consequence step of the prompt a planning session receives tells the
+    planner that the places the earlier sweep searched bound where that search
+    looked rather than where a second place doing the same job, or another text
+    carrying the same statement, can be.
+  - It tells the planner that such a place or text standing outside those searched
+    places still has to be found.
+  - It says what becomes of one found there: it is landed in the story's scope the
+    way the sweep's own findings are, and the recorded answer says where it was
+    looked for.
+  - It still tells the planner that those two questions are answered from what the
+    sweep turned up rather than by redoing that search over the ground it already
+    covered, so the addition qualifies the delegation rather than replacing it.
+  - Every other statement that step makes today is still made, and no assertion
+    holding any of them is weakened, skipped or removed.
+  - The step is still one a planner on any target can follow: it names no path, no
+    workflow stage, no restricted path prefix and none of the names this harness
+    files its own reviews under, and it restates none of the places the sweep
+    searches.
+  - The sweep step is unchanged: what it searches, and its naming those places by
+    what the target declares about itself, both read exactly as they did before
+    this story.
+  - A standing assertion holds the prompt a planning session receives — not the
+    template on disk — to the new statement, and fails on a rendered step from
+    which that statement has been removed.
+  - The template as it stood before this story carries none of the new statement,
+    shown by the same reader that finds it in the shipped one.
+  - .harness/docs/ARCHITECTURE.md's account of the consequence step says what the
+    qualification states, why the places the sweep searched are not the whole of
+    either question, and that those places did not change.
+
+technical_plan:
+  implementation_steps:
+    - Extend the paragraph of the consequence step in prompts/planner.md that
+      begins "Two of them", after the clause delegating the two questions to the
+      sweep. An additive qualification is what to aim for and is why this is one
+      paragraph rather than a rewrite: the existing sentences can keep the wording
+      the test module already matches — scoping "rather than searching again" to
+      the ground the sweep covered leaves that phrase intact — so no assertion has
+      to be adapted and the suite stays green at this stage.
+    - Illustrate the widening by kinds of place rather than by paths, which both
+      the target-layout rule and the module's no-path check require: an installed
+      copy of something the sweep did read, a document a target keeps outside the
+      places it declares, a rule enforced from a file of its own.
+    - In tests/test_planner_receives_the_standards.py, add the statement to the
+      set the story-212 section already holds the step to, and add the assertion
+      with its removed-statement control, reusing that module's step reader, prompt
+      capture and baseline resolver rather than declaring new ones. Keep the
+      existing entries of that set and the assertion that the step restates none of
+      the sweep's places exactly as they are: their staying green is the evidence
+      the delegation was qualified rather than replaced.
+    - Extend the story-212 paragraph of .harness/docs/ARCHITECTURE.md where it
+      records the step as naming the sweep as where the two questions are answered.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Carries the statement, in the consequence step's paragraph that
+        delegates the question about another path and the question about written
+        statements to the sweep.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: Already holds this step's statements and the assertion that it
+        restates none of the sweep's places, so the new statement belongs in the
+        same set and the new assertion beside them, with the controls that module's
+        pattern already provides.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Its account of the consequence step records the delegation without
+        the qualification this story adds, and records that the step restates none
+        of the places the sweep searches, which stays true and is worth saying
+        beside the new statement.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - The sweep step of prompts/planner.md and the places it names (what that
+      search covers is settled, and widening it is a different question about what
+      a target declares about its own layout; this story changes what the two
+      delegated questions are asked of, not where the sweep looks)
+    - The four consequence questions the step asks of the change directly (they
+      delegate nowhere, so nothing about this qualification touches them, and
+      rewording one would put the wording rule the same step states at risk for no
+      gain)
+    - prompts/inspector.md and schemas/story-brief.schema.json (they hold this
+      harness's own names for the two finding shapes this is about; the step
+      deliberately never becomes a third spelling of them, and a standing test
+      holds those two texts in agreement with each other)
+    - schemas/story.schema.json (its account of story.description says the
+      consequence answers are recorded there and that nothing scores them; it
+      states nothing about where the two delegated questions are asked, so this
+      change leaves every word of it true)
+    - orchestration/context_assembler.py and orchestration/plan_validation.py (the
+      statement reads no configuration value and introduces no placeholder, and
+      whether a question was answered stays a reading rather than a shape — the
+      developer's approval at the interview is what holds it, as it holds the
+      plain-English opening rule and the sweep beside it)
+    - .harness/standards/ (reached by searching outside the sweep's places, which
+      is this story's own subject rather than a default: the change asks no new
+      shape of any stage, so the standards are left exactly as they are by
+      decision)
+    - .harness/config.yaml (what this repository declares about where its source
+      lives is the other way this defect could have been closed, and the request
+      deliberately excludes it: the fix belongs in the prompt, so that a target
+      declaring anything at all gets the same reading)
+
+verification_requirements:
+  - That the statement is on the prompt the planning launcher hands a session and
+    not only on the template on disk, resolved the way that module already
+    resolves a rendered prompt.
+  - That the assertion holding it can fail: the same reader over a step with the
+    statement removed reports it missing, and the template as it stood before this
+    story carries none of it.
+  - That the consequence step still passes every absence check the module already
+    makes of it: no path named, none of the names this harness files its own
+    reviews under, and none of the places the sweep searches restated.
+  - That prompts/planner.md still names no workflow stage and no restricted path
+    prefix, which is a standing rule held elsewhere in the suite.
+  - That the sweep step and its list of places read as they did before this story.
+  - That the architecture document's account of the consequence step matches what
+    the step now carries.
+  - That the whole suite passes and no counter of the suite census has fallen.
+
+constraints:
+  - The sweep step's list of places, and its naming them by what the target
+    declares about itself, are preserved exactly.
+  - The statement is worded for any target: no path, no workflow stage name, no
+    restricted path prefix, and no name from this harness's own filing vocabulary.
+  - The delegation is preserved rather than replaced: the planner is still told
+    that the two questions are answered from what the sweep turned up rather than
+    by redoing that search over the ground it covered.
+  - No template placeholder and no configuration key is added, and nothing under
+    orchestration/ changes: nothing deterministic scores whether a question was
+    answered before this story, and nothing does afterwards.
+  - Every assertion the suite already makes about this step is preserved.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-29 22:33:37
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 361
