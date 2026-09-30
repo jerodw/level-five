@@ -82,6 +82,19 @@ system too" holds both, and holds them against the text as it stood before that
 widening rather than against this module's own baseline, which predates the
 step entirely and so cannot show the question present and narrow.
 
+story-217 qualified what that step delegates. Two of its questions are about
+other texts and are answered from what the sweep turned up; the step now says
+what that does not mean. The places the sweep searched bound where that search
+looked rather than where either answer can be, a second place doing the same
+job or another text carrying the same statement can sit outside every one of
+them, one that does is still the planner's to find, and what becomes of it is
+what becomes of anything the sweep turned up — landed in the story's scope,
+with the recorded answer saying where the planner looked. The section
+"story-217: the two delegated questions reach past the swept places" holds it
+on the prompt l5-plan hands the session, controlled in both directions: the
+baseline template, which carries none of it, and a copy of the shipped step
+with the statement cut out, on which the same reader reports it missing.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -1268,10 +1281,38 @@ QUALIFIED_ENTRY = ("not enough", "which of the kinds of place", "searched")
 #: duplication question, where the answers are recorded, and the rule the step
 #: closes with. Phrases of the collapsed step, so none of them is about where
 #: a line happens to wrap.
+
+#: What the step says about where the answers to those two questions can be,
+#: which is story-217's subject and is held with its own control in that
+#: story's section below. Folded into the set beneath so that every assertion
+#: already made of this step — on the render, on the template, and against the
+#: baseline that carries none of it — is made of these too.
+WIDENING_STATES = {
+    "the places the sweep searched bound where that search looked": (
+        "The places that search covered bound where it looked",
+        "not where either answer can be"),
+    "a place or text outside them is still the planner's to find": (
+        "a second place doing the same job, or another text carrying the "
+        "same statement",
+        "can sit outside every one of them",
+        "still yours to find"),
+    "one found outside them is landed in scope and the answer says where": (
+        "Land it in the story's scope as you land anything the sweep turned up",
+        "let the answer you record say where you looked for it"),
+}
+
+#: What the step has to say beside its questions: where the questions about
+#: other texts are answered, what bounds that delegation, that every question
+#: is answered and a question that found nothing answered too, where the
+#: answers are recorded, and the rule the step closes with. Phrases of the
+#: collapsed step, so none of them is about where a line happens to wrap.
 STEP_STATES = {
     "the sweep is where the questions about other texts are answered": (
         "the sweep above is where they are answered",
         "rather than searching again"),
+    "not searching again is about the ground the sweep already covered": (
+        "over the ground it already covered",),
+    **WIDENING_STATES,
     "every question is answered": ("Answer every question",),
     "a question that found nothing is answered too": (
         "found nothing is answered too",),
@@ -2077,6 +2118,87 @@ def test_the_schemas_account_states_the_rule_inside_the_sentence_holding_it():
                 if DESCRIPTION_ONE_HOME in sentence]
     assert len(carrying) == 1, carrying
     assert unsaid(carrying[0], DESCRIPTION_QUALIFIED_ENTRY) == []
+
+# --------------------------------------------------------------------------
+# story-217: the two delegated questions reach past the swept places
+#
+# The step still sends the question about another path and the question about
+# written statements to the sweep above, and now says what that delegation
+# does not mean: the places the sweep searched bound where it looked rather
+# than where either answer can be, a second place doing the same job or
+# another text carrying the same statement can sit outside every one of them,
+# one that does is still the planner's to find, and what becomes of it is what
+# becomes of anything the sweep turned up — landed in the story's scope, with
+# the recorded answer saying where the planner looked.
+#
+# Those statements are entries of STEP_STATES above, so the assertions already
+# made of this step are made of them: on the prompt l5-plan hands the session,
+# on the template, and — the control in that direction — against the baseline
+# template, where the same reader reports every phrase of them absent.
+#
+# What is here is the control in the other direction. The same reader is put
+# over a copy of the shipped step with the statement cut out of it as one
+# span, and has to report every part of the statement missing there while
+# every other statement the step makes is still present. What that
+# establishes is that the reader reports an absence, so an empty result in
+# the positive loop is the step having said the statement rather than the
+# reader having stopped looking; and that the statement is one contiguous
+# span, distinct from the delegation it qualifies rather than the sentence it
+# qualifies over again.
+#
+# What it does not establish is meaning. A step carrying these phrases
+# verbatim and in this order under a framing that inverted them would pass
+# both the assertion and this control, because a phrase match reads no
+# subject and no polarity. That limit is the module's phrase-match idiom's
+# rather than this control's: no control over such a match reaches past it.
+#
+# The likeliest way to get this statement wrong is not to omit it but to word
+# it by reaching for this repository's own layout, and the absence checks in
+# the section above are what catch that. They read the whole step, so they
+# read this statement too: it names no file, adopts none of the shapes this
+# harness files its own reviews under, and restates none of the places the
+# sweep searches.
+# --------------------------------------------------------------------------
+
+
+def statement_span(statements: dict[str, tuple[str, ...]]) -> re.Pattern:
+    """A pattern matching the statements' text as one span of a collapsed
+    step: from the first words of the first thing they say to the sentence
+    end after the last words of the last.
+
+    Derived from the phrases rather than written out beside them, so the
+    statement is worded in one place. It assumes they are given in the order
+    the step says them, and the assertions below are what hold that: a span
+    built from the wrong ends either matches nothing, which is the guarded
+    `subn` count, or leaves some of the statement behind, which is the
+    missing-everywhere assertion that follows it.
+    """
+    said = [phrase for phrases in statements.values() for phrase in phrases]
+    return re.compile(rf"{re.escape(said[0])}.*?{re.escape(said[-1])}\.")
+
+
+def test_the_consequence_step_sends_the_two_questions_past_the_swept_places(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session rather than on the template: the
+    step says that the places the sweep searched bound where that search
+    looked and not where either answer can be, that a second place doing the
+    same job or another text carrying the same statement can stand outside
+    all of them and is still the planner's to find, and what becomes of one
+    found there. The control is the same reader over the same step with that
+    span removed, which must report the whole statement missing while every
+    other statement the step makes — the delegation this one qualifies among
+    them — is still found."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = one_line(consequence_step_of(prompt))
+    for statement, phrases in WIDENING_STATES.items():
+        assert unsaid(step, phrases) == [], statement
+
+    without, cut = statement_span(WIDENING_STATES).subn("", step)
+    assert cut == 1, "the statement is no longer one span of the step"
+    for statement, phrases in STEP_STATES.items():
+        expected = list(phrases) if statement in WIDENING_STATES else []
+        assert unsaid(without, phrases) == expected, statement
 
 
 # --------------------------------------------------------------------------

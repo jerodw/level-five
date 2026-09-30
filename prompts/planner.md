@@ -91,17 +91,26 @@ cannot finish is the expensive thing this question exists to avoid.
    Two of them — the one about another path and the one about written
    statements — are questions about other texts, and the sweep above is
    where they are answered: ask them of what that search turned up
-   rather than searching again. Answer every question here. A question
-   that found nothing is answered too, in one sentence naming together
-   the ones that found nothing, because that sentence is the only place
-   a found-nothing answer has and without it a reader cannot tell a
-   question that was asked from one that was skipped; and where the
-   question about a second implementation is among them, naming it
-   there is not enough on its own — its entry names which of the kinds
-   of place that question asks about were searched, so that finding
-   nothing says nothing was there rather than that nowhere was looked.
-   Record the answers in the draft the developer approves, and in the
-   artifact's story.description after the plain-English opening.
+   rather than searching again over the ground it already covered. The
+   places that search covered bound where it looked and not where
+   either answer can be: a second place doing the same job, or another
+   text carrying the same statement, can sit outside every one of them
+   — an installed copy of something the sweep did read, a document a
+   target keeps outside the places it declares, a rule enforced from a
+   file of its own — and one that does is still yours to find. Land it
+   in the story's scope as you land anything the sweep turned up, and
+   let the answer you record say where you looked for it. Answer every
+   question here. A question that found nothing is answered too, in one
+   sentence naming together the ones that found nothing, because that
+   sentence is the only place a found-nothing answer has and without it
+   a reader cannot tell a question that was asked from one that was
+   skipped; and where the question about a second implementation is
+   among them, naming it there is not enough on its own — its entry
+   names which of the kinds of place that question asks about were
+   searched, so that finding nothing says nothing was there rather than
+   that nowhere was looked. Record the answers in the draft the
+   developer approves, and in the artifact's story.description after
+   the plain-English opening.
    Then read the criteria you are about to write. A criterion that names
    a spelling, a text match or a fixed enumeration where what is wanted
    is a property binds the work to the stand-in rather than to the
