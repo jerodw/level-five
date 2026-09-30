@@ -1,0 +1,370 @@
+story:
+  id: story-218
+  title: A plan's reason for leaving a file alone says what is being protected, so work that would not harm it is not blocked
+  description: |
+    When a plan is approved it lists the files the work must leave alone, each
+    with a reason. During the run, the stage that reviews the work reads that
+    reason to decide whether a fix it wants to make in one of those files is
+    something the reason was meant to stop. Reasons tend to be written as a fact
+    about the file (leave this one untouched), and a reason like that can only be
+    read one way: every change is barred, including a change that harms nothing
+    the developer cared about. A recent story (story-215) paid for that. Its new
+    tests needed helpers that lived in a test module the plan had barred, so the
+    run copied them, and the copy went to the backlog as a piece of work of its
+    own.
+
+    This story changes what the planner is told. A reason now says what leaving
+    the file alone protects, meaning the thing about that file the work must not
+    break, so the reviewing stage can tell a change that would harm it from one
+    that would not. Before the plan is approved, the planner also reads each entry
+    against what the work itself needs. Where one would block something the work
+    needs, it settles that with the developer while they are still there. It can
+    let the work into the file, with what the entry protected written down as a
+    limit on the change. It can make moving the shared part out of the file part
+    of the work. Or it can record that the copy is accepted, and why. The story
+    schema's description of the list says the same about what a reason protects.
+    New tests check that the planner's prompt keeps saying all of it.
+
+    It leaves alone whether a file may be barred at all, which stays the
+    developer's call; the rule that every entry carries a reason, which the
+    planning command already enforces; how the reviewing stage reads a reason,
+    which already tells a reason about the whole file from a reason about one
+    thing in it; what the stages that write code and tests may touch, since a
+    barred file stays barred to them; and the paths blocked for every stage. It
+    adds no check on what a reason says. Only the reviewing stage and the
+    developer read a reason's words, and that stays so. The test the brief asked
+    for, which would drive the reviewing stage with different reasons, is not
+    built. The reason is recorded below.
+
+    This story was planned from the brief filed under 378.
+
+    Where the rule is stated, and who reads it. The reason rule reaches the
+    planner in the paragraph beneath the skeleton in `prompts/planner.md`, which
+    says every `do_not_modify` entry is a path or area followed by the developer's
+    reason in a closing parenthetical and that the reason records why the text is
+    left alone rather than that it is, and in the description of
+    `scope.do_not_modify` in `schemas/story.schema.json`, which the same prompt
+    renders whole. Each gains the statement of what a reason protects, and the
+    planner paragraph also gains the rule about an entry that blocks the work.
+    The reader is already built. `prompts/story-verifier.md` and
+    `prompts/refactor-verifier.md` tell the reviewing stage that a reason naming
+    the file's whole subject stands against every finding in it, and that a
+    reason naming one fact stands against findings about that fact. A verdict
+    records its reading in `do_not_modify_judgement`, and `scope_extension_check`
+    in `orchestration/story_coordinator.py` decides the bar on that record. A
+    reason that says what it protects is a reason naming one fact, so nothing
+    past the planner has to move.
+
+    Why it pays. Each part of the change answers a case that has already cost a
+    run. story-215's plan barred story-214's test module while asking for a new
+    module that holds a sibling statement the way that one holds its own; reading
+    the entry against what the new module needed is the point where the conflict
+    would have surfaced, and the copy it led to was filed under key 376. The
+    brief filed under key 378 records that the reviewing stage's decline named
+    that entry as one of its grounds; that run's own records are no longer on
+    disk. story-216's plan barred `tests/test_baseline_honesty.py` with a reason
+    whose last clause made the file's being untouched the evidence; the brief
+    filed under key 384 records that the fix left behind there would have
+    restored the very claims that reason was protecting, and a reason naming
+    those claims leaves the reviewing stage free to repair that in the run.
+
+    What the sweep found. The rule this story changes is what a `do_not_modify`
+    reason says, and when a conflict between an entry and the work is settled.
+    Beyond the texts in scope above, it is stated or consumed by the skeleton's
+    `do_not_modify` item, the sweep step and the consequence step of
+    `prompts/planner.md`, which the constraints keep as they are; by the
+    plan-time refusal in `orchestration/plan_validation.py`, which prints the
+    passing form and says what a reason is for, and by `carries_a_reason`,
+    `do_not_modify_bound` and the judgement in `orchestration/story_coordinator.py`;
+    by the grounds for declining and the judgement passage in both shipped
+    verifier prompts, and the judgement and decline descriptions in
+    `schemas/verification-result.schema.json`; by the writing stages' instruction
+    to change only files within the approved scope; by the accounts in
+    `.harness/docs/ARCHITECTURE.md` of the reason rule under story-177, of the
+    plan-time check, and of the conditional bar under story-208; by
+    `tests/test_planner_receives_the_standards.py`, which holds the reason rule's
+    wording, and by `tests/test_plan_time_validation.py`,
+    `tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py`,
+    `tests/test_planner_injection.py` and `tests/test_baseline_honesty.py`,
+    which hold the refusal, the bar, the template's standing checks and the
+    planner module's recorded claims; and, outside the places the sweep
+    searches, by the accounts of planning and of verification in `README.md`, a
+    brief's `not_in_scope` field in `schemas/story-brief.schema.json`, and
+    `plugin/skills/file-a-brief/SKILL.md`. Each lands in modify, in
+    do_not_modify, or, where it is part of a file in scope, in the constraints.
+
+    Consequences traced before the tasks and criteria were written. Another path
+    moves in step, and it is why the schema is in scope: the planner is told the
+    rule in the prompt's paragraph and again in the schema's description, and a
+    statement added to one alone would leave the other describing a reason only
+    as a record for a later reader. The plan-time refusal prints the passing form
+    and says what a reason is for; each stays true, because the check reads shape
+    alone, and the skeleton placeholder whose wording the printed form matches is
+    not reworded. Of the texts outside the swept places, the README's account
+    stays true as written, and a brief's `not_in_scope` and the file-a-brief
+    skill speak in a filer's advisory words, which a planner turns into entries
+    under this rule.
+
+    No written statement becomes false, but some accounts become incomplete. The
+    architecture document describes a reason, under story-177's addition and in
+    the plan-time check's description, as recording why a text is left alone and
+    nothing more, and the planner test module's docstring lists what each story
+    added to the prompt without this one. Each gains this story's account.
+
+    On whether the validation can fail if the change is wrong: partly, and where
+    it stops is written down here so that a later reader does not take it for
+    more. The new assertions read the prompt `scripts/l5-plan` actually hands a
+    session, the template, and the schema, and each is checked against text that
+    never carried the statement and against a copy of the shipped text with the
+    statement cut out, where the same reading must report it missing while the
+    reason rule's existing statements are still found. They fail if a statement
+    is absent, moved away from the rule it extends, or cut. They do not establish
+    meaning: text carrying the same words under a framing that inverted them
+    would pass, and the module already records that limit of its phrase matching.
+    The brief's driven test is not built. The only reader of a reason's words is
+    the reviewing stage's model, and the suite never invokes a model; in a driven
+    run the test writes the verdict itself, so such a test would pass whether or
+    not this story changed anything. The developer chose, at planning, to hold
+    the wording with assertions, and its meaning is left to the reviewing stage's
+    judgement of this change and to the developer's reading of each plan's
+    reasons at approval.
+
+    The questions that found nothing are these. No second implementation is
+    added: the system itself was searched, where no text but the prompt's
+    paragraph and the schema's description tells a planner what a reason says
+    and the verifier prompts' reading is the counterpart rather than a copy, and
+    so was the machinery that validates it, where the new assertions reuse the
+    planner test module's own readers and `tests/conftest.py`'s shared
+    resolution and need no helper of their own. Nothing behaves differently on a
+    later entry: the prompt and the schema are rendered afresh for every planning
+    session, and a run reads the reason from the approved artifact, which nothing
+    rewrites, on every verdict alike. And nothing new is read, so no value can be
+    absent, unwritable or unreadable; an entry whose reason names only its file,
+    as committed artifacts' entries do, is accepted and read exactly as today.
+
+    Read against what this story's own work needs, none of the entries below
+    blocks it: every file the work changes is in scope, and the new assertions
+    need only readers the planner test module already has.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/planner.md, with the reason rule it extends, state that a
+    do_not_modify entry's reason says what leaving the text alone protects — what
+    about it the work must not break — rather than only that it is left alone,
+    and why: the stage that reviews the work reads the reason during the run to
+    decide whether a fix it wants to make there is one the reason was meant to
+    stop, and a reason naming only the file stands against every change to it.
+  - State there too that before the plan is approved each entry is read against
+    what the work itself needs, and that an entry which would block something the
+    work needs is settled with the developer then: by carving the exception, so
+    the work may change the file for what it needs while what the entry protected
+    is written as a constraint on that change; by making the move of what is
+    needed out of the barred text part of the work; or by recording in the plan
+    that the copy is accepted, and why.
+  - Say in schemas/story.schema.json's description of scope.do_not_modify what a
+    reason protects and why it matters to the reviewing stage, keeping every
+    sentence the description carries now.
+  - Hold each new statement with assertions in
+    tests/test_planner_receives_the_standards.py, on the prompt a planning session
+    receives, on the template and on the schema, each checked against text that
+    never carried it and against a copy of the shipped text with that statement
+    cut out, and add this story's paragraph to the module's docstring, saying what
+    the assertions establish and what they do not.
+  - Record the change in .harness/docs/ARCHITECTURE.md where it describes the
+    reason rule, including that nothing reads a reason's words and that the
+    driven test the brief asked for was not built, and why.
+
+acceptance_criteria:
+  - The prompt a planning session receives tells the planner that a do_not_modify
+    entry's reason says what leaving the text alone protects — what about that
+    text the work must not break — rather than only that it is left alone.
+  - It says why. The stage that reviews the work reads the reason during the run
+    to decide whether a fix it wants to make there is one the reason was meant to
+    stop, and a reason naming only the file stands against every change to it.
+  - It tells the planner that before the plan is approved, each entry is read
+    against what the work itself needs, and that an entry which would block
+    something the work needs is settled with the developer then, rather than left
+    for the run to work around.
+  - It names the ways such a conflict is settled — carving the exception, so the
+    work may change that file for what it needs while what the entry protected is
+    written as a constraint on the change; making the move of what is needed out
+    of the barred text part of the work; and recording in the plan that the copy
+    is accepted, and why.
+  - Those statements are made with the reason rule they extend, and every
+    statement the reason rule made before this story is still made — an entry is
+    a path or area followed by the developer's reason in a closing parenthetical;
+    the reason lets a later reader tell a decision the developer made from a
+    default; a path a stage may not write is not itself a reason; the blocked
+    paths need no entry; and an artifact whose entry carries no reason is refused
+    when the session ends. The skeleton's do_not_modify item still shows that
+    form.
+  - The story schema's description of scope.do_not_modify says that the reason
+    says what leaving the path or area alone protects, and why that matters to
+    the reviewing stage, and still says that an entry carrying no reason is
+    refused at plan time and that artifacts committed before the rule are not
+    held to it.
+  - Each new statement, in the prompt and in the schema, is held by an assertion
+    that reports it missing from text that never carried it and from a copy of
+    the shipped text with that statement cut out, while the reason rule's
+    existing statements are still reported present in that copy.
+  - What the harness does with an entry is unchanged. One carrying any reason
+    passes the plan-time check and bars the paths it names at run time exactly
+    as before, and nothing at plan time or at run time reads, matches or scores
+    what a reason says.
+  - .harness/docs/ARCHITECTURE.md's account of the reason rule says what a reason
+    now says and when a conflict between an entry and the work is settled, and
+    records that nothing reads a reason's words and that the driven test the
+    brief asked for was not built, and why.
+
+technical_plan:
+  implementation_steps:
+    - Add the new statements to prompts/planner.md with the reason rule they
+      extend, first what a reason protects and why the reviewing stage needs it
+      said, then the rule that an entry blocking the work is settled with the
+      developer before approval and the ways it is settled. The existing
+      reason-rule sentences are matched by standing assertions as they are
+      wrapped today, so the new text goes in without re-wrapping them; most
+      simply it is a paragraph of its own directly beneath.
+    - Write the new words to pass the checks the template is already held to. It
+      names no workflow stage and no restricted path of its own, which
+      tests/test_planner_injection.py holds, so the reviewing stage is described
+      rather than named and no example path under the tests directory appears. No
+      sentence of it that names a field of the story schema uses the words
+      required, optional or mandatory, and those fields include ordinary words
+      such as file, reason, stage and scope. The do_not_modify key followed by a
+      colon appears once, in the skeleton, which
+      tests/test_planner_receives_the_standards.py counts.
+    - The natural home for an accepted copy is the plan's answer to the
+      consequence question about a second implementation, since an accepted copy
+      is one; the prompt can say so without the consequence step changing.
+    - Extend the description of scope.do_not_modify in schemas/story.schema.json
+      with what a reason protects and why, keeping every sentence it carries and
+      naming no field it does not already name, because
+      tests/test_forced_adaptation_declaration.py counts which files name the
+      plan-time nomination field.
+    - Add a section for this story to tests/test_planner_receives_the_standards.py
+      in the idiom story-217's section uses. The statements are asserted on the
+      prompt captured from scripts/l5-plan, on the template and on the schema
+      description, controlled against the module's baseline, which carries none
+      of them, and against a copy of the shipped text with each statement cut out
+      as one span, reading through the module's existing helpers. Its docstring
+      paragraph says that the assertions establish the wording and not its
+      meaning, and that the driven test the brief asked for was not built, and
+      why.
+    - Record the change in .harness/docs/ARCHITECTURE.md beside its account of the
+      reason rule under story-177 and of the conditional bar under story-208.
+      What earlier runs did is known from the briefs filed under keys 378, 376
+      and 384, whose runs' own records are gone, so an account of them is
+      attributed to those briefs.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: Carries the reason rule, and gains what a reason protects and the
+        rule for an entry that blocks the work.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: Its description of scope.do_not_modify is the other statement of the
+        reason rule the planner receives.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: Already holds the reason rule's wording, and gains the new
+        assertions, their checks, and this story's docstring paragraph.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: Describes the reason rule and the conditional bar, and gains this
+        story's account.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - schemas/story.schema.json
+    - tests/test_planner_receives_the_standards.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-verifier.md and prompts/refactor-verifier.md (the reading they
+      give a reason stays exactly as it is — one naming the file's whole subject
+      stands against every finding in it, and one naming a single fact stands
+      against findings about that fact — because the reasons this story asks for
+      are written to be read by it, and the prompts carry that passage word for
+      word alike)
+    - schemas/verification-result.schema.json (what a verdict records about a
+      reason, and the grounds it may decline a finding on, keep meaning what they
+      mean now; a reason that says what it protects is read through the same
+      judgement, so no field or description has to move)
+    - orchestration/ (what the harness does with an entry stays decided by its
+      shape alone — whether it carries a reason, and which paths it names — at
+      plan time and at run time; a check on what a reason says would score words
+      that only the reviewing stage and the developer are meant to weigh)
+    - prompts/story-implementer.md, prompts/story-tester.md, prompts/documenter.md,
+      prompts/refactor-implementer.md and prompts/harness-layer.md (what a writing
+      stage may change stays what the approved scope says, so a barred file stays
+      barred to it whatever its reason says; a plan settles a conflict by putting
+      the file in scope, which these prompts already follow)
+    - tests/test_planner_injection.py (its checks on the planner template keep
+      holding as they stand — it names no workflow stage or restricted path of
+      its own, states no field's place in the contract itself, and renders the
+      story schema whole; the new words are written to pass them, and the checks
+      are not widened to admit the words)
+    - tests/test_plan_time_validation.py and
+      tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py (their
+      assertions about what is done with an entry keep passing as they stand — a
+      bare entry refused at plan time, a reasoned one accepted and barring the
+      paths it names, the reviewing stage's recorded judgement deciding whether
+      the bar holds — which is the evidence that this story changed what a reason
+      says and not what the harness does with one)
+    - tests/test_baseline_honesty.py (its recorded claims about the planner test
+      module — why that module reads the shipped files it reads, and which history
+      it reads — stay true of what the module reads, because the new assertions
+      read nothing it does not already read; the history entry's existing gap is
+      filed under key 384 and is that brief's to settle)
+    - README.md (its accounts of planning and of the reviewing stage lifting a bar
+      stay true as written — every path a plan leaves alone still carries the
+      developer's reason, and a bar is still lifted only where the reason is about
+      a different concern than the fix — and it summarises the rule at a level
+      this story does not move)
+    - schemas/story-brief.schema.json and plugin/skills/file-a-brief/SKILL.md (a
+      brief's account of what a story planned from it should leave alone stays the
+      filer's advisory words, which nothing checks; a planner turns each into an
+      entry under the rule this story adds)
+
+verification_requirements:
+  - That the prompt scripts/l5-plan renders for a planning session carries the new
+    statements with the reason rule they extend, and that the story schema's
+    description of scope.do_not_modify carries its statement.
+  - That every statement the reason rule made before this story is still made, and
+    the skeleton's do_not_modify item is unchanged.
+  - That orchestration/, prompts/story-verifier.md, prompts/refactor-verifier.md,
+    schemas/verification-result.schema.json and the writing stages' prompts are
+    unchanged against the story's base.
+  - That the new assertions report each statement missing from a copy of the
+    shipped text with that statement cut out, so they can fail if the change is
+    wrong.
+  - That the new assertions read nothing the planner test module did not already
+    read, live or at a revision, so its recorded claims in
+    tests/test_baseline_honesty.py stay true.
+  - That the whole suite passes.
+  - That .harness/docs/ARCHITECTURE.md's account of the reason rule matches what
+    the prompt and the schema now say.
+
+constraints:
+  - No code under orchestration/ changes. The plan-time check and the run-time bar
+    decide on an entry's shape, and neither starts reading what a reason says.
+  - How the reviewing stage reads a reason stays as it is, in both shipped
+    verifier prompts and in the verdict schema.
+  - The new wording adds to the reason rule and removes or rewords none of its
+    existing statements. The skeleton's do_not_modify item stays as it is, so the
+    form it shows keeps matching the form the plan-time refusal prints.
+  - The sweep step and the consequence step of the planner prompt read as they do
+    now.
+  - The new assertions reuse the planner test module's existing readers, and read
+    nothing that module does not already read, live or at a revision.
+  - No test invokes a model, and none bounds how long the machine takes.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-30 13:02:24
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 378
