@@ -1,0 +1,486 @@
+story:
+  id: story-220
+  title: The decisions a run made on the developer's behalf are read on the surfaces a reviewer already reads, riskiest first
+  description: |
+    Since story-219, a run may settle a design question its approved plan
+    left open, as long as it names an existing source that answers the
+    question, and it writes each such decision — and any rejection of it by
+    the check that follows — to a permanent log. Nobody reads that log unless
+    they already know it is there. The report a finished run leaves says what
+    became of the problems the run found in its own work and nothing about
+    decisions, and the assistant a developer asks how a story went is told
+    nothing about them either. The choices most worth a reviewer's attention,
+    because nobody approved them, are the ones neither of those shows.
+
+    This story puts them on both. The report a completed run leaves gains, at
+    the end of the section that accounts for its findings, every decision the
+    run made: the question, the answer, the source it cited, why, how costly a
+    wrong answer would be, how sure the run was, and — where a later check
+    rejected it — that it was rejected and why. They are listed costliest to
+    get wrong first and, among equally costly ones, least sure first, so a
+    reviewer can read the top and skim the rest. The assistant is told where a
+    story's decisions are kept, including after the run's working files are
+    deleted, and when it reviews a story it reports them in that same order,
+    opening each cited source and saying where it does not support the choice
+    made.
+
+    It leaves alone whether and how a run may decide anything and what it
+    records, which was story-219's work; the report's existing account of what
+    was repaired, sent to the backlog, discarded or abandoned, which reads word
+    for word as it does today and still names a decided finding where it ended
+    up; the report an escalated run leaves, which is a separate defect; and
+    any verdict on whether a decision was right, which stays the reviewer's. A
+    run that made no decision leaves exactly the report it leaves today.
+
+    This story was planned from the brief filed under 390. The brief it was
+    blocked by, the one filed under 389, landed as story-219, which is what
+    records the decisions this story shows.
+
+    Decided at planning. The developer approved the following. The order is
+    costliest to get wrong first, then least sure, then the order the
+    decisions were made in — kept over adding the two fields into one score,
+    which would put a moderately costly decision the run was unsure of above a
+    costly one it was sure of. A decision a later verification rejected stays
+    in the list in its place, marked rejected with the reason, because its
+    change can still be on the branch — the known limit story-219 recorded —
+    and a reviewer needs to see it. A decision the coordinator refused for
+    naming no source is not listed: the run never acted on it, and its finding
+    is already named among those sent to the backlog with the refusal as its
+    ground. The decisions are shown whatever the workflow declares, including
+    one declaring a repair pass and no inspection, where the verifier can
+    still decide on a finding of its own. They sit in the existing findings
+    section, after what it says today, as the brief asks, rather than under a
+    heading of their own. Nothing new is recorded — no event, field, log or
+    schema — because the report reads what story-219 already writes. And the
+    assistant's new duty is held the way the brief asks: against a run driven
+    under the fake runner that really committed decisions, not against a
+    decision log written for the test.
+
+    Where the decisions are read from. Every decision a run recorded and every
+    rejection is an entry in the run's own structured history,
+    `execution-history.json` at the run-directory root, which accounts for the
+    whole run across retries and resumed entries; the decision log under the
+    story's segment of the history directory is the projection of exactly
+    those entries. The account reads them through that same projection: the
+    decision log's declaration is located by the fields only a decision record
+    carries, the way `duration_log_name` locates the duration log, and the
+    run's own entries are projected through `history_record`. So the report
+    and the durable log select the same records by one rule, no module under
+    `orchestration/` names the log's file, and no event kind is spelled a
+    second time. The reading sits in `account_for_the_report` in
+    `orchestration/story_inspection.py`, beside the account it joins and
+    inside the guard that turns any failure into the account's `problem`.
+    `FindingsAccount` gains the decisions, already ordered, defaulting to none
+    so every construction of it today still holds. `_findings_account_section`
+    in `orchestration/story_coordinator.py` renders them, reaching into the
+    inspection module for nothing, as it renders the rest.
+
+    What the report says. The decisions follow everything the section says
+    today, as its closing paragraphs. Each names the finding it was made for by
+    its location, the question, the answer, the cited source, the rationale,
+    the blast radius and the confidence; one a later verification rejected is
+    marked rejected with that verification's reason, paired with the decision
+    it rejected by the finding and question the rejection record carries. No
+    count is written. A run under a workflow declaring no inspection that
+    recorded a decision gets the section with the decisions alone, saying
+    nothing about an inspection it did not make; a run that recorded none
+    renders exactly what it renders today, under every workflow.
+
+    The order. Costliest to get wrong first, by blast radius; among decisions
+    equally costly, least sure first, by confidence; among decisions equal on
+    both, the order they were made in. Blast radius leads because the book
+    this harness is built from puts first that confidence is a poor proxy for
+    correctness: a run's own sureness orders decisions of equal cost and never
+    outranks the cost of being wrong. The rule is decided in one function, and
+    the assistant's prompt states the same rule in words, because an agent
+    reading the committed log has to order it itself.
+
+    The assistant. `prompts/assist.md` gains the obligation the brief
+    describes. When it reviews how a story's run went it reports the decisions
+    that run made on the developer's behalf, read from the decision log
+    committed under the story's own directory beneath the history directory
+    (`.harness/history/` unless the target's configuration sets
+    `history_dir`), which outlives the run directory, or from the completion
+    report while the run directory still exists; it gives them in the order
+    the report uses; for each it opens the source the decision cites and says
+    whether that source supports the choice made, noting any that does not; it
+    gives no verdict on whether a decision was right; it says so when the run
+    recorded none; and it cites the files it read. Its first responsibility
+    names the history directory beside the run and log directories it already
+    names, because that is where the record lives once a run's own files are
+    gone.
+
+    What the sweep found. The fact this story changes is where a run's
+    decisions are shown to a person: today only in the decision log, and after
+    it in the completion report and the assistant's review as well. It is
+    stated or consumed by the account's rendering and docstrings in
+    `orchestration/story_coordinator.py` (`_findings_account_section`,
+    `_named_findings`, the comment in `_complete`); by the account's
+    derivation in `orchestration/story_inspection.py` (the comment introducing
+    it, `AccountedFinding`, `FindingsAccount`, `account_for_the_report`, and
+    `_assemble` beneath it); by the decision machinery and its comment block in
+    the coordinator, whose statement that confidence and blast radius are
+    recorded so a reviewer can read the risky decisions first stays true; by
+    the decision log's declaration in `schemas/cross-run-history.schema.json`,
+    which says the same, and the decision fields of
+    `schemas/execution-history.schema.json`, which say nothing routes on them,
+    both still true; by both verifier prompts, which tell a verification its
+    decision is recorded in a log that outlives the run, still true; by
+    `prompts/assist.md`, whose role layer names only the run and log
+    directories; by `scripts/l5-assist`, which renders it; by the escalation
+    summary; by l5-status (`orchestration/run_status.py`); by
+    `.harness/docs/ARCHITECTURE.md`'s "A completed run says what became of
+    every finding it made" and story-219's section, which leaves the report
+    and the assistant to this brief; and by the tests holding the existing
+    account, the decision record, the event and log inventories and the
+    live-reader declarations. Outside those places, the book's chapter 21 is
+    where the review order comes from, `README.md`'s command table names
+    `l5-assist`, and the installed copies under `templates/` and
+    `.harness/scripts/` say nothing about either surface. Each lands in
+    modify or in do_not_modify with a reason.
+
+    Consequences traced before the tasks and criteria were written.
+
+    A second implementation. The reading does not select decisions a second
+    way: it projects the run's entries through `history_record` against the
+    decision log's declaration, located by its fields, so the report names
+    exactly what the log holds. The ordering rule is new and lives in one
+    function; the assistant's prompt restates it in words, and that copy is
+    accepted, because an agent reading the committed log has nothing to call.
+    The rendering of a decision is new beside `_named_findings`, which names
+    findings by slug and ground and cannot carry a decision's fields. In the
+    machinery that validates the system, story-219's driven fixtures and
+    readers (`deciding_workflow`, `drive`, `deciding`, `rejecting`,
+    `decision_records`, `findings_section`), story-213's account readers, and
+    the launcher interception the assist tests share are reused by importing
+    them. Both kinds of place were searched: the system under `orchestration/`,
+    `schemas/`, `prompts/` and `scripts/`, and the tests' fixtures and helpers.
+
+    Another path in step. The escalation summary is the sibling terminal
+    report and says nothing about decisions either; the brief leaves it as a
+    separate defect. The refactor workflow completes through the same
+    `_complete` and gains the account with no change of its own. A workflow
+    declaring no inspection is the other path to completion, and the decisions
+    show there too. The report and the assistant must order alike, which is
+    why the prompt states the rule the code implements.
+
+    The second time through. The structured history at the run root accounts
+    for the whole run, so decisions recorded before a retry or an interruption
+    are named after it, and story-219 records a decision once, where its pass
+    is routed, so a resumed run names none twice. A finding decided twice —
+    its first decision rejected, a second made on a later pass — appears
+    twice, each with its own rejection or none, because a rejection is paired
+    with the decision recorded before it for that finding and question. The
+    report is written once, at completion.
+
+    Whether the validation can fail. The decisions are made in an order other
+    than the risk order, so a report listing them as made fails; a pair where
+    the costlier decision is the surer one shows blast radius leading; the
+    report is compared against the same run's decision log; and the
+    no-decision control is a comparison between two runs differing only in
+    whether the verdict's findings carry decisions, so a decisions paragraph
+    written unconditionally fails it. The assistant's duty is checked against
+    a run that committed decisions, so a prompt pointing somewhere runs do not
+    write fails.
+
+    A value absent or unreadable. A run that recorded no decision renders
+    nothing new. A history the account cannot read is caught as every failure
+    of the account is: the report is written, says the account could not be
+    derived and why, `events.log` and stderr carry the reason, and the run
+    completes with its usual exit code. A blast radius or confidence outside
+    the vocabulary cannot come from a run, since the verdict schema requires
+    both from it; one read anyway is ordered as the riskiest, so it is read
+    first rather than dropped. The assistant, finding no decision log for a
+    story, says the run recorded none.
+
+    Written statements made untrue. `_findings_account_section`'s docstring,
+    which says the section is empty for every run whose workflow declares no
+    inspection; `FindingsAccount`'s, which counts four dispositions and reads
+    an absent inspection as nothing to render; `account_for_the_report`'s, the
+    comment introducing the account and `_complete`'s comment;
+    `prompts/assist.md`'s first responsibility; and the architecture
+    document's account of the completion report and story-219's statement
+    that the report and the assistant are left to this brief.
+
+    Read against what the work needs, none of the do_not_modify entries
+    blocks it: the work reads the decision record and the account's assembly
+    and changes neither, and reuses the two test modules' helpers by importing
+    them.
+  workflow: story-workflow
+
+tasks:
+  - In orchestration/story_inspection.py, read the decisions and rejections
+    the run recorded out of its own structured history, through the
+    projection the decision log is written by; pair each rejection with the
+    decision it rejected; order them costliest first, then least sure, then as
+    made; and carry them on the account, under every workflow.
+  - In orchestration/story_coordinator.py, render them at the end of the
+    findings section, each with its finding, question, answer, source,
+    rationale, blast radius and confidence and, where rejected, the rejection
+    and its reason; write the section for a run whose workflow declares no
+    inspection when it recorded a decision, and nothing new for a run that
+    recorded none.
+  - Bring the docstrings and comments of both modules that describe the
+    account into line with it.
+  - In prompts/assist.md, add the duty to report a reviewed story's decisions
+    — where they are kept, the order, the note on a source that does not
+    support the choice, no verdict on whether a decision was right, saying
+    when there are none, citing the files — and name the history directory in
+    its first responsibility.
+  - Hold the behaviour with driven coordinator runs under the fake runner,
+    and the assistant's duty against a driven run that committed decisions,
+    in a new test module named for what it checks, declared in
+    tests/test_baseline_honesty.py where that module's scans require it.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - Driven end to end with the fake runner, a completed run that recorded
+    decisions of different blast radius and confidence names every one of
+    them in its completion report, inside the section accounting for the
+    run's findings and after everything that section said before. For each it
+    names the finding it was made for, its question, its answer, the source it
+    cites, its rationale, its blast radius and its confidence.
+  - The report lists them costliest to get wrong first and, among decisions
+    equally costly, least sure first; decisions equal on both keep the order
+    they were made in. This is shown with the riskier decisions made later
+    than the less risky ones, and with a pair in which the costlier decision
+    is the one the run was surer of, which still comes first.
+  - A decision a later verification rejected is listed in its place in that
+    order, marked rejected with that verification's reason, and a decision no
+    verification rejected carries no such mark. The finding behind a rejected
+    decision is still named among those sent to the backlog with the
+    rejection as its ground, as it is today.
+  - The decisions the report names, and which of them it marks rejected, are
+    exactly the decision and rejection records the same run committed to the
+    story's decision log. A decision the coordinator refused for naming no
+    source is not listed, and its finding is named among those sent to the
+    backlog as it is today.
+  - The control. A run that recorded no decision leaves the completion report
+    it leaves today, shown by comparison with a run identical to it except
+    that its verdict's repairable findings carry decisions. That run's report
+    is the first one's with the decisions added and nothing else different,
+    so a decisions part rendered unconditionally, or any change to the
+    existing clauses, fails the comparison.
+  - A run under a workflow declaring a repair pass and no inspection, whose
+    verdict repairs a finding the verifier raised itself under a decision,
+    names that decision in its completion report and says nothing about an
+    inspection it did not make. The same run without the decision leaves the
+    report it leaves today, with no account in it.
+  - A fault constructed in the reading of the decisions leaves the completion
+    report written, saying the account could not be derived and why, and the
+    run completing with the exit code it returns today.
+  - The assistant's prompt, as scripts/l5-assist hands it to the session,
+    tells it that when it reviews a story's run it reports the decisions that
+    run made on the developer's behalf; where they are kept, including after
+    the run directory is deleted; that it gives them in the order the
+    completion report uses; that it notes any decision whose cited source does
+    not support the choice made; that it gives no verdict on whether a
+    decision was right; that it says so when the run recorded none; and that
+    it cites the files it read.
+  - Held against a recorded run. Where that prompt sends the agent for a
+    story's decisions is where a run driven under the fake runner, which
+    recorded decisions, committed them, and the fields the prompt orders them
+    by are fields those committed records carry. This is checked against that
+    driven run, not against a decision log written for the test.
+  - .harness/docs/ARCHITECTURE.md's account of what a completed run's report
+    says about its findings, and of where a run's decisions are read, matches
+    what the report and the assistant's prompt now do.
+
+technical_plan:
+  implementation_steps:
+    - Find the decision log's declaration among history_log_declarations() by
+      the fields only a decision record carries, confidence and blast_radius,
+      the way duration_log_name finds the duration log by operation and
+      duration_seconds — beside it is the natural place — and never by its
+      filename, which test_no_module_under_orchestration_names_a_log in
+      tests/test_cross_run_history.py holds every module under orchestration/
+      to leave unspelled. Project each entry of the run's own structured
+      history, load_history over the run directory, through history_record
+      with the run directory's name as the story id; what comes back is
+      exactly a line the decision log holds for this run. A record carrying
+      rejection is a rejection and one carrying the decision's fields is a
+      decision, as the declaration itself says the two are told apart.
+    - Pair each rejection with the latest decision recorded before it whose
+      finding and question it carries. Order by blast radius, costliest first,
+      then by confidence, least sure first, then by the order made. The levels
+      are read in the vocabulary's own order, low, medium and high, as the
+      schemas declare it, and a level outside that vocabulary is ordered as
+      the riskiest.
+    - FindingsAccount gains a field for the ordered decisions, defaulting to
+      none, so the FindingsAccount(inspected=False) and
+      FindingsAccount(inspected=True) that story-213's renderer test
+      constructs still mean what they mean. The decisions are read inside
+      account_for_the_report's guard and before its early return for a
+      workflow declaring no inspection.
+    - _findings_account_section writes nothing only where the workflow
+      declares no inspection and the run recorded no decision. The decisions
+      are its closing paragraphs, after the queue sentence where there is one,
+      so the section a run without decisions renders is unchanged and the
+      decisions part reads as one block. A decision is rendered by a helper
+      beside _named_findings, and neither reaches into the inspection module,
+      the rule test_the_coordinator_renders_the_account_and_derives_none_of_it
+      holds of the two renderers it names.
+    - Two wording traps. The story-219 module asserts that the run whose
+      decision stood names nothing under the backlog clause, by that clause's
+      own opening, so a decision's entry reuses none of the four clause
+      openings. And story-213's sweep over orchestration/ and schemas/ reports
+      any sentence saying a finding is named in the event stream where a
+      developer meets it, so new docstrings about where decisions are read do
+      not make that claim.
+    - prompts/assist.md is target-facing prose, so the harness-source scan
+      reports any language, toolchain or test-layout literal written into it.
+    - The new test module reuses, by importing them, story-219's
+      deciding_workflow, materialize, drive, deciding, the_verdict, rejecting,
+      CHOSEN, decision_records and findings_section; story-213's
+      account_section, named_in, CLAUSES and report_of; and the launcher
+      interception the assist tests share, assist_prompt in
+      tests/test_every_story_and_brief_opens_in_plain_english.py or launched
+      in tests/test_the_assist_agent_files_a_brief.py. The order case records
+      the less risky decision first; the crossing pair puts the costlier,
+      surer decision after the cheaper, less sure one; the no-decision control
+      drives the same verdicts with and without decisions; the uninspected
+      case strips the inspection from the definition as story-213's
+      no-inspection control does and decides a finding the verifier raised
+      itself; the fault case raises inside the decisions reading as
+      story-213's fault case raises inside _ground_of.
+    - Declare the new module in tests/test_baseline_honesty.py where its scans
+      require one, in DECLARED_LIVE_ARTIFACT_READERS for a module reading a
+      shipped prompt or schema live and in DECLARED_HISTORY_READERS for one
+      reading a story range, with its reason. The scans hold each list exact,
+      so a declaration the module does not need is refused as well.
+    - In .harness/docs/ARCHITECTURE.md, add a section beside "A completed run
+      says what became of every finding it made" and "A finding whose fix an
+      existing source settles is repaired under a recorded decision", and
+      bring the first's account of the report, and the second's statement
+      that the report and the assistant are left to the next brief, into
+      line.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The account reads the run's decisions and rejections through the
+        decision log's projection, pairs and orders them, and carries them;
+        its docstrings and the comment introducing it say so.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The findings section renders the decisions, including for a run
+        whose workflow declares no inspection; the renderer's docstring and
+        the comment in _complete say so, and the log's locator may sit beside
+        duration_log_name.
+    - file: prompts/assist.md
+      stage: implementer
+      reason: The duty to report a reviewed story's decisions, riskiest first,
+        and where they are kept.
+    - file: tests/test_the_decisions_a_run_made_are_read_riskiest_first.py
+      stage: tester
+      reason: The driven runs, their controls and the checks of the
+        assistant's prompt against a recorded run.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: The new module's declaration, where its scans require one.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The account of what the report says and where a run's decisions
+        are read.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - prompts/assist.md
+    - tests/test_the_decisions_a_run_made_are_read_riskiest_first.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-verifier.md, prompts/refactor-verifier.md, and the
+      decision machinery in orchestration/story_coordinator.py — decision_check,
+      decision_refusal_reason, _decision_refused, _decision_recorded,
+      _decision_rejected, decision_rejection_reason, judge_rejections and the
+      decision fields of append_event (what a run may decide, on what
+      evidence, how a decision is refused, recorded and rejected, and what a
+      verification is told about it stay as story-219 left them; this story
+      reads the record and changes nothing about how it is made)
+    - schemas/cross-run-history.schema.json, schemas/execution-history.schema.json
+      and schemas/verification-result.schema.json (what a decision record
+      carries and which log it reaches stay as declared, so the report reads
+      the record a run already writes rather than a new one)
+    - The completion report's existing account — the four disposition clauses
+      and the sentences _findings_account_section writes today, their wording
+      and their order, and _named_findings in orchestration/story_coordinator.py
+      (a run that recorded no decision reads word for word as it does today,
+      and a decided finding stays named under the disposition it reached)
+    - The filing at completion — _assemble, file_at_completion and
+      _file_at_completion in orchestration/story_inspection.py — and
+      orchestration/inspection.py (what a run sends to the backlog stays
+      exactly what it sends today; decisions change what the report says and
+      nothing about what is filed)
+    - The escalation summary, escalation_summary and _escalate in
+      orchestration/story_coordinator.py (the report an escalated run leaves
+      keeps what it says today; that it loses the run's findings and decisions
+      is the separate defect the brief names)
+    - scripts/l5-assist (it renders the assistant's template against the
+      context it already builds, and the new paragraph needs no value that
+      context lacks, so what the session is handed changes only by the
+      template's words)
+    - orchestration/run_status.py and scripts/l5-status (l5-status reports
+      where a run has got to rather than reviewing what it decided, and the
+      brief names the completion report and the assistant as the two surfaces)
+    - tests/test_a_completed_run_says_what_became_of_its_findings.py and
+      tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+      (their assertions keep holding as they stand — the existing clauses are
+      read where they were, and story-219's claims are bounded at that story's
+      own range — and their drivers and readers are reused by importing them)
+    - tests/test_execution_history.py and tests/test_cross_run_history.py
+      (their inventories of event kinds, fields and logs hold as they stand,
+      because this story records nothing new)
+    - README.md (its line for l5-assist stays true, and the developer records
+      each story there after merge)
+
+verification_requirements:
+  - That each driven case runs the coordinator end to end with the fake runner
+    and invokes no model, and that the ordering case has its decisions made in
+    an order other than the order the report must give, so a report listing
+    them as made fails it.
+  - That the no-decision control is a comparison between two driven runs
+    rather than a reading of the code, and that the report's agreement with
+    the decision log is read off the log the same run committed.
+  - That the assistant's prompt is read as scripts/l5-assist hands it to the
+    session, and that where it sends the agent is checked against a run
+    driven under the fake runner that committed decisions.
+  - That no event kind, append_event keyword, cross-run log or schema field
+    was added, and that the decision machinery, the filing at completion, the
+    escalation summary, both verifier prompts and scripts/l5-assist are
+    unchanged against the story's base.
+  - That the standing modules holding the existing account and the decision
+    record pass with their assertions as they stand.
+  - That the whole suite passes.
+  - That the architecture document's account matches the report and the
+    assistant's prompt.
+
+constraints:
+  - The report reads the run's records and decides nothing. Nothing routes on
+    the decisions, their order or their fields.
+  - Nothing new is recorded. No event kind, append_event keyword, cross-run
+    log or schema field is added.
+  - No module under orchestration/ names a log's file, and no event kind is
+    emitted from a second function.
+  - The account is derived in orchestration/story_inspection.py and rendered
+    by the coordinator, whose renderers reach into the inspection module for
+    nothing.
+  - A failure reading the decisions is caught like every failure of the
+    account. The completion report is always written and the run's exit code
+    is unchanged.
+  - The decisions part writes no count.
+  - A run that recorded no decision leaves its completion report byte for
+    byte what it is today, under every workflow.
+  - The order is decided in one function, and the assistant's prompt states
+    the same rule.
+  - No test invokes a model, and none bounds how long the machine takes.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-30 22:45:13
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 390
