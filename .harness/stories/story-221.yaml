@@ -1,0 +1,759 @@
+story:
+  id: story-221
+  title: A finding is reported as fixed exactly when a check in its attempt fixed it, and what the run cannot fix reaches the backlog
+  description: |
+    When a run checks its own work, problems turn up two ways: the
+    inspection finds some in the change and hands them to the checking
+    stage, and the checking stage finds some itself. The run records what
+    became of the inspection's findings: fixed within the run, or sent to
+    the backlog when the run ends. Of the checking stage's own findings it
+    records only a count of those cut off because the fixing passes ran
+    out. Within one attempt the check can run several times: once, and then
+    again after each fixing pass it asks for. But the first of those checks
+    settles the record, and a later check can only move a finding from
+    fixed to the backlog, never back. That goes wrong whenever a later check
+    is the one that matters:
+
+    - A check rejects the design choice a fix rested on, then fixes the
+      defect again under a corrected choice. The defect is still sent to the
+      backlog.
+    - The first check passes over a finding or turns it down, and a later
+      check fixes it. It is still sent to the backlog.
+    - A check asks for a fix, and a words-only correction postpones it. If
+      the next check never raises it again, the fix counts as made, so the
+      defect is neither fixed nor filed.
+    - A finding the checking stage raised itself is sometimes left unfixed.
+      Its fix needed a file the run may not touch, its design choice was
+      rejected, or no fixing pass was left. Either way, it disappears
+      without reaching the backlog.
+
+    The first two file backlog items for work the run already did. The last
+    two lose defects.
+
+    This story makes the record follow the last check of the attempt that
+    dealt with each finding, for the checking stage's own findings as well
+    as the inspection's. A later check that fixes a finding counts it as
+    fixed, whatever an earlier check said, with two exceptions:
+
+    - after a rejected design choice, only a fix under a corrected choice
+      counts;
+    - a part of a fix the run refused to make stays owed until a later check
+      gets that very part made.
+
+    The run finishes what it can before anything is filed. The check a
+    words-only correction returns to must answer every fix that correction
+    postponed, either asking for it again or declining it by name, and is
+    sent back once if it skips one. Whatever the run genuinely cannot fix
+    goes to the backlog, whichever stage found it. For that, the checking
+    stage now classifies each finding it raises itself the way the
+    inspection classifies its own, so one the run leaves can be filed like
+    any other. Because more of the work now stays inside the run, the limits
+    on fixing passes are raised, so that they guard against runaway
+    processing rather than cutting off work the run is doing.
+
+    It leaves several things alone:
+
+    - the permanent record of a rejected design choice, which is written
+      exactly as now;
+    - the case where a check only undoes a rejected change, where the
+      backlog is right;
+    - how many times a failed check may be retried, which this story does
+      not draw on;
+    - the completion report's layout.
+
+    The story was planned from the brief filed under key 393. It folds in
+    the other gaps the planning trace found.
+
+    Why each goes wrong today. The accounting splits the routed findings
+    once per attempt, on the first verdict (_account_after_verdict,
+    orchestration/story_inspection.py:2299-2395). A later verdict of the
+    attempt only amends that split. It moves slugs from acted on to the
+    remainder for a refusal, a spent allowance or a rejection, and never the
+    other way. The code says "The split itself is not redone" (:2446-2449)
+    and computes `kept = frozenset(acted_slugs) - frozenset(moved)` (:2522).
+    As a result:
+
+    - A rejection moves its slug out in account_after_verdict
+      (orchestration/story_coordinator.py:13445-13456). This happens before
+      the repair block routes the corrected pass (:13795-13856), and nothing
+      moves the slug back.
+    - A later verdict naming a slug the first verdict left is not read at
+      all: the early return at orchestration/story_inspection.py:2314-2327
+      skips it.
+    - The first verdict counts a slug as acted on when it names it in a
+      repairable finding (verdict_locations, :1742-1758). It does so even
+      when a correction pass routes first and defers that repair
+      (orchestration/story_coordinator.py:13541-13542). Nothing amends the
+      count when the returning verdict does not raise the repair again.
+    - A finding the checking stage raises itself names no routed slug, so
+      the accounting never sees it. Story-213 recorded that as "a real gap":
+      only the count of abandoned findings covers it. Under story-219, a
+      rejected decision on such a finding moves nothing.
+
+    Two tests assert the outcomes these produce.
+    tests/test_a_completed_run_says_what_became_of_its_findings.py:1398-1455
+    expects the deferred repair counted as acted on and the later-corrected
+    finding left in the remainder. The same file at :1848-1869 expects the
+    checking stage's own abandoned finding to be absent from the report and
+    unfiled.
+
+    The rule after this story. For each finding, the latest verdict of the
+    attempt that deals with it decides what became of it:
+
+    - A verdict that names it in an entry, after the coordinator's
+      refusals, counts it as acted on. That includes a finding an earlier
+      verdict of the attempt left.
+    - A verdict whose coordinator refusal names it leaves it. If a bound
+      refused a file of its fix, that part stays owed. A later verdict brings
+      the finding back only by making that very part: it must name the
+      finding in an accepted entry for each refused file. A file that is
+      still barred is refused again. A file refused only because the entry's
+      category resolved to a stage that may not change it can be made later
+      under the owning stage's category.
+    - A verdict that rejects the decision its repair rested on leaves it,
+      unless that verdict or a later one names it in an accepted repairable
+      finding carrying a decision. A repair naming it without a decision is
+      read as the restoring the prompts ask for after a rejection.
+    - A decision refused for naming no source leaves it. A later verdict
+      that names the finding then decides, as for any left finding.
+    - A spent allowance leaves it, as now, at the point where the allowance
+      is met.
+    - On the verdict a correction pass returns to, every repair that pass
+      postponed must be answered: named again in an entry, or declined by
+      name. If one is left unanswered, that verification is sent back once,
+      through the existing re-run of a stage in place, with a statement
+      naming the unanswered repairs. No retry is spent. A postponed repair
+      declined by name leaves its finding on the terms any decline takes. If
+      a repair is still unanswered after the send-back, or no re-run is
+      left, it is treated as declined without a reason.
+    - A verdict that says nothing about a finding changes nothing. A verdict
+      that changes nothing writes nothing.
+
+    What a left finding becomes. Every left finding is filed once at
+    completion through the one filing call, with the same floor, cap and
+    duplicate detection, whichever stage found it. The exceptions are those
+    already in place: a decline that says the finding is not worth filing
+    drops it.
+
+    An inspection finding is filed from what the Inspector wrote, as now. A
+    finding the checking stage raised itself is filed from what the
+    checking stage wrote: the classification it gave the finding, the
+    finding and the correction it describes, its path, why the run left it,
+    and the run's workflow. A finding of the checking stage's own left
+    without that classification is not filed with values the coordinator
+    made up. It is dropped, the drop is named with its reason in the line
+    the run writes when it completes, and the finding is named in the
+    completion report.
+
+    The checking stage's classification. Every finding the checking stage
+    raises itself carries:
+
+    - a slug of its own in its location, which a decided one already
+      carries;
+    - the judgments a brief needs and only a model can make: a one-line
+      title stating the finished behaviour, the kind of work, how much it
+      matters, how sure the check is, and roughly how big it is.
+
+    These use the vocabulary schemas/story-brief.schema.json already
+    declares, held equal to it by a test, as story-219 held the decision's
+    confidence. They are optional in the verdict schema, presence-as-signal
+    like the fields beside them, and the prompts ask for them on every
+    finding the check raises itself. They are read only if the run leaves
+    the finding.
+
+    How. Today the coordinator hands the accounting its refusals,
+    abandonments and rejections. It will also say:
+
+    - which files a bound refused for each finding;
+    - which findings the verdict names in an accepted repairable finding
+      carrying a decision;
+    - which postponed repairs this verdict declined, or left unanswered
+      after the send-back. It reads these off the live correction pass
+      record's deferred_repairable_findings, through _live_pass_record.
+
+    One rule applies on every verdict to both kinds of finding, with no
+    second copy of it. The first verdict's split is the rule applied to an
+    attempt that nothing has been said about yet; a later verdict moves
+    findings in both directions.
+
+    The checking stage's own findings enter the attempt's accounting
+    artifact only when the run leaves one. They sit there beside the
+    inspection's findings, under their own slugs, together with what the
+    checking stage wrote, and a later act removes them. So a run that leaves
+    none of them accounts, files and reports exactly as today. Nothing new
+    is written to events.log for them: the refusal, rejection, abandonment
+    and self-route events that leave one already say so.
+
+    Every left entry records explicitly:
+
+    - the files a bound refused for it, empty where none;
+    - whether its decision was rejected.
+
+    This follows the convention dropped and abandoned already use, and both
+    writers set these the same way. Whether a later verdict can bring a
+    finding back is read off fields, never off a reason's prose. Every move
+    a later verdict makes on an inspection finding is reported in an
+    accounting event. The send-back is reported by the existing self-route
+    event under a new cause with its own statement.
+
+    Where the mechanism applies. All of it applies where the checking stage
+    declares an inspection. That declaration is what turns on the whole
+    findings mechanism (the accounting, the filing at completion and the
+    report's account), and both shipped workflows make it. A workflow that
+    does not declare an inspection has switched that mechanism off by its
+    own declaration, and the checking stage's own findings follow the same
+    switch. The send-back for postponed repairs applies wherever a
+    correction pass and a repair pass are both declared, because that is
+    where a repair can be postponed.
+
+    Why answer before filing. Filing a dropped postponed fix would put work
+    in the backlog that the run could have finished; one more pass would
+    usually have done it. Requiring an answer keeps the decision inside the
+    run. A finding asked for again gets fixed, and a declined one reaches
+    the backlog only on the grounds a decline already needs. What remains
+    reaches the backlog because the run genuinely could not fix it: a barred
+    file, a design choice rejected with no source for another, or a fixing
+    pass the run no longer had.
+
+    Why a refused part stays owed, and why a decision is required after a
+    rejection. The prompts tell the verifier that a refused file is dropped
+    from the pass and its finding filed. So a verifier may fix only the
+    reachable part on a later verdict, expecting the refused part to be
+    filed. Letting that later fix bring the finding back would quietly lose
+    the refused part, so the finding comes back only when that part itself
+    is made. After a rejection, the prompts ask the verifier to undo the
+    rejected change with a repairable finding. A decision is the only field
+    that separates a fresh repair from that undoing, so it is what a
+    returning finding needs.
+
+    The limits, as runaway guards. A run today gets two repair passes and
+    two correction passes in total, retries included. The refactor workflow
+    gets one correction pass. Some recent runs already used about as many
+    rounds of checking as those limits allow. This story moves more work
+    into those passes: re-fixing after a rejected choice, fixing what an
+    earlier check passed over, and answering postponed fixes. A request the
+    run has no pass left for is abandoned and filed, which is the outcome
+    this story exists to prevent. So in both shipped workflows:
+
+    - the repair and correction pass budgets become five, each with a
+      reason saying the number guards against runaway processing and is not
+      a measure of the work. The run's spending limit still stops a run that
+      keeps finding more.
+    - the checking stage gains a separate re-run budget of two for the new
+      send-back cause, in the way the tester already declares one for
+      record-keeping re-runs. The send-back therefore never uses the one
+      re-run kept for a crashed invocation.
+
+    Retries are untouched: this story routes its work through passes, not
+    through failed checks. The change takes effect for runs started after
+    this story merges; its own run keeps the limits it starts under.
+
+    What the checking stage and the record descriptions are told. These
+    passages change, each in the same words in both
+    prompts/story-verifier.md and prompts/refactor-verifier.md:
+
+    - The repair-pass passage (:475-495 / :473-493): what a rejection does
+      to a finding, and the difference between restoring alone and
+      repairing again under a corrected decision.
+    - The repairable-findings passage's deferral sentences: each postponed
+      repair must be answered on the returning verification, by asking for
+      it again or declining it by name, and one left unanswered sends that
+      verification back once.
+    - The repairable-findings passage's sentence on a slug of the verifier's
+      own: every finding the verifier raises itself names one and carries
+      the classification a brief needs, because if the run leaves it, it is
+      filed from those words.
+    - The inspection passage: on a returning verification, naming a finding
+      counts even where an earlier verdict of the attempt left it. A finding
+      with a refused part counts only once that part is made, and a finding
+      left unnamed keeps what was decided before.
+
+    In the schemas:
+
+    - schemas/verification-result.schema.json: the descriptions of
+      rejected_decisions and its reason, decision and its source, and
+      declined_findings state the same rules. The finding items gain the
+      optional classification fields.
+    - schemas/correction-pass.schema.json: the description of
+      deferred_repairable_findings says each postponed repair must be
+      answered.
+    - schemas/self-route-result.schema.json: the failure enum, which a
+      standing test holds equal to SELF_ROUTE_FAILURES, gains the new cause.
+
+    The completion report. The checking stage's own findings the run left
+    are named in the existing clauses (sent to the backlog, abandoned,
+    judged not worth filing) by their own slugs. An unclassified one that
+    was dropped is named with that reason. A run that left none of its own
+    findings renders its report exactly as before.
+
+    No test pins a configurable value. A test never holds a configurable
+    value to a specific number or string. Configurable values include a
+    workflow's budgets and ceilings, a configuration key and an execution
+    rule. A test reads the value from where it is declared, or supplies its
+    own in a fixture. The repository already follows this for the tracker
+    settings ("A target's configured values are read by the tests that
+    check them"). This story states it in .harness/standards/testing.md, so
+    every stage judged against the standards is held to it.
+
+    Existing tests whose expectations move. These existing modules need
+    adapting, and no assertion is removed except the ones the workflow
+    comparisons below name:
+
+    - tests/test_inspection_findings_reach_the_story.py:2490-2518 pins
+      account_after_verdict's parameter list, which gains the new inputs.
+    - tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      :723-726 and :759-762, and
+      tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+      :748-749, :780-781, :953-955 and :968, pin exact declined entries,
+      which gain the new fields.
+    - tests/test_a_completed_run_says_what_became_of_its_findings.py has two
+      cases. At :1398-1455 its returning verdict leaves the postponed repair
+      unanswered, so the send-back now runs, and its expected acted-on list
+      changes. At :1848-1869 the checking stage's own abandoned finding is
+      now named in the report and, being unclassified, dropped with its
+      reason.
+    - tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+      has two cases. At :1315-1326 a postponed decided repair is never
+      raised again, so the send-back now runs. At :1140-1182 the checking
+      stage's own rejected decision now leaves its finding.
+    - tests/test_pass_grants_expire_with_the_pass.py:291-356 drives a
+      postponed repair the returning verdict never answers, and pins the
+      stages invoked and the verifier's prompts.
+    - tests/test_planner_receives_the_standards.py:3000-3160 holds the
+      current shipped workflow files byte for byte against older revisions
+      of themselves, which freezes every configurable number in them except
+      the effort and cost keys someone exempted. Stories 171, 172 and 174
+      made claims there: each changed only the workflows' applies_when
+      statements. Each claim is now checked against that story's own before
+      and after revisions instead of the current files, so no configurable
+      value, and no later legitimate change to a workflow, can redden it.
+      The exemptions, and the assertions that exist only to justify them, go
+      by the developer's decision recorded here: tests do not pin
+      configurable values. That includes the assertion that the current run
+      ceiling differs from older ones.
+
+    I traced the other driven runs in tests/ whose later verdicts name
+    findings or postpone a repair. Each one names nothing after the first
+    verdict, answers its postponed repairs, or meets a refusal or a spent
+    allowance that leaves the finding as it does now.
+
+    What the change would break.
+
+    - A second implementation? The new inputs need these facts, and each
+      already has a reading: whether a verdict entry names a slug,
+      names_a_slug; whether a finding carries a decision, decision_of; which
+      findings the bounds accepted, the verdict after verdict_after_refusals;
+      which kind a refusal was, RefusedExtension or RefusedDecision; and
+      which repairs a correction pass postponed, the live record through
+      _live_pass_record. The send-back reuses self_route. A checking-stage
+      finding is filed through inspection.file_findings, the one filing
+      call. The rule is written once for both kinds of finding. In the
+      validation machinery, story-219's module builds the decided-repair
+      workflow, the verdict builders, drive and fresh with a pass budget,
+      and the readers of the decision log and the accounting; story-213's
+      module has a workflow declaring both passes, plus readers of the
+      report's clauses; and story-220's module already drives a
+      reject-and-decide-again run. The new module imports these. I searched
+      orchestration/ and every test module under tests/ that routes
+      findings, postpones a repair or reads the shipped workflows' budgets,
+      including conftest.py.
+    - Another path doing the same job? The completion filing, the report's
+      account and the re-entry events read the accounting artifact, so they
+      follow it. The self-route causes are held in three places, and all
+      three move together: SELF_ROUTE_FAILURES, its record-keeping
+      classification, and the failure enum. The brief vocabulary has one
+      definition, held equal by a test. Outside the declared places I
+      searched every tracked file: the shipped skill, the README, the
+      installed scripts and the other prompts say nothing about how a
+      finding is accounted.
+    - Right the second time through? The rule is asked of every verdict,
+      including the first. A send-back re-runs the same verification and
+      spends no retry. A retry archives the attempt, and the next attempt is
+      inspected and accounted afresh. A resumed run re-enters without
+      judging the verdict again, and its archive carries the accounting
+      artifact, including the checking stage's own leftovers.
+    - Can the validation fail if the change is wrong? Each new driven case
+      has a control that differs in one thing: the corrected decision
+      against a restore-only repair; a postponed repair answered against one
+      left unanswered; a later fix of a passed-over finding against a later
+      verdict naming nothing; a refused part made later against one refused
+      again; and a classified checking-stage leftover against the same one
+      unclassified. The main run of each case fails on today's code.
+    - When a value is absent or unreadable? A decision that is not an object
+      reads as none. A checking-stage finding with no slug of its own is
+      followed by its location. An unclassified leftover is dropped with its
+      reason named, never filed with invented values. An unreadable live
+      pass record raises, as every reader of one does.
+    - What written statement does it make untrue? These texts, each brought
+      into scope: the prompt passages and schema descriptions above; the
+      budgets' own reasons in both workflow definitions; in the accounting
+      module, the docstrings describing a once-per-attempt split amended only
+      outward; in the coordinator, the comment blocks on decisions, deferral
+      and the accounting call, judge_rejections' docstring, and
+      verdict_after_refusals' statement that the seam "treats them alike";
+      and in .harness/docs/ARCHITECTURE.md, the sections stating the
+      once-per-attempt split, the one-way amendment, "deferred rather than
+      lost", that a rejected or refused decision's finding is always filed,
+      that a finding the checking stage raises itself reaches neither the
+      account nor the filing, and the pass budgets' numbers.
+  workflow: story-workflow
+
+tasks:
+  - Make what became of each finding follow the latest verdict of the
+    attempt that deals with it, by the rule in the description, applied once
+    to both kinds of finding. Record the new entry fields alike in both
+    writers, and report every move a later verdict makes on an inspection
+    finding in an accounting event.
+  - In the verifier branch, hand that rule its new inputs. Require an answer
+    for every postponed repair on the verification a correction pass returns
+    to, sending it back once through self_route under a new cause with its
+    own statement.
+  - Enter the checking stage's own findings into the attempt's accounting
+    only when the run leaves one. File them at completion through the one
+    filing call from the classification the checking stage gave them,
+    dropping an unclassified one with its reason named.
+  - Name the checking stage's own leftovers in the completion report's
+    existing clauses, leaving the report of a run that left none exactly as
+    it is.
+  - Raise the repair and correction pass budgets to five in both shipped
+    workflows, and give the checking stage a separate re-run budget of two
+    for the new cause, each with its reason. State in
+    .harness/standards/testing.md that no test pins a configurable value.
+  - Correct the docstrings and comments in orchestration/story_inspection.py
+    and orchestration/story_coordinator.py that state the old rule.
+  - In both verifier prompts, in the same words, state what a rejection
+    does and how a corrected repair counts, that every postponed repair must
+    be answered, that every finding the verifier raises itself names a slug
+    of its own and carries the classification a brief needs, and that a
+    later verification's naming counts.
+  - State the same rules in schemas/verification-result.schema.json and
+    schemas/correction-pass.schema.json, add the classification fields to
+    the verdict's finding items, and add the new cause to
+    schemas/self-route-result.schema.json.
+  - Write a driven test module holding the behaviour, reusing the existing
+    fixtures. Adapt the existing tests whose expectations this story moves,
+    and add whatever declaration tests/test_baseline_honesty.py requires.
+  - Record the change in .harness/docs/ARCHITECTURE.md, and correct the
+    sections it makes untrue.
+
+acceptance_criteria:
+  - Suppose the returning verification rejects a finding's decision, and
+    that verification, or a later one in the same attempt, repairs the
+    finding again in a repairable finding that names it and carries a
+    decision the coordinator accepts. Then the finding is recorded as acted
+    on, is not filed, and is not named as left. An inspection finding is
+    named among the findings repaired within the run.
+  - In that run, the decision log holds the first decision, its rejection
+    and the corrected decision, in the order they were made. The rejection's
+    record is the same as in the run whose rejecting verdict only restores
+    the files, timestamps aside.
+  - If the repair naming a finding after its decision was rejected carries
+    no decision, the finding stays left, on the rejecting verdict and on a
+    later one. It is filed once with the rejection as its ground and named
+    among the findings sent to the backlog.
+  - If the verification after a corrected repair rejects the corrected
+    decision, the finding is left with that later rejection as its ground.
+    If no repair pass is left to run a corrected repair, the finding is left
+    as abandoned, like any finding a spent allowance abandons.
+  - On the verification a correction pass returns to, a postponed repair
+    named again, whose repair pass routes, leaves its finding acted on. A
+    postponed repair declined by name leaves its finding on the terms a
+    decline takes. If a postponed repair goes unanswered, that verification
+    runs again in place once, spending no retry, with a statement naming the
+    unanswered repair. If it is still unanswered, or no re-run is left, it
+    is treated as declined without a reason.
+  - A finding the first verification of an attempt left, whether passed
+    over, declined or judged not worth filing, is acted on, not filed, and
+    named among the findings repaired within the run once a later
+    verification of the same attempt names it in an entry the coordinator
+    accepts.
+  - A finding part of whose fix the coordinator refused for a bound stays
+    left while that part is not made, even when a later verification of the
+    attempt names it in accepted entries for other files. It is acted on
+    once a later verification names it in an accepted entry for each
+    refused file. A finding whose decision was refused for naming no source
+    is acted on once a later verification names it in an accepted entry.
+  - A finding the checking stage raised itself that the run leaves is filed
+    once at completion, through the one filing call, as a brief built from
+    the classification the checking stage gave it, its finding and
+    correction, its path, why it was left and the run's workflow. It is
+    named in the completion report's existing clauses by its own slug. One
+    left without a classification is dropped, with the reason named in the
+    run's completion line and in the report, and nothing is filed for it. A
+    run that leaves none of its own findings accounts, files and reports
+    exactly as before.
+  - A later verification that changes nothing writes nothing. Each move a
+    later verification makes on an inspection finding is reported in an
+    accounting event that names the finding, the direction and the cause.
+    Both writers of a left entry record the same fields for the same
+    situation.
+  - Both verifier prompts tell the verification, in the same words as each
+    other, what each response to a rejection does to a finding, that each
+    postponed repair must be answered and what follows when one is not,
+    that every finding it raises itself names a slug of its own and carries
+    the classification a brief needs and why, and that naming a finding on
+    a returning verification counts even where an earlier verdict of the
+    attempt left it.
+  - The verdict schema declares the classification fields in the
+    vocabulary schemas/story-brief.schema.json declares, and a test holds
+    the two equal. schemas/correction-pass.schema.json and the verdict
+    schema's descriptions state the same rules, and
+    schemas/self-route-result.schema.json declares the new cause. No shipped
+    prompt or schema still says, without exception, that a rejected or
+    refused decision's finding is filed, that every finding the first
+    verdict of an attempt left is filed, that a postponed repair cannot be
+    lost, or that a finding the checking stage raises itself reaches no
+    account.
+  - Both shipped workflows declare repair and correction pass budgets of
+    five and a separate re-run budget of two for the checking stage, each
+    with a reason recording that the number guards against runaway
+    processing. These are configured values, so no test holds them.
+  - No test, new or adapted, holds a configurable value to a specific
+    value. The claims that earlier stories changed only the workflows'
+    statements are checked against those stories' own revisions, and
+    changing any configurable number in a shipped workflow leaves the suite
+    green. .harness/standards/testing.md states the rule.
+  - A test module holds each run and prompt behaviour above, by driving
+    whole runs under the fake runner and reading the shipped prompts. For
+    each case, a control run differs from it in the one thing that case is
+    about.
+  - .harness/docs/ARCHITECTURE.md records the rule and why each part of it
+    holds, and corrects every passage that states the old rule, the old
+    outcomes or the old budgets.
+
+technical_plan:
+  implementation_steps:
+    - The rule. Generalise the later-verdict path of _account_after_verdict
+      from an outward-only amendment to the rule's update in both
+      directions, written once and applied to both kinds of finding. Keep
+      write_accounting as the one writer of the accounting artifact. For a
+      verdict carrying none of the new inputs and leaving no checking-stage
+      finding, keep the split's slugs, counts and event as they are; the new
+      entry fields are the only addition.
+    - The coordinator. Compute the new inputs where the verdict is judged,
+      beside judge_rejections, and hand them over at the existing accounting
+      call. The call sites stay as they are, so
+      test_every_accounting_call_site_reads_nothing_from_it holds unedited,
+      and nothing the accounting records is read to route. Decide the
+      send-back above the accounting through self_route, under a cause added
+      to SELF_ROUTE_FAILURES with a statement of its own and classified with
+      the record-keeping causes, and treat a send-back not taken as the
+      fallback the rule states, never an escalation. Keep any new helper
+      that reads a pass record outside the source window story-183's
+      no-budget assertion slices, between scope_extension_check and
+      repair_pass_extensions.
+    - The filing. file_at_completion assembles the checking stage's own
+      leftovers beside the remainder and hands them to
+      inspection.file_findings as briefs, so the floor, cap, duplicate
+      detection and drop reporting are the existing ones. An unclassified
+      leftover becomes a named drop.
+    - Prompts. The standing checks on the repair-pass, repairable and
+      inspection passages must keep holding unedited: those in
+      tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+      at 1465-1559, including the one sentence carrying "a slug of your own"
+      in the repairable passage; in
+      tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      at 385-470; in
+      tests/test_a_small_finding_is_repaired_or_dropped_never_filed.py at
+      310-345; and in tests/test_pass_grants_expire_with_the_pass.py at
+      1000-1016.
+    - Workflows. Write each budget's reason in the voice the existing reasons
+      use. The checks in tests/test_shipped_workflow_is_valid.py that budgets
+      are counts and that a split budget declares both halves and their
+      reasons hold unedited.
+    - Tests. Import story-219's builders and readers, story-213's two-pass
+      workflow and clause readers, and the filing readers of
+      tests/test_inspection_findings_reach_the_story.py. Story-219's fresh
+      with a budget argument covers the cases needing a third pass or none
+      left.
+  likely_file_changes:
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The rule, the new entry fields, the checking stage's leftovers
+        in the account and the filing, the accounting events, and the
+        docstrings that state the old rule.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The new inputs, the send-back cause and its statement, the
+        report's naming of the checking stage's leftovers, and the comments
+        and docstrings that state the old rule.
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The repair-pass passage, the repairable passage's deferral and
+        own-slug sentences, and the inspection passage.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same passages, in the same words.
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: The classification fields on the finding items, and the
+        rejection, decision and declined descriptions.
+    - file: schemas/correction-pass.schema.json
+      stage: implementer
+      reason: The deferred_repairable_findings description.
+    - file: schemas/self-route-result.schema.json
+      stage: implementer
+      reason: The new cause in the failure enum.
+    - file: workflows/story-workflow.json
+      stage: implementer
+      reason: Pass budgets of five and the checking stage's separate re-run
+        budget of two, each with its reason.
+    - file: workflows/refactor-workflow.json
+      stage: implementer
+      reason: The same budgets, each with its reason.
+    - file: .harness/standards/testing.md
+      stage: implementer
+      reason: The rule that no test pins a configurable value.
+    - file: tests/test_a_finding_is_reported_fixed_exactly_when_a_check_fixed_it.py
+      stage: tester
+      reason: The new driven module holding the behaviour, each case beside a
+        control differing in the one thing it is about.
+    - file: tests/test_inspection_findings_reach_the_story.py
+      stage: tester
+      reason: The pinned parameter list of account_after_verdict gains the new
+        inputs.
+    - file: tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      stage: tester
+      reason: Its exact declined entries gain the new fields.
+    - file: tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+      stage: tester
+      reason: Its exact declined entries gain the new fields.
+    - file: tests/test_a_completed_run_says_what_became_of_its_findings.py
+      stage: tester
+      reason: The postponement case and the checking stage's own abandoned
+        finding, whose expected outcomes encoded the gaps this story closes.
+    - file: tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+      stage: tester
+      reason: The postponed decided repair never raised again, and the
+        checking stage's own rejected decision.
+    - file: tests/test_pass_grants_expire_with_the_pass.py
+      stage: tester
+      reason: The returning verdict answers its postponed repair.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: The workflow comparisons check each earlier story's own
+        revisions and pin no configurable value.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: The new module's declaration, where it reads shipped text or
+        history.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: A section for the rule, and the passages it makes untrue
+        corrected.
+
+scope:
+  modify:
+    - orchestration/story_inspection.py
+    - orchestration/story_coordinator.py
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - schemas/verification-result.schema.json
+    - schemas/correction-pass.schema.json
+    - schemas/self-route-result.schema.json
+    - workflows/story-workflow.json
+    - workflows/refactor-workflow.json
+    - .harness/standards/testing.md
+    - tests/test_a_finding_is_reported_fixed_exactly_when_a_check_fixed_it.py
+    - tests/test_inspection_findings_reach_the_story.py
+    - tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+    - tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+    - tests/test_a_completed_run_says_what_became_of_its_findings.py
+    - tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+    - tests/test_pass_grants_expire_with_the_pass.py
+    - tests/test_planner_receives_the_standards.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - schemas/execution-history.schema.json and
+      schemas/cross-run-history.schema.json (the rejection's own record and
+      every accounting, filing and self-route record keep the kinds and
+      fields already declared)
+    - schemas/story-brief.schema.json (the brief vocabulary the
+      classification uses is defined there once, and a brief filed from a
+      checking-stage finding satisfies it as it stands)
+    - prompts/assist.md (it tells the assistant how to read the decision
+      log, which this story leaves as it is)
+    - prompts/story-implementer.md, prompts/story-tester.md,
+      prompts/documenter.md and prompts/refactor-implementer.md (a stage a
+      pass enters makes the correction the finding says, and the new re-run
+      cause reaches the checking stage alone)
+    - prompts/inspector.md (what the Inspector finds, classifies and routes
+      is unchanged)
+    - rules/execution-rules.json (the retry ceiling it holds is not drawn on
+      by this story)
+    - orchestration/inspection.py (the filing call files what it is handed,
+      with its floor, cap, duplicate detection and drop reporting unchanged)
+    - tests/test_the_decisions_a_run_made_are_read_riskiest_first.py (its
+      finding-decided-twice case drives this story's first case but asserts
+      only what the decision log and the report's decisions part say, which
+      this story leaves as they are)
+
+verification_requirements:
+  - Confirm that each new driven case has a control differing in the one
+    thing the case is about, so each assertion can fail.
+  - Confirm that each adapted existing test changed only the expectation
+    this story moves, and that the only assertions removed are the ones that
+    existed solely to justify freezing configurable values in the workflow
+    comparisons.
+  - Confirm that no new or adapted test holds a configurable value to a
+    specific value, and that the workflow comparisons stay green when a
+    configurable number in a shipped workflow changes.
+  - Confirm that the rule for what became of a finding is written once and
+    applied to both kinds of finding.
+  - Confirm that the coordinator's new inputs are read through names_a_slug,
+    decision_of, the accepted verdict, the refusal's own kind and
+    _live_pass_record, that the send-back goes through self_route, and that
+    a checking-stage finding is filed through inspection.file_findings.
+  - Confirm that a finding with a refused part comes back only when a later
+    verdict makes that part, and that a rejected finding comes back only
+    under a decision.
+  - Confirm that nothing is filed with values the coordinator supplied in
+    place of the checking stage's classification, and that a run leaving
+    none of its own findings accounts, files and reports exactly as before.
+  - Confirm that the rejection's event and decision-log record are written
+    unchanged.
+  - Confirm that both prompts carry the new sentences in the same words, and
+    that the standing prompt checks pass unedited.
+  - Confirm that the whole suite passes.
+
+constraints:
+  - The coordinator stays deterministic. No model call is added, and nothing
+    the accounting records is read to route.
+  - One rule decides what became of a finding, for the inspection's findings
+    and the checking stage's own alike.
+  - A finding part of whose fix a bound refused comes back only when a later
+    verdict makes that part. A finding whose decision was rejected comes
+    back only under a decision the coordinator accepts.
+  - What the run leaves unfixed reaches the backlog through the one filing
+    call, whichever stage found it, except where a decline drops it as not
+    worth filing or a checking-stage finding carries no classification.
+  - The coordinator never supplies a brief's judgments. A checking-stage
+    finding is filed only from the classification the checking stage wrote.
+  - An unanswered postponed repair is sent back once through the existing
+    re-run and never escalates the run. No retry is spent on it.
+  - No event kind, append_event keyword or history schema field is added.
+    Every move is reported in the existing accounting and self-route event
+    kinds.
+  - A run whose verdicts carry none of the new inputs and leave none of the
+    checking stage's own findings records the same slugs and counts, and
+    writes the same events, as it does today. The only difference in its
+    accounting artifact is the new fields on each left entry.
+  - Both writers of a left entry record the new fields alike, explicitly on
+    every entry, in the convention dropped and abandoned follow.
+  - The rejection's decision-rejected event and its decision-log record are
+    written exactly as before.
+  - Both verifier prompts carry every new sentence in the same words, so the
+    parity checks need no new permitted divergence.
+  - The completion report's layout and its decisions part are unchanged.
+  - The retry ceiling is unchanged.
+  - No test holds a configurable value to a specific value.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-10-01 09:52:30
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 393
