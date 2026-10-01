@@ -1,0 +1,608 @@
+story:
+  id: story-219
+  title: A finding whose fix an existing source already settles is repaired in the run, under a decision recorded for review
+  description: |
+    When a run checks its own work, it often finds a real defect it is not
+    allowed to fix, because fixing it means picking one of two or three
+    reasonable designs and the approved plan did not say which. Today such a
+    defect is written up and sent to the backlog, and the choice then costs a
+    planning conversation, a second run, a review and a merge — even when the
+    answer was already written down: in one of the repository's standards, in
+    its architecture document, or in the way the code already solves the same
+    problem somewhere else.
+
+    This story lets a run make that choice and fix the defect, on one
+    condition: it must name the existing source the answer comes from. The
+    choice, the source, why this answer rather than another, how sure the run
+    is, and how costly a wrong answer would be to undo are written to a
+    permanent record committed with the story's history, where a reviewer can
+    check each one after the run itself has been cleaned up. The next check of
+    the work is shown the decision and can reject it; a rejection is recorded
+    beside the decision, and the defect goes to the backlog. A decision that
+    names no source is never acted on — the defect goes to the backlog exactly
+    as it does today. The instructions the checking stage follows also stop
+    treating two situations as one: a plan that said nothing about the choice,
+    and a plan that said something the fix would contradict, need opposite
+    remedies.
+
+    It leaves alone a fix that would contradict something the plan did say
+    (that wants the plan amended, which is a separate brief, and it still goes
+    to the backlog), how and when a run stops for a person, the limit on how
+    many in-run repairs a run may make, and the places a reviewer will later
+    read these decisions — the report a finished run leaves and the
+    assistant's account of a story — which are the next brief's work. Nothing
+    here answers a question no source settles; that still goes to the backlog.
+
+    This story was planned from the brief filed under 389.
+
+    Where the rule is stated, and what changes. The grounds on which a verdict
+    may decline a routed finding are stated in the triage paragraph of
+    `prompts/story-verifier.md` and `prompts/refactor-verifier.md`, which read
+    the same in the sentences this story touches, and in the description of a
+    declined finding's `reason` in `schemas/verification-result.schema.json`,
+    which both prompts render. The first ground, that the fix is a design
+    decision the plan did not make, is split. A choice the approved plan does
+    not make and no existing source settles stays a ground, and the finding is
+    filed. A fix that contradicts or is barred by something the plan does say
+    stays a ground and is filed as well: it wants the plan changed (the brief
+    filed under 348, deferred) or a reason that says what it protects (the
+    brief filed under 378, landed as story-218), not a decision. A choice an
+    existing source settles is no longer a ground: the finding is repaired
+    under a recorded decision. A repairable finding gains an optional
+    `decision` — question, answer, source, rationale, confidence and
+    blast_radius — and a verdict gains an optional `rejected_decisions`. In
+    `orchestration/story_coordinator.py` the verifier branch refuses a
+    decision citing no source through the seam a refused scope extension
+    already goes through; records each decision a routed repair pass carries
+    as an event, which the cross-run projection writes to a new
+    `decision-log.jsonl` declared in `schemas/cross-run-history.schema.json`;
+    and, on a verdict judged while the repair pass it returned from is live,
+    records each rejection there too and amends the attempt's accounting in
+    `orchestration/story_inspection.py`, so the finding is left with the
+    rejection as its ground. The new event kinds and fields are declared in
+    `schemas/execution-history.schema.json` and accepted by `append_event`.
+
+    Decided at planning. The developer approved the following. When the
+    verification a repair returns to rejects the decision behind it, the
+    harness records the rejection beside the decision and sends the finding to
+    the backlog, and putting the change back is that verification's own job,
+    with the routes it already has: a repair restoring the files where a repair
+    pass remains, a failed verdict and a retry where none does. The harness
+    does not undo a rejected decision's change itself, because it cannot tell
+    what later work in the pass leans on the change, and a tree it changed
+    after the verification would be a tree nothing verified. The completion
+    report is not changed, for the reason given below. A decision rides only on
+    a repairable finding; a fix to the words alone that needs a choice is still
+    declined and filed. Any repairable finding may carry one, the verifier's
+    own as well as a routed one, and only a routed finding has the backlog to
+    fall back to when its decision is refused or rejected — the asymmetry the
+    harness already records for every finding the verifier raises itself. The
+    record's fields follow the decision ledger of the book this harness is
+    built from: question, answer, source, rationale, confidence and blast
+    radius, with the stage that decided and the finding it was made for.
+    Confidence and blast radius are each low, medium or high, confidence in the
+    vocabulary a brief already uses. A decision whose source is absent or
+    blank is refused by the coordinator and its finding filed; it is
+    deliberately not refused as a malformed verdict, because sending a verdict
+    back for a missing source would invite a source written to satisfy the
+    check. A refused decision takes every file of its fix out of the pass. The
+    log is append-only: a rejection is a record of its own, and the decision's
+    record is never edited.
+
+    Why it pays. The brief counts nine findings declined across the runs of
+    stories 213 through 217: six because the plan was silent about a choice
+    the fix required, three because the plan had said something narrow that
+    barred it. Of the six, it judges that at least three had a source of the
+    kind this story requires. Those counts are the brief's; the runs' own
+    records are no longer on disk. The brief asked that this follow the brief
+    filed under 378, which landed as story-218. That one addressed the
+    narrow-plan class, so the plan-silent count the brief measured is the one
+    this story addresses, and it stands.
+
+    The record, and why it is a history log. The decision log follows the
+    book's decision ledger, and like that ledger it is append-only. It is
+    declared the way `inspection-log.jsonl` was, as one more property of the
+    history declaration, written under the story's own segment of
+    `.harness/history/` by the projection every log is written by, committed
+    with the run's history, and still there after the run directory is
+    deleted. It is not the reserved `adjudication-log.jsonl`: that name is kept
+    for an adjudicator that settles a dispute between an implementer and a
+    verifier, which this harness does not have, and a decision is a choice a
+    verdict makes. Unlike the other logs, a decision record carries the
+    decision's own words rather than counts, because once the run directory is
+    gone nothing else holds them, so the history declaration's statement that
+    a record is a summary and never a copy gains that exception and its
+    reason. Nothing routes on confidence or blast radius. They are there so a
+    reviewer can read the risky decisions first, and the book's first
+    principle is that confidence is a poor proxy for correctness.
+
+    What the independence is. The verifier decides; the stage that owns the
+    file makes the repair; the pass runs forward to a fresh verification,
+    which is handed the decision in the pass record it already reads and may
+    reject it. That is a second invocation of the same stage — weak
+    independence, and described as such. The safety is that a decision names
+    a source a reviewer can open, is visible in a record that outlives the run,
+    and can be reversed, not that it was independently verified. A decision
+    may add to or refine what was approved and never remove any of it.
+    Nothing checks that mechanically; it is the returning verification's and
+    the reviewer's to hold.
+
+    The brief's two statements about the completion report. Its validation
+    paragraph says the completion report accounts for a decision beside the
+    repairs and the filings; its list of what to leave alone gives the
+    report's account of decisions to the brief that follows. This plan
+    follows the list, and the developer confirmed it at planning: the
+    report's rendering is not changed. A decision that stood leaves its
+    finding acted on, and a rejected one leaves it in the remainder with the
+    rejection as its ground, so the report's existing account already names
+    the first among the findings repaired within the run and the second among
+    those sent to the backlog, with the rejection as its ground. A heading of
+    their own is the next brief's.
+
+    What the sweep found. The rule this story changes is which grounds a
+    verdict may decline a routed finding on, and what a run may do with a
+    choice its plan did not make. It is stated or consumed by the triage
+    paragraph, the repairable paragraph and the repair-pass slot of both
+    verifier prompts; by the reason description, the repairable finding's
+    shape and the verdict's top-level fields in
+    `schemas/verification-result.schema.json`; by the refusal seam, the repair
+    block, the pass statement and `append_event` in
+    `orchestration/story_coordinator.py`; by the accounting and its amendment
+    in `orchestration/story_inspection.py`, and by the completion report's
+    account in both modules; by the filing in `orchestration/inspection.py`;
+    by the history declaration and the event declaration in
+    `schemas/cross-run-history.schema.json` and
+    `schemas/execution-history.schema.json`; by the pass record's declaration
+    in `schemas/correction-pass.schema.json`; by the repair-pass slots of the
+    writing stages' prompts; by the pass budgets in both workflow definitions;
+    by `prompts/assist.md`, which the next brief changes; by
+    `.harness/docs/ARCHITECTURE.md`'s accounts of the grounds (under stories
+    164, 202 and 214), of the repair pass and of the cross-run history; and by
+    the tests that pin the grounds' wording
+    (`tests/test_a_small_finding_is_repaired_or_dropped_never_filed.py`, whose
+    grounds `tests/test_a_verdict_repairs_a_finding_needing_new_validation.py`
+    imports, and
+    `tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py`),
+    the prompt parity walk in
+    `tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py`,
+    the declared-log inventory in `tests/test_cross_run_history.py`, the
+    event-kind inventory in `tests/test_execution_history.py` and the
+    live-reader declarations in `tests/test_baseline_honesty.py`. Outside the
+    places the sweep searches, `README.md` summarises verification and
+    inspection, and the book's decision ledger is what the record follows; the
+    installed copies under `templates/` and `.harness/scripts/` were read too
+    and state nothing of the rule. Each lands in modify, in do_not_modify, or
+    in the constraints.
+
+    Consequences traced before the tasks and criteria were written.
+
+    A second implementation. The decision log is not the reserved adjudication
+    log, for the reason above. The refusal reuses the seam a refused scope
+    extension takes (`verdict_after_refusals`, `refused_routed_slugs` and the
+    accounting's `refused_slugs`); the rejection's accounting reuses the
+    amendment a later verdict's refusal already takes (`_amend_accounting`);
+    the log is written by the existing projection; and confidence reuses the
+    brief's vocabulary. In the machinery that validates the system, the driven
+    fixtures of `tests/test_inspection_findings_reach_the_story.py` and the
+    prompt readers of
+    `tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py`
+    are reused rather than copied. Both were searched — the system itself
+    under orchestration, schemas and prompts, and the tests' fixtures and
+    helpers.
+
+    Another path in step. The refactor workflow declares the same inspection
+    and repair pass, and its verifier prompt is held by the parity walk to read
+    the same as the story workflow's in these passages, so it changes in the
+    same words. The correction pass is a sibling route and deliberately
+    carries no decision. A failed verdict's retry guidance can embody a choice
+    too; it is a different mechanism, outside the brief, and left alone.
+
+    The second time through. A decision is recorded where the pass carrying it
+    is routed, not where a stage is entered, so a run resumed inside the pass
+    — which re-enters at the saved stage without routing again — records
+    nothing twice, and a decided finding a correction pass defers records
+    nothing until a repair pass carrying it is routed. A rejection is matched
+    only against the pass the judging verification returned from, so a later
+    verification, which sees the tree but not that record, cannot reject an
+    earlier pass's decision. It is honoured on a failing verdict too, because
+    the accounting runs before the passed and failed routing. After a retry,
+    which attempt's findings are filed is the existing rule, the run's final
+    attempt, so a rejected finding moved into an earlier attempt's remainder
+    reaches the backlog only if the final attempt's inspection finds it again,
+    as every finding across retries does today.
+
+    Whether the validation can fail. The refused case and the decided case
+    differ only in the source, so each absence the refused case asserts — no
+    repair, no record — is shown against a run where the same verdict produced
+    both. The returning verification's prompt is read off the prompt file the
+    run wrote. What cannot be tested is whether a real verifier cites a source
+    that actually settles the question, or rejects when it should: the suite
+    never invokes a model, and that judgement is the returning verification's
+    and the reviewer's, which is the weak independence the brief names.
+
+    A value absent or unreadable. A missing or blank source refuses the
+    decision and files the finding, said in the run's events and recorded in
+    the accounting. A decision malformed in any other field is refused by the
+    schema, as any malformed verdict is, and the verifier runs again in place.
+    A rejection naming no decision the pass carried changes nothing and is
+    said in the run's events. A pass record the state says exists and that
+    cannot be read raises, as it does today.
+
+    Written statements made untrue. The grounds as both prompts and the reason
+    description state them; `.harness/docs/ARCHITECTURE.md`'s account of the
+    grounds under "Size is a reason to fix, never a reason to file", its
+    statement that a record is a summary and never a copy, and its list of the
+    logs; the same statement in the history declaration's own description;
+    the docstrings of the refusal and amendment seams as they are extended;
+    and the standing tests that pin the old ground's wording and the set of
+    declared logs, which redden and are adapted without weakening.
+
+    Known limit. A rejection on the verification after the last repair pass
+    the run is allowed cannot be undone by another repair. That verification
+    can fail the verdict and spend a retry; where it asks for the repair
+    anyway, the spent allowance abandons it as it abandons any finding, and
+    the decided change stays on the branch with the decision and its
+    rejection both in the log and the finding filed. It is visible and
+    reversible at review, and not undone in the run.
+
+    Read against what this story's own work needs, none of the entries below
+    blocks it: every file the work changes is in scope, and the parts left
+    alone — the report's rendering, the assistant's prompt, the writing
+    stages' prompts, the workflow definitions, the filing and the two test
+    modules whose checks the new words are written to pass — are none of them
+    needed by the work, which reuses the parity module's readers by importing
+    them.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/story-verifier.md and prompts/refactor-verifier.md, in the same
+    words in both, split the first ground on which a routed finding may be
+    declined. A fix requiring a choice the approved plan does not make, which
+    no existing source settles, is declined and filed; a fix that contradicts
+    or is barred by something the plan does say is declined and filed as well,
+    because it wants the plan changed rather than a decision made; and a choice
+    an existing source settles — a repository standard, a configured
+    architecture document, or the way this codebase already solves the same
+    problem — is not a ground for declining.
+  - State in both prompts, in the same words, how such a finding is repaired:
+    as a repairable finding carrying a decision that records the question, the
+    answer, the source that settles it, why this answer rather than another,
+    how sure the verifier is and how costly a wrong answer would be to undo;
+    that a decision may add to or refine what was approved and never remove
+    any of it; and that a choice no source settles is declined rather than
+    decided.
+  - State in both prompts, in the same words, what the verification a decided
+    repair returns to does with each decision the repair pass record carries.
+    It judges whether the source says what the decision says, whether a source
+    settles the question at all, and whether the decision takes anything away
+    from what was approved, and it rejects one that fails any of these by
+    naming it with a reason in rejected_decisions, undoing its change with the
+    routes it already has.
+  - In schemas/verification-result.schema.json, add the optional decision to a
+    repairable finding and the optional rejected_decisions array to the
+    verdict, each described for the verifier who reads it, and state the split
+    grounds in the description of a declined finding's reason.
+  - In orchestration/story_coordinator.py, refuse a decision whose source is
+    absent or records no words, through the seam a refused scope extension
+    goes through, taking every finding of that fix out of the pass; record
+    each decision a routed repair pass carries as an event; and, on a verdict
+    judged while the repair pass it returned from is live, record each
+    rejection naming a decision that pass carried as an event and have the
+    attempt's accounting leave that finding with the rejection as its ground.
+  - Declare the decision log in schemas/cross-run-history.schema.json, with
+    the exception to its statement that a record is a summary and never a
+    copy and the reason for it, and declare the new event kinds and fields in
+    schemas/execution-history.schema.json, with append_event accepting them.
+  - Hold the behaviour with driven coordinator runs under the fake runner in a
+    new test module named for what it checks, adapt the standing tests that
+    pin the old wording of the grounds and the set of declared logs, and
+    declare any new module that reads the shipped prompts or schemas live
+    where the suite requires it.
+  - Record the change in .harness/docs/ARCHITECTURE.md.
+
+acceptance_criteria:
+  - A repairable finding may carry a decision recording the question its fix
+    requires that the approved plan does not answer, the answer chosen, the
+    existing source that settles it, why this answer rather than another, a
+    confidence of low, medium or high, and a blast radius of low, medium or
+    high saying how costly a wrong answer would be to undo. The verdict schema
+    accepts a verdict carrying one, and every verdict it accepted before is
+    still accepted.
+  - Driven end to end with the fake runner, a passing verdict that repairs a
+    routed finding under a decision citing a source routes a repair pass
+    exactly as a repairable finding without one does. The stage the finding's
+    category resolves to is entered and granted the file, and the accounting
+    counts the routed finding as acted on.
+  - When that pass is routed, the decision reaches the decision log under the
+    story's segment of the history directory as one record carrying its
+    question, answer, source, rationale, confidence and blast radius, the
+    finding it was made for, the stage that made it and when. The record is
+    committed with the run's history and is still there after the run
+    directory is deleted.
+  - The verification that pass returns to is handed the decision. The prompt
+    rendered for it carries the decision as the repair pass record holds it.
+  - That verification may reject the decision in its verdict, naming the
+    decision and why, whether the verdict passes or fails. The rejection
+    reaches the decision log as a record of its own naming the decision and
+    the reason, and the decision's own record is left as it was written. The
+    attempt's accounting records the routed finding as left by the run with
+    the rejection as its ground, so the filing at completion sends it to the
+    backlog when that attempt is the run's last. A rejection naming no
+    decision the pass carried records nothing in the decision log, changes no
+    accounting, and is said in the run's events.
+  - The control. A decision whose source is absent, or records no words, is
+    refused by the coordinator rather than refused as a malformed verdict. The
+    pass changes no file of that fix, neither the finding carrying the
+    decision nor any finding sharing its routed slug, and nothing reaches the
+    decision log for it. The refusal is said in the run's events, the routed
+    finding is recorded as declined with the refusal as its ground and is
+    filed at the run's completion as a declined finding is today, and any
+    other finding the verdict carried is routed while the run continues
+    without stopping or escalating. The case differs from the decided one only
+    in the source.
+  - The completion report's existing account names a finding repaired under a
+    decision that stood among the findings repaired within the run, and one
+    whose decision was rejected among those sent to the backlog with the
+    rejection as its ground. The report's rendering is not changed.
+  - Nothing routes on confidence or blast radius. Verdicts that differ only in
+    those fields route, account and file identically.
+  - A decision spends the repair pass allowance every repairable finding
+    spends and nothing more. A finding carrying a decision that meets a spent
+    allowance is abandoned as any other is and records nothing in the
+    decision log, and a decided finding a correction pass defers records
+    nothing until a repair pass carrying it is routed.
+  - Both verifier prompts state, in the same words as each other, the split
+    grounds for declining; how a decided repair is recorded, that a decision
+    may add to or refine what was approved and never remove any of it, and
+    that a choice no source settles is declined rather than decided; and what
+    the verification a decided repair returns to does with each decision,
+    including rejecting it and undoing its change with the routes it already
+    has. The verdict schema's description of a declined finding's reason
+    states the same split grounds.
+  - The history declaration declares the decision log beside the other logs,
+    reached through the projection every log is reached through, and its
+    statement that a record is a summary and never a copy says why a decision
+    record carries the decision's own words. The reserved adjudication log
+    stays reserved and undeclared.
+  - .harness/docs/ARCHITECTURE.md's accounts of the grounds for declining, of
+    the cross-run history's logs and of what a record carries match what the
+    prompts, the schemas and the coordinator now do, and say that the
+    independence is a second invocation of the same stage.
+
+technical_plan:
+  implementation_steps:
+    - In the prompts, the grounds sentence is the one the standing tests find
+      by the words "the grounds that remain". Every new sentence goes into both
+      prompts in the same words, because the parity walk in
+      tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      holds every sentence of the walked passages to reading the same in both,
+      apart from the story-workflow-only sentences it already permits. The
+      passages' other standing checks keep holding — the phrase "too small"
+      appears once in each prompt, "archives no attempt" once, and no route
+      closes on "nothing if it does not" — so the new words avoid those
+      phrases. The returning verification's instruction fits most naturally
+      beside the repair-pass slot.
+    - In the verdict schema, decision is an object on a repairable finding.
+      Its source is deliberately left out of the object's required list, and
+      the description says why — a decision citing no source is refused by the
+      coordinator and its finding filed, rather than refused as a malformed
+      verdict and asked again, which would invite a source written to satisfy
+      a validator. Confidence and blast_radius are enums of low, medium and
+      high, confidence in the vocabulary schemas/story-brief.schema.json
+      already uses. A rejected_decisions entry carries the slug the decided
+      finding's location names and a reason. Both fields are
+      presence-as-signal, on the terms every sibling field records.
+    - The coordinator's refusal is decided beside scope_extension_check, before
+      the refusal events and verdict_after_refusals, so a refused decision
+      leaves the pass and is declined with its refusal as the reason through
+      that seam. Every repairable finding whose location names the refused
+      decision's routed slug leaves the pass with it, which is where this
+      differs from a refused extension, whose accepted siblings still route.
+      The refusal's wording is composed in one function, as refusal_reason's
+      is.
+    - Recording is one event per finding carrying a decision, appended in the
+      repair block's routing branch where the pass record is written, so a
+      spent allowance, a refusal or a deferral records nothing. Each new kind
+      is spelled in exactly one function of the coordinator, as
+      tests/test_execution_history.py requires, and declared in
+      schemas/execution-history.schema.json; each new field is an append_event
+      keyword declared there too, as that module's check on optional fields
+      requires. A plain note is appended with append_event's default kind,
+      because the note kind is already spelled in one function.
+    - For a rejection, read the live repair pass record when the verdict is
+      judged — before any new pass routes, and before the accounting call,
+      which runs ahead of the passed and failed routing — and match each
+      rejection's slug against the decided findings it carries with
+      names_a_slug. Append one rejection event per match, and hand the matched
+      routed slugs to account_after_verdict through the refusal seam with the
+      rejection as their reason. What _amend_accounting says moved a slug
+      names a rejection rather than attributing it to a refused extension or a
+      spent allowance, and the docstrings of both seams say they now carry a
+      third cause.
+    - The decision log's event enum names the decision and rejection kinds,
+      and its required list is chosen so neither kind reaches another log by
+      accident. Its timestamp is what retention compares.
+    - The pass statement may say that a finding carrying a decision is made as
+      its correction says and is not decided again. If it does,
+      schemas/correction-pass.schema.json's description of the statement
+      follows.
+    - The new test module reuses the driven fixtures of
+      tests/test_inspection_findings_reach_the_story.py and, for any prompt it
+      reads, the readers of
+      tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py,
+      by importing them. Adapt GROUNDS in
+      tests/test_a_small_finding_is_repaired_or_dropped_never_filed.py, which
+      tests/test_a_verdict_repairs_a_finding_needing_new_validation.py
+      imports, and the assertion in
+      tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+      that names the old ground. Adapt tests/test_cross_run_history.py's
+      declared-log inventory and its sets of the logs a run reaches. A run
+      that decides nothing reaches every log but the decision log, the way a
+      run that does not complete reaches every log but the inspection's, so
+      the adaptation narrows which run is asked about and loosens no
+      assertion. A new module that reads the shipped prompts or schemas live
+      is declared in DECLARED_LIVE_ARTIFACT_READERS in
+      tests/test_baseline_honesty.py with its reason, in the same change,
+      which past stories paid a retry for leaving out.
+    - In .harness/docs/ARCHITECTURE.md, add a section beside "A reasoned
+      do_not_modify entry bars a repair only where its reason speaks to it"
+      and "A fix needing new standing validation is repaired rather than
+      filed", and update the grounds under "Size is a reason to fix, never a
+      reason to file", the paragraph saying a record is a summary and never a
+      copy, and the logs listed under "A cross-run history outlives the runs
+      it records". The brief's counts are attributed to the brief.
+  likely_file_changes:
+    - file: prompts/story-verifier.md
+      stage: implementer
+      reason: The grounds are split, the decided repair is recorded, and the
+        verification a decided repair returns to is told how to judge it.
+    - file: prompts/refactor-verifier.md
+      stage: implementer
+      reason: The same statements in the same words, held to the story
+        workflow's prompt by the parity walk.
+    - file: schemas/verification-result.schema.json
+      stage: implementer
+      reason: Gains decision and rejected_decisions, and the split grounds in a
+        declined finding's reason.
+    - file: schemas/cross-run-history.schema.json
+      stage: implementer
+      reason: Declares the decision log and the exception to a record being a
+        summary.
+    - file: schemas/execution-history.schema.json
+      stage: implementer
+      reason: Declares the new event kinds and fields.
+    - file: schemas/correction-pass.schema.json
+      stage: implementer
+      reason: Describes the pass statement, and changes only if the repair
+        statement does.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The refusal, the recording, the rejection and the append_event
+        fields.
+    - file: orchestration/story_inspection.py
+      stage: implementer
+      reason: The amendment gains a rejection as a third cause.
+    - file: tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+      stage: tester
+      reason: The driven runs, the control among them.
+    - file: tests/test_a_small_finding_is_repaired_or_dropped_never_filed.py
+      stage: tester
+      reason: Its grounds pin the old wording.
+    - file: tests/test_a_verdict_repairs_a_finding_needing_new_validation.py
+      stage: tester
+      reason: Imports those grounds, and its docstrings describe them.
+    - file: tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+      stage: tester
+      reason: Asserts the old ground's wording.
+    - file: tests/test_cross_run_history.py
+      stage: tester
+      reason: Its declared-log inventory and the logs a run reaches.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: The new module's live-reader declaration.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The account of the grounds, the decision log and what a record
+        carries.
+
+scope:
+  modify:
+    - prompts/story-verifier.md
+    - prompts/refactor-verifier.md
+    - schemas/verification-result.schema.json
+    - schemas/cross-run-history.schema.json
+    - schemas/execution-history.schema.json
+    - schemas/correction-pass.schema.json
+    - orchestration/story_coordinator.py
+    - orchestration/story_inspection.py
+    - tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py
+    - tests/test_a_small_finding_is_repaired_or_dropped_never_filed.py
+    - tests/test_a_verdict_repairs_a_finding_needing_new_validation.py
+    - tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+    - tests/test_cross_run_history.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/assist.md (what the assistant reports on a story review stays as
+      it is, because reporting the decisions is the next brief's work and
+      nothing the prompt says now becomes untrue)
+    - The completion report's rendering, which is _findings_account_section
+      and _named_findings in orchestration/story_coordinator.py and
+      account_for_the_report in orchestration/story_inspection.py (the report
+      keeps the dispositions it renders and the headings it renders them
+      under; a decision that stood is listed as repaired and a rejected one as
+      sent to the backlog with its rejection as the ground, and a heading of
+      their own is the next brief's)
+    - workflows/story-workflow.json and workflows/refactor-workflow.json (the
+      repair and correction pass budgets and the escalation rules stay what
+      they are, so a decision spends the allowance any repairable finding
+      spends and no run stops for one)
+    - prompts/story-implementer.md, prompts/story-tester.md,
+      prompts/documenter.md and prompts/refactor-implementer.md (their
+      repair-pass slots stay true as written — the stage makes the correction
+      each finding names, in the file it names, which is what a decided
+      finding asks of it too)
+    - prompts/inspector.md (what the Inspector finds and how its findings
+      reach the verifier are unchanged; a decision is the verdict's to make,
+      not the Inspector's)
+    - orchestration/inspection.py (how a left finding is filed stays as it
+      is; a finding whose decision was refused or rejected is filed through it
+      exactly as any declined finding is)
+    - tests/test_a_routed_finding_is_repaired_unless_the_verdict_says_why.py
+      and tests/test_execution_history.py (their checks keep holding as they
+      stand — the two verifier prompts reading the same in the walked
+      passages, the right to decline and the cost sentence each said once,
+      every emitted kind declared and spelled in one function — because the
+      new sentences and kinds are written to pass them, not the checks
+      loosened to admit them)
+    - README.md (its summaries of verification and inspection stay true as
+      written, and the developer records each story in it after merge)
+
+verification_requirements:
+  - That each driven case runs the coordinator end to end with the fake runner
+    and invokes no model, and that the refused case and the decided case
+    differ only in the source, so each absence the refused case asserts is
+    shown against a run where the same verdict produced it.
+  - That the prompt the returning verification received carries the decision,
+    read off the prompt file the run wrote rather than off the pass record.
+  - That each new event kind is declared in the execution-history schema and
+    spelled in one function of the coordinator, and that every field the
+    decision log records is one append_event accepts.
+  - That the two verifier prompts still read the same in every passage the
+    parity walk compares, apart from the divergences it already permits, and
+    that their standing checks still hold.
+  - That the completion report's rendering, prompts/assist.md, the writing
+    stages' prompts and both workflow definitions are unchanged against the
+    story's base.
+  - That the whole suite passes.
+  - That the architecture document's account matches the prompts, the schemas
+    and the coordinator.
+
+constraints:
+  - Escalation is unchanged. No decision, refusal or rejection stops or
+    escalates a run.
+  - The pass budgets in both workflow definitions are unchanged.
+  - A decision is recorded only where the pass carrying it is routed, and its
+    record is never rewritten; a rejection is a record of its own.
+  - Nothing routes on confidence or blast radius.
+  - A refused decision goes through the seam a refused scope extension goes
+    through, and a rejection's accounting through the amendment a later
+    verdict's refusal uses. Neither gets a second path.
+  - The decision log is written only by the projection every declared log is
+    written by, and no module under orchestration/ names its file.
+  - The coordinator does not undo a rejected decision's change itself.
+  - A fix to the words alone carries no decision, and the correction route is
+    unchanged.
+  - The approved story artifact is never rewritten by a decision.
+  - The reserved adjudication log stays reserved. A decision is a choice a
+    verdict makes, not a settled dispute between stages.
+  - No test invokes a model, and none bounds how long the machine takes.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-09-30 18:12:42
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
+
+brief_key: 389
