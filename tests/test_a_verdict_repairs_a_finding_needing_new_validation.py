@@ -57,7 +57,9 @@ string would prove only that `str.replace` works:
 Nothing here is written down twice. The prompts, the phrase naming the
 permitted divergence, the parity guard and the paragraph and sentence readings
 all come from the module that declares them; the grounds this story leaves
-alone come from the module whose story named them. Nothing here reads this
+alone come from the module whose story named them, in the words they are
+stated in today — story-219 split the design-decision ground in two, and that
+module's list carries the split. Nothing here reads this
 repository's history or drives a run: the claims are about the text two shipped
 prompts carry, so the shipped prompts are the subject and are read as they
 ship.
@@ -322,7 +324,13 @@ def test_every_ground_the_paragraph_already_named_is_still_named(prompt: Path):
     names the design decision, the protected file and the finding that is
     wrong, and still says those grounds are not size. Asserted over both
     shipped prompts, because the story closes the ground in one of them and
-    promises to have disturbed neither."""
+    promises to have disturbed neither.
+
+    The grounds are read in the words they are stated in today: story-219
+    narrowed the design decision to one no existing source settles and named
+    a fix the plan's own words bar beside it, and `GROUNDS` carries both, so
+    this still holds every ground the paragraph names rather than the ones it
+    named when this story ran."""
     grounds = sentence_carrying(triage_paragraph(prompt.read_text(
         encoding="utf-8")), GROUNDS_PHRASE)
     assert "not size" in grounds, grounds

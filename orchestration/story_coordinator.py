@@ -2091,6 +2091,14 @@ def append_event(
     acted_on: int | None = None,
     abandoned: int | None = None,
     operation: str | None = None,
+    finding: str | None = None,
+    question: str | None = None,
+    answer: str | None = None,
+    source: str | None = None,
+    rationale: str | None = None,
+    confidence: str | None = None,
+    blast_radius: str | None = None,
+    rejection: str | None = None,
 ) -> None:
     """Append one event in both renderings, from one call.
 
@@ -2184,6 +2192,21 @@ def append_event(
         # under, so the two are one string. Absent on every entry that
         # completes nothing timed.
         "operation": operation,
+        # A decision a repair pass carries, recorded where that pass is routed:
+        # the finding it was made for, by its location, and the decision's own
+        # words, which the decision log keeps because nothing else outlives
+        # the run directory holding them. The rejection is the verification's
+        # reason, on the entry that records a rejection as a record of its
+        # own. Omitted when absent on the same terms as every field above, and
+        # read by nothing that routes — confidence and blast_radius included.
+        "finding": finding,
+        "question": question,
+        "answer": answer,
+        "source": source,
+        "rationale": rationale,
+        "confidence": confidence,
+        "blast_radius": blast_radius,
+        "rejection": rejection,
     }
     entry.update({key: value for key, value in optional.items() if value is not None})
     history.append(entry)
@@ -8303,7 +8326,9 @@ def _repair_pass_findings(
     ]
 
 
-def repair_pass_statement(entry_stage: str, *, clean_clone_checked: bool = True) -> str:
+def repair_pass_statement(
+    entry_stage: str, *, clean_clone_checked: bool = True, decided: bool = False
+) -> str:
     """What the coordinator tells the stages a repair pass re-enters.
 
     A passing verdict writes no retry guidance, so there is no agent-authored
@@ -8318,7 +8343,20 @@ def repair_pass_statement(entry_stage: str, *, clean_clone_checked: bool = True)
     a workflow declaring a repair pass and no clean-clone check the tree the
     pass is built on was verified where the verifier stood and nowhere else,
     and the statement says that rather than asserting a check nobody made.
+
+    `decided` adds one sentence, where any finding the pass carries rests on a
+    decision: the choice was made by the verification and the source it
+    names, so the stage makes the correction as the finding says and does not
+    decide the question again. A pass carrying no decision is told exactly
+    what it was told before the field existed.
     """
+    deciding = (
+        " A finding carrying a decision rests on a choice the approved plan "
+        "left open, made by the verification and settled by the source it "
+        "names: make the correction as that finding says, and do not decide "
+        "the question again."
+        if decided else ""
+    )
     if clean_clone_checked:
         opening = (
             "The verification passed, and the clean-clone check on that "
@@ -8355,8 +8393,8 @@ def repair_pass_statement(entry_stage: str, *, clean_clone_checked: bool = True)
         f"your turn. A finding carrying scope_extension names a file outside "
         f"the story's declared scope; the coordinator has granted it for this "
         f"pass, and the reason recorded on the finding is why — the rule the "
-        f"story changed and the line in that file that states it. A repair "
-        f"pass is not a licence to revisit the work.{closing}"
+        f"story changed and the line in that file that states it.{deciding} "
+        f"A repair pass is not a licence to revisit the work.{closing}"
     )
 
 
@@ -8720,10 +8758,17 @@ class ScopeExtensionCheck:
     it — a finding with no scope_extension is accepted without being asked,
     and one with an extension is accepted where no bound applies. `refused`
     holds the rest with the bound each crossed.
+
+    Since story-219 `refused` may also hold a `RefusedDecision`: a finding
+    taken out of the pass because the decision its fix rests on names no
+    source. It is added by `decision_check` over what this check accepted, so
+    a refused decision leaves the pass through exactly the seam a refused
+    extension does — `refused_routed_slugs`, `verdict_after_refusals` and the
+    accounting's `refused_slugs` — rather than a second path beside it.
     """
 
     accepted: list[dict]
-    refused: list[RefusedExtension]
+    refused: list[RefusedExtension | RefusedDecision]
 
 
 def scope_extension_check(
@@ -8850,10 +8895,17 @@ def scope_extension_check(
     return ScopeExtensionCheck(accepted, refused)
 
 
-def refusal_reason(refused: RefusedExtension) -> str:
+def refusal_reason(refused: RefusedExtension | RefusedDecision) -> str:
     """The one wording of a refusal: what the event says and what the
     accounting records as the declined finding's reason.
+
+    A refused decision is worded by `decision_refusal_reason`, the one
+    function that composes it, and is handed there, so every reader of a
+    refusal's reason — the event, `verdict_after_refusals` and through it the
+    accounting — reads one wording per kind of refusal.
     """
+    if isinstance(refused, RefusedDecision):
+        return decision_refusal_reason(refused)
     finding = refused.finding
     return (
         f"scope extension refused for {finding.get('location')}: {refused.stage} "
@@ -8901,6 +8953,11 @@ def verdict_after_refusals(
     the same match the accounting is handed, so a slug this records as
     declined is a slug the accounting leaves whatever its accepted sibling
     did.
+
+    A refused decision is removed and declined here on exactly those terms,
+    with `decision_refusal_reason`'s wording as the reason through
+    `refusal_reason`: the seam carries two kinds of refusal and treats them
+    alike, and only the words differ.
     """
     if not check.refused:
         return verdict
@@ -9099,6 +9156,325 @@ def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
                     and story_inspection.names_a_slug(location, (slug,))):
                 named[slug] = reason
     return named
+
+
+# --------------------------------------------------------------------------
+# A finding whose fix an existing source settles is repaired under a decision
+#
+# A fix often needs a choice between two or three reasonable designs that the
+# approved plan never made, and where an existing source already settles it —
+# a repository standard, a configured architecture document, the way this
+# codebase already solves the same problem — sending the finding to the
+# backlog costs a planning conversation, a run, a review and a merge to recover
+# an answer that was written down. So a repairable finding may carry a
+# `decision`: the question, the answer, the source that settles it, why this
+# answer rather than another, how sure the verifier is and how costly a wrong
+# answer would be to undo. What the coordinator does with one is three things,
+# each in one place and none a second path:
+#
+# - A decision whose source is absent or records no words is refused here,
+#   through the seam a refused scope extension takes: the finding and every
+#   finding sharing its routed slug leave the pass, the refusal is one event,
+#   and a routed finding is declined with the refusal as its ground and filed
+#   at completion. It is deliberately not refused as a malformed verdict,
+#   because sending the verdict back for a missing source invites a source
+#   written to satisfy the check.
+# - A decision a routed repair pass carries is recorded as one event per
+#   finding, appended where the pass record is written, so a spent allowance, a
+#   refusal or a correction pass's deferral records nothing, and a run resumed
+#   inside the pass — which re-enters without routing again — records nothing
+#   twice. The cross-run projection writes it to the decision log.
+# - The verification that pass returns to may reject a decision. Each
+#   rejection naming a decision the live pass record carries is one event of
+#   its own, the decision's record is never rewritten, and a routed finding
+#   whose decision is rejected is handed to the accounting as left by the run
+#   with the rejection as its ground. The coordinator does not undo the
+#   change: it cannot tell what later work leans on it, and a tree it changed
+#   after the verification would be a tree nothing verified. Undoing it is
+#   that verification's job, with the routes it already has.
+#
+# The independence this buys is weak and is stated as such: the verifier
+# decides, the owning stage repairs, and a second invocation of the same stage
+# judges the decision. The safety is that a decision names a source a reviewer
+# can open and is visible in a record that outlives the run. Nothing routes on
+# confidence or blast_radius; they are recorded so a reviewer can read the
+# risky decisions first.
+
+
+#: The field a repairable finding carries to record the decision its fix
+#: rests on.
+DECISION = "decision"
+
+#: The verdict's field naming the decisions the live repair pass carried that
+#: the verification rejects.
+REJECTED_DECISIONS = "rejected_decisions"
+
+
+def decision_of(finding) -> dict | None:
+    """The decision a repairable finding carries, or None where it carries
+    none the coordinator can read as one. Defensive in the shape every reader
+    of a verdict here is.
+    """
+    if not isinstance(finding, dict):
+        return None
+    decision = finding.get(DECISION)
+    return decision if isinstance(decision, dict) else None
+
+
+def decision_names_a_source(decision: dict) -> bool:
+    """Whether a decision names a source that records words: present, a
+    string, and not blank. The whole of what the refusal turns on.
+    """
+    source = decision.get("source")
+    return isinstance(source, str) and bool(source.strip())
+
+
+@dataclass(frozen=True)
+class RefusedDecision:
+    """One finding the coordinator took out of a pass because the decision
+    its fix rests on names no source: the finding as the verdict carried it,
+    the stage its category resolved to, and the finding that carried the
+    decision — the finding itself, or the one whose routed slug it shares.
+    """
+
+    finding: dict
+    stage: str
+    decided: dict
+
+
+def decision_check(
+    check: ScopeExtensionCheck, routes: dict, routed_slugs=()
+) -> ScopeExtensionCheck:
+    """`check` with every finding whose fix rests on a decision naming no
+    source moved from accepted to refused.
+
+    Decided over what the extension bounds accepted, so a finding is refused
+    once, by whichever bound applied first. A finding carrying a sourceless
+    decision is refused, and so is every accepted finding whose location names
+    a routed slug the decided finding's location names: a refused decision
+    takes every file of its fix out of the pass, which is where this differs
+    from a refused extension, whose accepted siblings still route. A decided
+    finding naming no routed slug — one the verifier raised itself — is
+    refused alone. Its location names a slug of the verifier's own, which the
+    findings of a fix of its own spanning files share, but the coordinator
+    holds only the routed slugs, so nothing it can read ties those files
+    together: a sibling sharing that slug still routes unless it carries a
+    sourceless decision itself.
+
+    A finding whose category the routing table does not define is left
+    accepted, on the terms `scope_extension_check` states: the routing that
+    follows escalates naming the category, and a refusal here would hide it
+    behind a stage it could not name. A check refusing no decision is
+    returned as it was given.
+    """
+    def stage_of(finding) -> str | None:
+        route = routes.get(finding.get("category")) if isinstance(finding, dict) else None
+        return route.get("stage") if isinstance(route, dict) else None
+
+    sourceless = [
+        finding for finding in check.accepted
+        if stage_of(finding) is not None
+        and (decision := decision_of(finding)) is not None
+        and not decision_names_a_source(decision)
+    ]
+    if not sourceless:
+        return check
+    taken: dict[int, RefusedDecision] = {}
+    for decided in sourceless:
+        slugs = tuple(
+            slug for slug in routed_slugs
+            if isinstance(slug, str) and slug
+            and story_inspection.names_a_slug(decided.get("location"), (slug,))
+        )
+        for finding in check.accepted:
+            if id(finding) in taken or stage_of(finding) is None:
+                continue
+            if finding is decided or (
+                slugs and story_inspection.names_a_slug(
+                    finding.get("location"), slugs)
+            ):
+                taken[id(finding)] = RefusedDecision(
+                    finding, stage_of(finding), decided)
+    return ScopeExtensionCheck(
+        accepted=[one for one in check.accepted if id(one) not in taken],
+        refused=list(check.refused) + [
+            taken[id(one)] for one in check.accepted if id(one) in taken
+        ],
+    )
+
+
+def decision_refusal_reason(refused: RefusedDecision) -> str:
+    """The one wording of a refused decision: what its event says and what
+    the accounting records as the declined finding's reason.
+    """
+    finding = refused.finding
+    decided = refused.decided
+    question = (decision_of(decided) or {}).get("question")
+    because = (
+        "the decision it rests on names no source that settles its question"
+        if decided is finding else
+        f"it is part of the fix the decision on {decided.get('location')} "
+        f"would have made, and that decision names no source that settles "
+        f"its question"
+    )
+    return (
+        f"decision refused for {finding.get('location')}: {refused.stage} "
+        f"may not change {finding.get('path')} for this pass because "
+        f"{because} ({question}), so the choice is left for a person to make"
+    )
+
+
+def _decision_refused(
+    run_dir: Path, stage_name: str, refused: RefusedDecision
+) -> None:
+    """One event per finding a refused decision took out of the pass, so the
+    refusal is reconstructable from events.log alone. Nothing reaches the
+    decision log for it: the kind is named by no log.
+    """
+    append_event(
+        run_dir,
+        refusal_reason(refused),
+        kind="decision-refused",
+        stage=stage_name,
+    )
+
+
+def _decision_recorded(run_dir: Path, stage_name: str, finding: dict) -> None:
+    """Record one decision a routed repair pass carries.
+
+    Called from the repair block's routing branch alone, where the pass record
+    is written, so this is the one place a decision becomes a record. The
+    entry carries the decision's own words, and the cross-run projection
+    writes them to the decision log under the story's segment, where they
+    outlive the run directory. `stage_name` is the stage whose verdict made
+    the decision.
+    """
+    decision = decision_of(finding) or {}
+    location = finding.get("location")
+    append_event(
+        run_dir,
+        f"decision recorded for {location}: {decision.get('question')} — "
+        f"answered {decision.get('answer')}, settled by "
+        f"{decision.get('source')} (confidence {decision.get('confidence')}, "
+        f"blast radius {decision.get('blast_radius')})",
+        kind="decision-recorded",
+        stage=stage_name,
+        finding=location,
+        question=decision.get("question"),
+        answer=decision.get("answer"),
+        source=decision.get("source"),
+        rationale=decision.get("rationale"),
+        confidence=decision.get("confidence"),
+        blast_radius=decision.get("blast_radius"),
+    )
+
+
+def _decision_rejected(
+    run_dir: Path, stage_name: str, finding: dict, reason: str
+) -> None:
+    """Record one rejection of a decision the live repair pass carried, as a
+    record of its own naming the decision by its finding and its question,
+    with the verification's reason. The decision's own record is not
+    touched.
+    """
+    question = (decision_of(finding) or {}).get("question")
+    location = finding.get("location")
+    append_event(
+        run_dir,
+        f"decision rejected for {location}: {question} — {reason}",
+        kind="decision-rejected",
+        stage=stage_name,
+        finding=location,
+        question=question,
+        rejection=reason,
+    )
+
+
+def decision_rejection_reason(finding: dict, reason: str) -> str:
+    """The ground a routed finding whose decision was rejected is left on, as
+    the accounting records it and the completion report names it.
+    """
+    question = (decision_of(finding) or {}).get("question")
+    return (
+        f"the verification this repair returned to rejected the decision it "
+        f"rested on ({question}): {reason}"
+    )
+
+
+def judge_rejections(
+    run_dir: Path,
+    stage_name: str,
+    stages: list[dict],
+    state: RunState,
+    attempt: int,
+    verdict: dict,
+    routed_slugs=(),
+) -> dict[str, str]:
+    """Record each rejection the verdict makes of a decision the repair pass
+    it returned from carried, and return the routed slugs whose decision was
+    rejected, each with the ground it is left on.
+
+    The pass the verdict returned from is the live repair pass record, read
+    through `_live_pass_record` on the terms every reader of a pass record
+    takes, and it is read here because this runs when the verdict is judged —
+    before any new pass routes and before the accounting. A rejection is
+    matched only against the decisions that record carries, by `names_a_slug`
+    over each decided finding's location, so a later verification, which sees
+    the tree but not that record, cannot reject an earlier pass's decision.
+
+    Each match is one decision-rejected event. A rejection naming no decision
+    the pass carried — or made where no repair pass is live — is said in the
+    run's events as a note, records nothing in the decision log, and changes
+    no accounting. The routed slugs returned are the ones a matched finding's
+    location names, and are handed to the accounting through the refusal seam
+    with the rejection as their ground.
+
+    A record the state says exists and that cannot be read raises, as it does
+    for every reader of a pass record.
+    """
+    entries = verdict.get(REJECTED_DECISIONS) if isinstance(verdict, dict) else None
+    if not entries:
+        return {}
+    declared = repair_pass_declaration(stages).get("result")
+    record = _live_pass_record(
+        run_dir, declared, state.repair_pass_count, state, attempt
+    )
+    findings = (record.parsed.get("findings") or []) if record else []
+    carried = [finding for finding in findings
+               if decision_of(finding) is not None]
+    rejected: dict[str, str] = {}
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        slug, reason = entry.get("slug"), entry.get("reason")
+        if not (isinstance(slug, str) and slug) or slug in seen:
+            continue
+        seen.add(slug)
+        reason = reason if isinstance(reason, str) else ""
+        matched = [
+            finding for finding in carried
+            if story_inspection.names_a_slug(finding.get("location"), (slug,))
+        ]
+        if not matched:
+            where = ("the repair pass this verification returned from"
+                     if record is not None else
+                     "any repair pass this verification returned from")
+            append_event(
+                run_dir,
+                f"rejection of {slug} names no decision {where} carried, so "
+                f"nothing was recorded and no accounting changed: {reason}",
+                stage=stage_name,
+            )
+            continue
+        for finding in matched:
+            _decision_rejected(run_dir, stage_name, finding, reason)
+            for routed in routed_slugs:
+                if (isinstance(routed, str) and routed and routed not in rejected
+                        and story_inspection.names_a_slug(
+                            finding.get("location"), (routed,))):
+                    rejected[routed] = decision_rejection_reason(finding, reason)
+    return rejected
 
 
 # --------------------------------------------------------------------------
@@ -12798,8 +13174,27 @@ def run_story(
                 routes, stage_names, stages, reading.parsed, rules,
                 exists=lambda path, root=target_root: (root / path).exists(),
             )
+            # The routed slugs this attempt's inspection handed the verdict,
+            # read off its findings record before the accounting exists: a
+            # refused extension and a refused decision are declined by them,
+            # and a rejected decision's finding is left by them.
+            routed_named: tuple = (
+                story_inspection.findings_slugs(
+                    run_dir, declared_inspection, attempt
+                ) if declared_inspection else ()
+            )
+            # A decision naming no source is refused beside the extension
+            # bounds and through the same seam, decided over what those
+            # bounds accepted: the finding and every finding sharing its
+            # routed slug leave the pass, and each is one event. It is not a
+            # malformed verdict — the verdict is not sent back for a source —
+            # and nothing here escalates.
+            extensions = decision_check(extensions, routes, routed_named)
             for refused in extensions.refused:
-                _scope_extension_refused(run_dir, name, refused)
+                if isinstance(refused, RefusedDecision):
+                    _decision_refused(run_dir, name, refused)
+                else:
+                    _scope_extension_refused(run_dir, name, refused)
             # The routed slugs the refusals named, computed once and handed
             # to the accounting beside the transformed verdict: a routed
             # finding fixed as two repairable findings sharing one slug is
@@ -12807,13 +13202,7 @@ def run_story(
             # the coordinator refused the other file, and the brief the
             # refusal promised is never filed. Empty when nothing was refused.
             refused_slugs: tuple = ()
-            routed_named: tuple = ()
             if extensions.refused:
-                routed_named = (
-                    story_inspection.findings_slugs(
-                        run_dir, declared_inspection, attempt
-                    ) if declared_inspection else ()
-                )
                 refused_slugs = refused_routed_slugs(extensions, routed_named)
                 verdict = verdict_after_refusals(verdict, extensions, routed_named)
             # Every refusal a passing verdict can meet before its correction
@@ -12928,16 +13317,28 @@ def run_story(
             # abandonment predicted here would be recorded against a pass the
             # run never reached. It is recorded in the repair block instead,
             # where the allowance is met.
-            if declared_inspection and not routed_named:
-                routed_named = story_inspection.findings_slugs(
-                    run_dir, declared_inspection, attempt
-                )
             abandoned: dict = {}
             if declared_inspection:
                 abandoned = abandoned_routed_slugs(
                     stage, verdict, state, routed_named,
                     kind="correction_pass",
                 )
+            # The decisions the repair pass this verdict returned from carried,
+            # judged against the rejections the verdict makes. Read here, when
+            # the verdict is judged — below every refusal that could end the
+            # run on it and above the accounting and any new pass — because a
+            # new pass routing below moves the counts the live record is
+            # decided by, and the accounting below is what a rejection
+            # amends. Each rejection of a carried decision is a record of its
+            # own; a routed finding whose decision was rejected is handed to
+            # the accounting as left by the run, with the rejection as its
+            # ground. Honoured on a failing verdict too, because this and the
+            # accounting both run before the passed and failed routing. The
+            # change itself is not undone here: that is the verification's
+            # own job, with the routes it already has.
+            rejected = judge_rejections(
+                run_dir, name, stages, state, attempt, verdict, routed_named
+            )
             routed_slugs: tuple = ()
             if declared_inspection:
                 story_inspection.account_after_verdict(
@@ -12945,6 +13346,7 @@ def run_story(
                     state.story_id, artifact=declared_inspection,
                     attempt=attempt, verdict=verdict,
                     refused_slugs=refused_slugs, abandoned=abandoned,
+                    rejected=rejected,
                 )
                 routed_slugs = story_inspection.routed_slugs(
                     run_dir, declared_inspection, attempt
@@ -13286,6 +13688,10 @@ def run_story(
                     else:
                         state.repair_pass_count += 1
                         clean_clone_checked = bool(artifact)
+                        carrying_decisions = [
+                            finding for finding in routing.resolved
+                            if decision_of(finding) is not None
+                        ]
                         record = {
                             "pass": state.repair_pass_count,
                             "attempt": attempt,
@@ -13297,6 +13703,7 @@ def run_story(
                             "statement": repair_pass_statement(
                                 routing.stage,
                                 clean_clone_checked=clean_clone_checked,
+                                decided=bool(carrying_decisions),
                             ),
                         }
                         (
@@ -13323,6 +13730,16 @@ def run_story(
                             routed_slugs,
                             clean_clone_checked=clean_clone_checked,
                         )
+                        # Each decision the pass carries is recorded here, where
+                        # the pass carrying it is routed and nowhere else: a
+                        # spent allowance above, a refusal before the pass and
+                        # a correction pass's deferral each record nothing, and
+                        # a run resumed inside this pass re-enters at the saved
+                        # stage without routing again, so it records nothing
+                        # twice. The verification the pass returns to is handed
+                        # the decision in the record just written.
+                        for finding in carrying_decisions:
+                            _decision_recorded(run_dir, name, finding)
                         # Nothing a retry spends is spent: retry_count is
                         # untouched, archive_attempt is not reached, and no
                         # retry-history entry is appended. The pass names no

@@ -664,6 +664,12 @@ OPTIONAL_FIELDS = {
     # Which timed operation an entry completes, beside its duration_seconds;
     # the key the cross-run duration log records an observation under.
     "operation",
+    # A decision a repair pass carries, on the entry that records it where
+    # the pass is routed, and the rejection of one on the entry that records
+    # that as a record of its own: the finding it was made for, and the
+    # decision's own words, which the decision log keeps.
+    "finding", "question", "answer", "source", "rationale", "confidence",
+    "blast_radius", "rejection",
 }
 
 

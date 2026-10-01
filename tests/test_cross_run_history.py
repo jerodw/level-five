@@ -17,6 +17,11 @@ reads either log, that a stage naming a path beneath a blocked history
 directory escalates the run, and that nothing in this repository's `.gitignore`
 keeps the logs out of version control.
 
+Since story-219 the run asked about where every log a run can reach must be
+present decides something, because only a repair pass carrying a decision
+reaches the decision log; what a decision record says is the subject of
+`tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py`.
+
 What it does not validate, and why, is written where the assertion would have
 gone: this repository's own rule set does not yet block its history directory,
 and the entry that would make it so is outside every stage's reach.
@@ -114,6 +119,15 @@ DURATION_LOG = next(name for name, shape in DECLARATIONS.items()
                     if "operation" in shape["properties"]
                     and "duration_seconds" in shape["properties"])
 
+#: The sixth, since story-219: told apart by the rejection only a decision
+#: log's record carries. Its own subject is
+#: `tests/test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py`.
+#: A run reaches it only by deciding something — a repair pass carrying a
+#: decision — so the run shape below that reaches every log a run can reach
+#: decides something too.
+DECISION_LOG = next(name for name, shape in DECLARATIONS.items()
+                    if "rejection" in shape["properties"])
+
 #: The record fields the projection derives — from the run directory's name,
 #: the event kind and the run's own history — rather than reads off the entry.
 #: Named so a reader asking whether an entry carries what a log requires asks
@@ -166,6 +180,12 @@ RUNLESS_LOGS = set(DECLARATIONS) - RUN_PRODUCED_LOGS
 # The fixture workflow, the fixture rules, and the runs
 # --------------------------------------------------------------------------
 
+#: The record a repair pass leaves in the run directory. Declared since
+#: story-219, because a run reaches the decision log only through a repair
+#: pass carrying a decision; a verdict carrying no repairable finding takes no
+#: pass, so every run below that does not decide runs exactly as it did.
+REPAIR_ARTIFACT = "cross-run-history-repair.json"
+
 WORKFLOW = conftest.build_workflow(
     conftest.workflow_stage(
         outputs=(conftest.CHANGED_FILES, conftest.IMPLEMENTATION_SUMMARY),
@@ -186,9 +206,18 @@ WORKFLOW = conftest.build_workflow(
         outputs=(conftest.VERIFICATION_RESULT,),
         schemas={conftest.VERIFICATION_RESULT: "verification-result",
                  conftest.RETRY_GUIDANCE: "retry-guidance"},
-        retry_routing={"implementation-defect": {
-            "stage": conftest.StageRef(0),
-            "when": "the behaviour the story asked for is missing"}}),
+        repair_pass={"result": REPAIR_ARTIFACT, "budget": 1},
+        retry_routing={
+            "implementation-defect": {
+                "stage": conftest.StageRef(0),
+                "when": "the behaviour the story asked for is missing"},
+            # The route the decided repair below takes. It re-enters after
+            # the writing stage, so the fake runner's per-attempt files stay
+            # as the attempt left them and the pass changes nothing a run
+            # that does not decide would not.
+            "documentation-defect": {
+                "stage": conftest.StageRef(2),
+                "when": "the documents do not describe what shipped"}}),
     escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
     name="cross-run-history-workflow",
 )
@@ -196,6 +225,14 @@ WORKFLOW = conftest.build_workflow(
 STAGE_NAMES = [stage["name"] for stage in WORKFLOW["stages"]]
 WRITING, VALIDATING, DOCUMENTING, VERIFYING = STAGE_NAMES
 RETRY_CATEGORY, RETRY_STAGE = conftest.first_retry_route(WORKFLOW)
+
+#: The category the decided repair names: the route the verifying stage
+#: declares to the documenting stage, read off the table rather than spelled.
+DECIDING_CATEGORY = next(
+    category for category, route in next(
+        stage for stage in WORKFLOW["stages"] if "repair_pass" in stage
+    )["on_failure"]["retry_routing"].items()
+    if route["stage"] == DOCUMENTING)
 
 #: The default this repository's own deployment leaves in place, resolved from
 #: the harness rather than written down, and the prefix the fixture rules below
@@ -219,6 +256,37 @@ MAX_RETRIES = FIXTURE_RULES["max_retries"]
 
 PASS = {"status": "passed", "blocking_issues": [], "unverified": [],
         "retry_recommended": False}
+
+#: The verdict schema's own vocabulary for a decision's two levels, so the
+#: decided repair below carries values the schema accepts without this module
+#: spelling them.
+DECISION_LEVELS = schema_validator.load_schema("verification-result")[
+    "properties"]["repairable_findings"]["items"]["properties"][
+    story_coordinator.DECISION]["properties"]["confidence"]["enum"]
+
+#: A passing verdict carrying one repairable finding whose fix rests on a
+#: decision citing a source — the one way a run reaches the decision log.
+DECIDED_REPAIR = {
+    **PASS,
+    "repairable_findings": [{
+        "path": "src/app.py",
+        "location": "src/app.py - the module docstring",
+        "finding": "the docstring names the behaviour the story replaced",
+        "correction": "name the behaviour the story shipped",
+        "category": DECIDING_CATEGORY,
+        story_coordinator.DECISION: {
+            "question": "which of the two names the docstring gives the "
+                        "behaviour",
+            "answer": "the name the architecture document gives it",
+            "source": ".harness/docs/ARCHITECTURE.md, which names the "
+                      "behaviour once",
+            "rationale": "the configured document settles the name, and the "
+                         "other appears nowhere else",
+            "confidence": DECISION_LEVELS[-1],
+            "blast_radius": DECISION_LEVELS[0],
+        },
+    }],
+}
 
 
 #: What the fixture allows one post-story inspection to take into scope. The
@@ -458,11 +526,19 @@ def escalated(target_root, harness_root):
 
 
 @pytest.fixture
-def retried_then_completed(target_root, harness_root):
-    """One retry taken and then a pass, which is the one shape that reaches
-    every log a run can reach: the retry log, the outcome log, and — because
-    only a completing run inspects what it changed — the inspection log."""
-    runner = Runner(target_root, [failing_verdict(1), PASS])
+def retried_decided_then_completed(target_root, harness_root):
+    """One retry taken, then a passing verdict whose repair rests on a
+    decision, then a pass, which is the one shape that reaches every log a run
+    can reach: the retry log, the outcome log, the decision log — because only
+    a repair pass carrying a decision records one — and the inspection log,
+    because only a completing run inspects what it changed.
+
+    Before story-219 the shape was one retry and then a pass, which reached
+    every log there was. A run that decides nothing reaches every log but the
+    decision log, the way a run that does not complete reaches every log but
+    the inspection's, so the run asked about here is narrowed to one that
+    decides; no assertion asked of it is loosened."""
+    runner = Runner(target_root, [failing_verdict(1), DECIDED_REPAIR, PASS])
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, runner) == 0
     return target_root, run_dir_of(target_root)
@@ -495,7 +571,7 @@ def test_the_schema_is_shipped_valid_and_named_in_the_manifest():
 
 def test_each_declared_log_names_the_kinds_it_records_and_the_fields_it_carries():
     derived = {OUTCOME_LOG, ROUTING_LOG, CONFERRAL_LOG, INSPECTION_LOG,
-               DURATION_LOG}
+               DURATION_LOG, DECISION_LOG}
     assert set(DECLARATIONS) == derived
     # Each was told apart by a field of its own, so derivations that collapsed
     # onto one log would be reported here rather than silently asserting the
@@ -555,7 +631,7 @@ def test_the_reserved_logs_are_named_as_reserved_and_declared_nowhere():
 
 
 def test_the_harness_creates_no_log_the_declaration_does_not_name(
-    retried_then_completed,
+    retried_decided_then_completed,
 ):
     """The absence, with the declared logs as its control.
 
@@ -573,12 +649,13 @@ def test_the_harness_creates_no_log_the_declaration_does_not_name(
     listing equal to the whole declared set would mean a run had produced
     something no run can produce.
 
-    The shape is the one that retried *and* completed, because a run that ends
-    any other way inspects nothing: an escalated run reaches every log but the
-    inspection's, and requiring it to hold one would require a run to write
-    what a stopped run must not.
+    The shape is the one that retried, decided *and* completed, because a run
+    that ends any other way inspects nothing — an escalated run reaches every
+    log but the inspection's, and requiring it to hold one would require a run
+    to write what a stopped run must not — and since story-219 a run that
+    decides nothing reaches every log but the decision log.
     """
-    target_root, _ = retried_then_completed
+    target_root, _ = retried_decided_then_completed
     present = {path.name for path in segment_of(target_root).iterdir()}
     assert RUN_PRODUCED_LOGS and RUNLESS_LOGS
     assert present == RUN_PRODUCED_LOGS
@@ -665,7 +742,8 @@ def test_a_run_that_retried_twice_appends_two_retry_records_and_one_outcome(
     assert all(record["story_id"] == run_dir.name for record in retries)
 
 
-@pytest.mark.parametrize("shape", ["completed", "escalated", "retried_twice"])
+@pytest.mark.parametrize("shape", ["completed", "escalated", "retried_twice",
+                                   "retried_decided_then_completed"])
 def test_each_log_holds_exactly_the_entries_its_declaration_routes_there(
     shape, request,
 ):
@@ -673,7 +751,8 @@ def test_each_log_holds_exactly_the_entries_its_declaration_routes_there(
 
     The run's own execution history is filtered by the log's declared enum and
     nothing else, so this says the projection put a record there for each entry
-    the declaration selects — no more, and none missed.
+    the declaration selects — no more, and none missed. The deciding shape is
+    the one whose decision log holds anything to count.
     """
     target_root, run_dir = request.getfixturevalue(shape)
     for log in DECLARATIONS:
@@ -691,7 +770,8 @@ def undeclared_fields(record: dict, log: str) -> set[str]:
     return set(record) - projected(log)
 
 
-@pytest.mark.parametrize("shape", ["completed", "escalated", "retried_twice"])
+@pytest.mark.parametrize("shape", ["completed", "escalated", "retried_twice",
+                                   "retried_decided_then_completed"])
 def test_no_record_carries_a_field_its_declaration_does_not_name(shape, request):
     target_root, _ = request.getfixturevalue(shape)
     for log in DECLARATIONS:
@@ -745,7 +825,8 @@ def artifacts_reproduced(target_root: Path, run_dir: Path) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("shape", ["completed", "retried_twice"])
+@pytest.mark.parametrize("shape", ["completed", "retried_twice",
+                                   "retried_decided_then_completed"])
 def test_no_record_reproduces_the_content_of_a_run_artifact(shape, request):
     target_root, run_dir = request.getfixturevalue(shape)
     # The run really did produce artifacts, so the scan below had something to
@@ -856,15 +937,17 @@ def test_a_run_emits_kinds_no_log_declares_and_they_leave_no_record(shape, reque
 
 
 def test_the_records_survive_deletion_of_the_run_directory(
-    retried_then_completed,
+    retried_decided_then_completed,
 ):
     """The property the story exists for.
 
     The run directory is deleted outright — the state, the events log, the
     per-run execution history, every artifact — and the logs still hold that
-    run's records.
+    run's records. Since story-219 that includes the decision log, whose
+    records carry the decision's own words because nothing else holds them
+    once this directory is gone.
     """
-    target_root, run_dir = retried_then_completed
+    target_root, run_dir = retried_decided_then_completed
     # Over the logs a run can reach, for the reason
     # `test_the_harness_creates_no_log_the_declaration_does_not_name` gives: a
     # log with no producer inside a run holds nothing after one, so requiring
@@ -912,7 +995,8 @@ def jsonl_problems(text: str) -> list[str]:
     return problems
 
 
-@pytest.mark.parametrize("shape", ["completed", "escalated", "retried_twice"])
+@pytest.mark.parametrize("shape", ["completed", "escalated", "retried_twice",
+                                   "retried_decided_then_completed"])
 def test_each_log_is_valid_jsonl(shape, request):
     target_root, _ = request.getfixturevalue(shape)
     for log in DECLARATIONS:
@@ -978,7 +1062,10 @@ def test_a_later_run_appends_to_the_logs_rather_than_rewriting_them(
     where it was.
     """
     base = git(target_root, "rev-parse", "--abbrev-ref", "HEAD").strip()
-    first = Runner(target_root, [failing_verdict(1), PASS])
+    # Each run decides something, for the reason the listing assertion above
+    # gives: the decision log is a log a run can reach, and only a run that
+    # decides reaches it.
+    first = Runner(target_root, [failing_verdict(1), DECIDED_REPAIR, PASS])
     assert story_coordinator.run_story(
         "story-001", harness_root, target_root, first) == 0
     # The logs a run can reach, for the reason the listing assertion above
@@ -1001,7 +1088,7 @@ def test_a_later_run_appends_to_the_logs_rather_than_rewriting_them(
         story.replace("id: story-001", f"id: {SECOND_STORY_ID}"), encoding="utf-8")
     conftest.commit_setup(target_root, f"Plan {SECOND_STORY_ID}")
 
-    second = Runner(target_root, [failing_verdict(1), PASS],
+    second = Runner(target_root, [failing_verdict(1), DECIDED_REPAIR, PASS],
                     story_id=SECOND_STORY_ID)
     assert story_coordinator.run_story(
         SECOND_STORY_ID, harness_root, target_root, second) == 0

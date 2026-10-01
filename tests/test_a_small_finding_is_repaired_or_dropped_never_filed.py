@@ -201,8 +201,16 @@ SIZE_PHRASE = "too small"
 SMALLER_PHRASE = "smaller"
 
 #: The grounds that are not size, in the words the story names them in.
+#:
+#: story-219 split the first of them. A choice the plan does not make is a
+#: ground only where no existing source settles it — one a source settles is
+#: repaired under a recorded decision instead — and a fix the plan's own words
+#: contradict or bar is a ground of its own, because it wants the plan changed
+#: rather than a decision made. Both are pinned whole, so the narrowing cannot
+#: be lost while the older words survive inside the newer ones.
 GROUNDS = (
-    "a design decision the plan did not make",
+    "a design decision the plan did not make and no existing source settles",
+    "contradicts or is barred by something the plan does say",
     "do_not_modify entry protects the file",
     "the finding is wrong on the evidence",
 )
@@ -235,7 +243,8 @@ def test_the_triage_paragraph_makes_size_a_reason_to_fix(prompt: Path):
 @pytest.mark.parametrize("prompt", verifier_prompts(), ids=lambda p: p.name)
 def test_the_triage_paragraph_names_the_grounds_that_are_not_size(prompt: Path):
     """The right to decline is kept, and what is left of it is named: the
-    design decision, the protected file, and the finding that is wrong."""
+    design decision no existing source settles, the fix the plan's own words
+    bar, the protected file, and the finding that is wrong."""
     paragraph = triage_paragraph(prompt.read_text(encoding="utf-8"))
     grounds = sentence_carrying(paragraph, GROUNDS_PHRASE)
     assert "decline" in grounds, grounds
@@ -452,7 +461,7 @@ OLD_GROUND = "too small to be worth a pass"
 
 def test_the_reason_description_no_longer_offers_size_as_a_ground():
     """The criterion: size is gone from the grounds and named as what is not
-    one, and what remains is the three that are not about size. The control
+    one, and what remains is the grounds that are not about size. The control
     below shows the same search reports the clause when it is restored."""
     assert OLD_GROUND not in REASON_DESCRIPTION
     assert "Size is not" in REASON_DESCRIPTION

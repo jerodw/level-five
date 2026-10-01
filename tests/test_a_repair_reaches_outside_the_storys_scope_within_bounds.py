@@ -2244,14 +2244,20 @@ def test_each_prompts_grounds_for_declining_qualifies_the_protected_file(
     still states the right to decline and the wrong-on-the-evidence ground,
     and the protected file is protected where its reason speaks to the fix.
     The unqualified form is gone, and the qualified one beside the assertion
-    is what shows the absence is a rewording and not a passage that moved."""
+    is what shows the absence is a rewording and not a passage that moved.
+
+    The design-decision ground is read in the words story-219 left it in: a
+    choice the plan did not make is a ground only where no existing source
+    settles it, and a fix the plan's own words bar is a ground beside it."""
     default = paragraph_containing(prompt.read_text(encoding="utf-8"),
                                    DEFAULT_OPENING)
     assert PROTECTS_QUALIFIED in default
     assert "protects the file, or" not in default
     assert RIGHT_TO_DECLINE in default
     assert "the finding is wrong" in default
-    assert "a design decision the plan did not make" in default
+    assert ("a design decision the plan did not make and no existing source "
+            "settles") in default
+    assert "contradicts or is barred by something the plan does say" in default
 
 
 def test_the_judgement_reads_identically_between_the_shipped_prompts():

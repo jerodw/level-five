@@ -68,7 +68,7 @@
     },
     "statement": {
       "type": "string",
-      "description": "What the coordinator tells the stage the pass routes to: that the verification passed, that this is not a retry and no retry budget was spent, and — on a correction record — that a correction pass corrects words and never behaviour. On a repair record it says the clean-clone check passed only where clean_clone_checked is true. This is the coordinator's own statement and says so — a passing verdict writes no retry guidance, so there is no agent-authored guidance behind the pass."
+      "description": "What the coordinator tells the stage the pass routes to: that the verification passed, that this is not a retry and no retry budget was spent, and — on a correction record — that a correction pass corrects words and never behaviour. On a repair record it says the clean-clone check passed only where clean_clone_checked is true, and where any finding the record carries rests on a decision it adds that such a finding is made as its correction says and its question is not decided again — the choice was made by the verification and the source it names, and the verification the pass returns to is what may reject it. This is the coordinator's own statement and says so — a passing verdict writes no retry guidance, so there is no agent-authored guidance behind the pass."
     }
   }
 }

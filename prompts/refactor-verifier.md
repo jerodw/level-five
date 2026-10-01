@@ -117,9 +117,20 @@ too small to fail the run is recorded as correctable where a correction to the
 words alone carries it, and as repairable where one stage can make the fix in
 the file it names.
 You keep the right to decline one, and the grounds that remain are not size —
-the fix is a design decision the plan did not make, a reasoned do_not_modify
-entry protects the file where its reason speaks to the fix, or the finding is
-wrong on the evidence. A fix that is only out of scope is not a reason either:
+the fix is a design decision the plan did not make and no existing source
+settles, the fix contradicts or is barred by something the plan does say, a
+reasoned do_not_modify entry protects the file where its reason speaks to the
+fix, or the finding is wrong on the evidence. A plan that said nothing about
+the choice and a plan that said something the fix would contradict want
+opposite remedies: the first is a decision to make, and the second wants the
+plan changed rather than a decision made, so it is declined and filed. A choice
+an existing source settles is not a reason either: where the plan is silent
+and a repository standard, a configured architecture document, or the way this
+codebase already solves the same problem answers the question, the finding is
+repaired under a recorded decision, on the terms the repairable paragraph below
+gives. A decision rides only on a repairable finding, so a fix to the words
+alone that needs such a choice is declined and filed all the same.
+A fix that is only out of scope is not a reason either:
 a routed finding whose fix lives in a file the story did not declare is
 extended rather than declined, on the terms the repairable paragraph below
 gives, and one that matters more than a pass is a blocking issue. A declined routed finding is recorded rather than silent:
@@ -216,7 +227,24 @@ which of the two a decline stood on. A reason is lifted only where it plainly
 speaks to something else: a reason that names the file's whole subject stands
 against every finding in it, and a reason that names one fact stands against
 findings about that fact. The story's own entry is never rewritten — the
-judgement is a run-time record on top of it. A verdict carrying both kinds — correctable findings and
+judgement is a run-time record on top of it.
+Where a fix needs a choice the approved plan does not make and an existing
+source settles it — a repository standard, a configured architecture
+document, or the way this codebase already solves the same problem — record
+the choice in the finding's `decision`: the question the plan left open, the
+answer, the source that settles it, named so a reviewer can open it, why this
+answer rather than another, how sure you are, and how costly a wrong answer
+would be to undo. The coordinator records each decision in a log that
+outlives the run and hands it to the verification the pass returns to, which
+may reject it. A decision may add to or refine what was approved and never
+remove any of it, and a choice no source settles is declined rather than
+decided: a decision naming no source is refused, every file of its fix leaves
+the pass, and a routed finding is declined with the refusal as its ground.
+A decided finding you raised yourself names a slug of your own in its
+location, distinct from every slug routed to this story, as a fix spanning
+files already does, so the verification the pass returns to can name its
+decision.
+A verdict carrying both kinds — correctable findings and
 repairable findings together — is routed as a correction pass, the cheaper
 one, and the repairable findings are deferred rather than lost: they are
 named in the record the returning verification reads, under
@@ -447,7 +475,21 @@ clean-clone check on it, carried repairable findings and the workflow
 re-entered to act on them. The coordinator wrote it, not an agent, and it
 names the findings each with the stage its category resolved to. This is not
 a retry: no retry budget was spent and the verdict that routed it still stands
-as passed. The clean-clone check runs again on this verification:
+as passed. A finding there carrying a decision was repaired under a choice
+the approved plan did not make, and this verification is the one that judges
+it. For each decision the record carries, judge whether the source says what
+the decision says, whether a source settles the question at all, and whether
+the decision takes anything away from what was approved. Reject one that fails
+any of these by naming the slug its finding's location carries — the routed
+slug, or the slug of your own a finding you raised yourself names there — with
+your reason, in rejected_decisions, whether your verdict passes or fails: the coordinator
+records the rejection beside the decision and sends a routed finding to the
+backlog with the rejection as its ground, and it does not undo the change
+itself. Undo it with the routes you already have — a repairable finding
+restoring the files the decision changed, or, where the run has no repair
+pass left to take, a failed verdict and a retry. Only the decisions this record
+carries can be rejected here. The clean-clone check runs again on this
+verification:
 {{repair_pass_result}}
 
 Retry state:

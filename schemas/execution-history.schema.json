@@ -48,6 +48,9 @@
           "repair-pass-grant-applied",
           "scope-extension-refused",
           "scope-extension-grant-applied",
+          "decision-refused",
+          "decision-recorded",
+          "decision-rejected",
           "self-routed",
           "budget-stopped",
           "capacity-paused",
@@ -150,6 +153,40 @@
       "acted_on": {
         "type": "integer",
         "description": "How many of the routed findings the verdict acted on, decided by one rule: the verdict named the finding's slug in the location of a blocking issue, a correctable finding or a repairable finding. A finding named by file alone is not acted on and is held. Present on an accounting entry even where it is zero, because none acted on is an answer, and absent on every other entry. The inspection-filed entry is the record of the filing a run makes at completion: the final attempt's held findings and the remainder its verdict left, filed once through the same call every other producer files through, with each drop reason named with its count in the message. It carries `filed` and `dropped` and nothing else an inspection carries. It is written where there was something to file, and also where the filing could not run, in which case it carries `filed` and `dropped` at zero and its message says it could not run."
+      },
+      "finding": {
+        "type": "string",
+        "description": "The location of the repairable finding a decision was made for, as the verdict recorded it. Present on the decision-recorded entry, written once for each finding carrying a decision when the repair pass carrying it is routed, and on the decision-rejected entry, written once for each decided finding a rejection named on the verification that pass returned to. Absent on every other entry, including the decision-refused entry, whose decision is never recorded."
+      },
+      "question": {
+        "type": "string",
+        "description": "The question the decision answers — the choice its fix requires that the approved plan does not make — as the verdict recorded it. Present on the decision-recorded entry, and on the decision-rejected entry so the rejection names the decision it is of."
+      },
+      "answer": {
+        "type": "string",
+        "description": "The answer the decision chose, as the verdict recorded it. Present on the decision-recorded entry alone."
+      },
+      "source": {
+        "type": "string",
+        "description": "The existing source the decision names as settling its question, as the verdict recorded it. Present on the decision-recorded entry alone: a decision naming no source is refused before any pass is routed and is recorded by nothing."
+      },
+      "rationale": {
+        "type": "string",
+        "description": "Why the decision chose this answer rather than another, as the verdict recorded it. Present on the decision-recorded entry alone."
+      },
+      "confidence": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "description": "How sure the verifier was that the source settles the question, as the verdict recorded it. Present on the decision-recorded entry alone, and routed on by nothing."
+      },
+      "blast_radius": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "description": "How costly a wrong answer would be to undo, as the verdict recorded it. Present on the decision-recorded entry alone, and routed on by nothing."
+      },
+      "rejection": {
+        "type": "string",
+        "description": "Why the verification a decided repair returned to rejected the decision, in that verification's own words. Present on the decision-rejected entry alone, which is a record of its own: the decision's entry is never rewritten."
       }
     }
   }

@@ -86,6 +86,13 @@ CONFERRAL_LOG = next(name for name, shape in DECLARATIONS.items()
                      if "conferred_by" in shape["properties"])
 INSPECTION_LOG = next(name for name, shape in DECLARATIONS.items()
                       if "findings" in shape["properties"])
+#: Since story-219, told apart by the rejection only a decision log's record
+#: carries. A run reaches it only by deciding something — a repair pass
+#: carrying a decision — so a run that decides nothing reaches every log a run
+#: can produce but this one, the way a run that does not complete reaches
+#: every log but the inspection's.
+DECISION_LOG = next(name for name, shape in DECLARATIONS.items()
+                    if "rejection" in shape["properties"])
 
 #: Which logs a run reaches, derived from the run's own event declaration.
 RUN_KINDS = set(
@@ -616,18 +623,22 @@ def test_the_merge_check_reports_the_contention_the_layout_removes(tmp_path):
 def test_a_run_writes_every_log_under_its_own_segment_and_nothing_at_the_root(
         two_completed):
     """A run of story X writes its records under `<history>/X/` and writes
-    no root-level file. Asked of the run that reached every run-produced log,
-    so each of those logs is found in the segment; the absence at the root
-    has the control below.
+    no root-level file. Asked of a run that reached every run-produced log a
+    run that decides nothing reaches, so each of those logs is found in the
+    segment; the decision log, which only a run that decided something
+    reaches, is asked to be absent rather than skipped. The absence at the
+    root has the control below.
     """
     _, _, first, _ = two_completed
     segment = segment_of(first, FIRST_STORY)
     assert segment.parent == history_dir_of(first)
     assert segment.name == FIRST_STORY
-    for log in RUN_PRODUCED_LOGS:
+    assert DECISION_LOG in RUN_PRODUCED_LOGS
+    for log in RUN_PRODUCED_LOGS - {DECISION_LOG}:
         records = parse_records((segment / log).read_text(encoding="utf-8"))
         assert records, log
         assert {r["story_id"] for r in records} == {FIRST_STORY}, log
+    assert not (segment / DECISION_LOG).exists()
     assert root_level_files(history_dir_of(first)) == set()
     assert {path.name for path in history_dir_of(first).iterdir()} == \
         {FIRST_STORY}

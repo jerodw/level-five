@@ -148,6 +148,57 @@
                 "description": "Why the reason does or does not speak to this finding — the reading itself, written for the reviewer who meets the refusal or the grant and wants to know how the entry was judged. Read by no check, like the entry echo beside it."
               }
             }
+          },
+          "decision": {
+            "type": "object",
+            "description": "Optional. The choice this fix requires that the approved plan does not make, made here because an existing source settles it — a repository standard, a configured architecture document, or the way this codebase already solves the same problem. A choice the plan does not make and no source settles is declined and filed rather than decided, and a fix that contradicts or is barred by something the plan does say is declined and filed too, because it wants the plan changed rather than a decision made. A fix to the words alone carries no decision, so one that needs such a choice is declined and filed as well. A decision may add to or refine what was approved and never remove any of it. The coordinator records each decision a routed repair pass carries in the decision log under the story's segment of the history directory, where a reviewer can check it after the run directory is gone, and hands it to the verification that pass returns to, which may reject it in rejected_decisions. Its presence is the signal, on the presence-as-signal terms the fields beside it record. Any repairable finding may carry one, a finding you raised yourself as much as one routed to this story — a decided finding you raised yourself names a slug of your own in its location, distinct from every routed slug, so the verification the pass returns to can name it in rejected_decisions — and it spends the repair pass allowance every repairable finding spends and nothing more. source is deliberately absent from this object's required list, and the reason is the point of it: a decision whose source is absent or records no words is refused by the coordinator — the finding and every finding sharing its routed slug leave the pass, the refusal is said in the run's events, and a routed finding is declined with the refusal as its ground and filed at the run's completion — rather than refused as a malformed verdict and asked for again, which would invite a source written to satisfy a validator. Nothing routes on confidence or blast_radius: they are recorded so a reviewer can read the risky decisions first.",
+            "required": ["question", "answer", "rationale", "confidence", "blast_radius"],
+            "properties": {
+              "question": {
+                "type": "string",
+                "description": "The question the fix requires that the approved plan does not answer — the choice between the reasonable designs, stated so a reviewer can see what was being decided."
+              },
+              "answer": {
+                "type": "string",
+                "description": "The answer chosen: which of the reasonable designs this fix takes."
+              },
+              "source": {
+                "type": "string",
+                "description": "The existing source that settles the question, named so a reviewer can open it: a repository standard, a configured architecture document, or the place in this codebase that already solves the same problem, with the file and the line or passage. A decision naming no source is refused by the coordinator and its finding filed, so this is the field the decision stands on."
+              },
+              "rationale": {
+                "type": "string",
+                "description": "Why this answer rather than another: what in the source settles it, and why the alternatives it rules out are ruled out."
+              },
+              "confidence": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "How sure you are that the source settles the question the way the answer says, in the vocabulary a brief's confidence already uses. Recorded for the reviewer and routed on by nothing: confidence is a poor proxy for correctness, so a decision is not acted on more or less readily for it."
+              },
+              "blast_radius": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "How costly a wrong answer would be to undo: low where reverting the change touches the fix alone, high where later work would come to lean on it. Recorded for the reviewer and routed on by nothing."
+              }
+            }
+          }
+        }
+      }
+    },
+    "rejected_decisions": {
+      "type": "array",
+      "description": "The decisions the repair pass this verification returned from carried that you reject, each named by the slug its finding's location carries, with the reason. Judge each decision that pass record carries: whether the source says what the decision says, whether a source settles the question at all, and whether the decision takes anything away from what was approved. Reject one that fails any of these here, and undo its change with the routes you already have — a repairable finding restoring the files where a repair pass remains, a failed verdict and a retry where none does: the coordinator records the rejection and does not undo the change itself. A rejection is matched only against the decisions the live repair pass record carries, so a decision an earlier pass made cannot be rejected by a later verification. The coordinator records each rejection in the decision log as a record of its own, beside the decision's record, which is never rewritten, and a routed finding whose decision is rejected is left by the run with the rejection as its ground and filed at the run's completion. A rejection naming no decision that pass carried changes nothing and is said in the run's events. It is honoured on a failing verdict as well as a passing one. Presence-as-signal on the terms every sibling field records, and optional because most verdicts reject nothing.",
+      "items": {
+        "type": "object",
+        "required": ["slug", "reason"],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "description": "The slug the decided finding's location names — the routed slug, or the slug of its own a finding the verifier raised itself names there — matched as a whole token of that location, the rule the accounting already matches slugs by."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the decision is rejected: the source does not say what the decision says, no source settles the question, or the decision takes something away from what was approved. Recorded verbatim beside the decision and given as the ground the finding is left on."
           }
         }
       }
@@ -165,7 +216,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "Why the finding was not corrected or repaired. Size is not among the reasons: a correct finding judged small is corrected or repaired here, where both routes cost no retry and no attempt, and one too small to be worth even those cheap routes is dropped through not_worth_filing rather than declined. The grounds that remain are that the fix is a design decision the plan did not make, that a reasoned scope.do_not_modify entry protects the file where its reason speaks to the fix, or that the finding is wrong on the evidence. A fix that is only out of the story's declared scope is not a reason either: such a finding is recorded as repairable with scope_extension instead, and the coordinator's own refusal of an extension that crosses a bound is recorded by the accounting with the bound as its reason. Written for the reader of the run who meets the accounting and wants to know why a finding reached the backlog instead of being fixed here."
+            "description": "Why the finding was not corrected or repaired. Size is not among the reasons: a correct finding judged small is corrected or repaired here, where both routes cost no retry and no attempt, and one too small to be worth even those cheap routes is dropped through not_worth_filing rather than declined. The grounds that remain are that the fix is a design decision the plan did not make and no existing source settles, that the fix contradicts or is barred by something the plan does say — which wants the plan changed rather than a decision made — that a reasoned scope.do_not_modify entry protects the file where its reason speaks to the fix, or that the finding is wrong on the evidence. A choice the plan does not make that an existing source settles — a repository standard, a configured architecture document, or the way this codebase already solves the same problem — is not a reason: such a finding is recorded as repairable with a decision naming that source instead, and the coordinator's own refusal of a decision that names no source is recorded by the accounting with the refusal as its reason. A decision rides only on a repairable finding, so a fix to the words alone that needs such a choice is declined and filed all the same. A fix that is only out of the story's declared scope is not a reason either: such a finding is recorded as repairable with scope_extension instead, and the coordinator's own refusal of an extension that crosses a bound is recorded by the accounting with the bound as its reason. Written for the reader of the run who meets the accounting and wants to know why a finding reached the backlog instead of being fixed here."
           },
           "not_worth_filing": {
             "type": "string",

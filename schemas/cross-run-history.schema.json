@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "cross-run-history",
-  "description": "The declaration of the harness-scoped logs under history_dir, and the whole of what decides which events reach them. One property per log, named for the file it declares, holding that log read as an array of parsed lines — a log being the gathering of every file of that name under the history directory: the root-level file, which holds every record written before records were written per segment and stays where it is, followed by one file per segment, a segment being a directory named for the writer that produced its records (a story's id for a run's records and the mandate record l5-plan writes for that story, or the moment of writing for a broad-mode inspection, which has no story to name), so that two branches never append to the same file and a merge between them has nothing to reconcile: its items.properties.event.enum enumerates the execution-history event kinds routed to that log, and its items.properties declare the fields a record there carries. Selection and record shape are therefore one file rather than a condition written into append_event, and adding a kind to a log is an edit here and nowhere else. The `event` property is the selection and is not itself projected: a record carries the other declared fields, so what routed it is read off the enum that named its kind rather than repeated on every line. A field the execution-history entry does not carry is omitted rather than written null, which is the rule execution-history.json already follows — and an entry that would leave a record missing a field the log's items.required names writes no record there at all, so a log's required list is the second half of its selection: a kind named in a log's enum reaches it only on the occurrences that carry what a line there must carry, which is how one kind can be named by two logs that record different facts about it. A record is a summary and never a copy: the per-run artifacts hold the detail, and a log that duplicated them would inherit their size and lose its queryability. History is evidence, never state — nothing here is read back to make a routing decision. A run reads every file of every log at its start and reports, at its end, what a configured history_retention_days would drop; it rewrites nothing. The rewrite happens only through l5-prune, run by a person on the repository's default branch outside any run, so two runs never rewrite the same file and their branches merge without contending on the history. One further log is named here as RESERVED and is deliberately not declared above: adjudication-log.jsonl. This harness has no producer for it — adjudication is a level 4 concept it does not have — so it creates none, and naming it here rather than shipping an empty file is the whole of what it does about it. A later harness that acquires a producer declares its log as a property beside the ones above, and gets the projection with no change to orchestration — which is what inspection-log.jsonl, reserved here until this harness acquired the producer that writes it, now demonstrates rather than predicts. The per-log declarations are properties rather than a $defs block because the harness's own validator honors a deliberately small keyword subset and refuses a schema claiming a constraint it cannot check; a property named for its log carries the same declaration and stays checkable.",
+  "description": "The declaration of the harness-scoped logs under history_dir, and the whole of what decides which events reach them. One property per log, named for the file it declares, holding that log read as an array of parsed lines — a log being the gathering of every file of that name under the history directory: the root-level file, which holds every record written before records were written per segment and stays where it is, followed by one file per segment, a segment being a directory named for the writer that produced its records (a story's id for a run's records and the mandate record l5-plan writes for that story, or the moment of writing for a broad-mode inspection, which has no story to name), so that two branches never append to the same file and a merge between them has nothing to reconcile: its items.properties.event.enum enumerates the execution-history event kinds routed to that log, and its items.properties declare the fields a record there carries. Selection and record shape are therefore one file rather than a condition written into append_event, and adding a kind to a log is an edit here and nowhere else. The `event` property is the selection and is not itself projected: a record carries the other declared fields, so what routed it is read off the enum that named its kind rather than repeated on every line. A field the execution-history entry does not carry is omitted rather than written null, which is the rule execution-history.json already follows — and an entry that would leave a record missing a field the log's items.required names writes no record there at all, so a log's required list is the second half of its selection: a kind named in a log's enum reaches it only on the occurrences that carry what a line there must carry, which is how one kind can be named by two logs that record different facts about it. A record is a summary and never a copy: the per-run artifacts hold the detail, and a log that duplicated them would inherit their size and lose its queryability. The decision log is the one exception, and it is deliberate: a record there carries the decision's own words — its question, answer, source and rationale — because a reviewer checks a decision against the source it names after the run directory has been deleted, and once that directory is gone nothing else holds those words. It copies the decision and nothing else from the verdict. History is evidence, never state — nothing here is read back to make a routing decision. A run reads every file of every log at its start and reports, at its end, what a configured history_retention_days would drop; it rewrites nothing. The rewrite happens only through l5-prune, run by a person on the repository's default branch outside any run, so two runs never rewrite the same file and their branches merge without contending on the history. One further log is named here as RESERVED and is deliberately not declared above: adjudication-log.jsonl. This harness has no producer for it — adjudication is a level 4 concept it does not have — so it creates none, and naming it here rather than shipping an empty file is the whole of what it does about it. A later harness that acquires a producer declares its log as a property beside the ones above, and gets the projection with no change to orchestration — which is what inspection-log.jsonl, reserved here until this harness acquired the producer that writes it, now demonstrates rather than predicts. The per-log declarations are properties rather than a $defs block because the harness's own validator honors a deliberately small keyword subset and refuses a schema claiming a constraint it cannot check; a property named for its log carries the same declaration and stays checkable.",
   "type": "object",
   "properties": {
     "execution-log.jsonl": {
@@ -242,6 +242,70 @@
           "timestamp": {
             "type": "string",
             "description": "When the operation completed, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what orders the observations an estimate is read from, most recent first, and what history_retention_days is compared against."
+          }
+        }
+      }
+    },
+    "decision-log.jsonl": {
+      "type": "array",
+      "description": "One record per decision a run made and one per decision it rejected: the ledger of the choices a run made where its approved plan was silent and an existing source settled the question. Written to decision-log.jsonl under the segment of the history directory named for the story whose run made the record, one JSON object per line, appended as each decision is made and as each rejection is judged. A decision is recorded where the repair pass carrying it is routed, and nowhere else: a decision whose pass a spent allowance refused, one a correction pass deferred, and one the coordinator refused for naming no source record nothing here, and a run resumed inside the pass records nothing twice, because a resume re-enters at the saved stage without routing again. A rejection is a record of its own — the verification the pass returned to rejected the decision, and the line says which decision and why — and the decision's own record is never rewritten, so the log is append-only in the sense the book's decision ledger is. The two are told apart by their fields, since the kind is not projected: a decision record carries answer, source, rationale, confidence and blast_radius, and a rejection record carries rejection. Unlike the logs beside it, a record here carries the decision's own words rather than counts — the exception the top-level description states, because once the run directory is deleted nothing else holds them and a reviewer reading the decisions after the run is the reason the log exists. Nothing routes on any field here, confidence and blast_radius included: they are recorded so a reviewer can read the risky decisions first.",
+      "items": {
+        "type": "object",
+        "required": ["story_id", "timestamp", "finding", "question"],
+        "properties": {
+          "event": {
+            "type": "string",
+            "description": "The execution-history event kinds routed to this log, on the terms the execution log's own event property states: this enum is the selection, and the property is not projected into a record. Neither kind is named by any other log, so neither reaches another log by accident, and the decision-refused kind is named by none, so a refused decision reaches no log at all.",
+            "enum": [
+              "decision-recorded",
+              "decision-rejected"
+            ]
+          },
+          "story_id": {
+            "type": "string",
+            "description": "The story whose run made or rejected the decision, derived from the run directory's own name."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "When the decision was recorded or the rejection judged, in the same YYYY-MM-DD HH:MM:SS form events.log and execution-history.json use. It is what history_retention_days is compared against."
+          },
+          "stage": {
+            "type": "string",
+            "description": "The stage that made the decision, or that rejected it: the verifying stage whose verdict carried it."
+          },
+          "finding": {
+            "type": "string",
+            "description": "The location of the repairable finding the decision was made for, as the verdict recorded it — the file and the slug a reviewer opens it by."
+          },
+          "question": {
+            "type": "string",
+            "description": "The question the decision answers: the choice its fix requires that the approved plan does not make. On a rejection record it names the decision rejected."
+          },
+          "answer": {
+            "type": "string",
+            "description": "The answer chosen. On a decision record alone."
+          },
+          "source": {
+            "type": "string",
+            "description": "The existing source that settles the question — a repository standard, a configured architecture document, or the place in the codebase that already solves the same problem — so a reviewer can open it and check the decision against it. On a decision record alone."
+          },
+          "rationale": {
+            "type": "string",
+            "description": "Why this answer rather than another. On a decision record alone."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "How sure the run was that the source settles the question, in the vocabulary a brief's confidence uses. On a decision record alone, and read by nothing that routes."
+          },
+          "blast_radius": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "How costly a wrong answer would be to undo. On a decision record alone, and read by nothing that routes."
+          },
+          "rejection": {
+            "type": "string",
+            "description": "Why the verification the decided repair returned to rejected the decision, in its own words. On a rejection record alone."
           }
         }
       }

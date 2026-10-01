@@ -1788,7 +1788,9 @@ def acted_on_by(findings, verdict, *, refused_slugs=()) -> tuple[list, list]:
     did, because the pass repairs only the accepted files and the brief the
     completion filing writes is the record of the rest. Empty by default, so
     a verdict carrying no refusal is split exactly as before the parameter
-    existed.
+    existed. The accounting hands it every slug nothing acted on whatever the
+    cause — a refused extension or decision, a spent allowance, or a decision
+    the verification rejected — so the split is one rule over all three.
 
     Pure over its inputs, so it can be held directly the way the partition
     tests hold `about_the_change`.
@@ -2189,7 +2191,8 @@ def _gather_drops(into: dict, directory: Path, artifact: str,
 def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
                           harness_root: Path, story_id: str, *,
                           artifact: str, attempt: int, verdict,
-                          refused_slugs=(), abandoned=None) -> None:
+                          refused_slugs=(), abandoned=None,
+                          rejected=None) -> None:
     """Account for every finding routed to this story, once per attempt.
 
     Called from the verifier branch after the verdict is archived and before
@@ -2215,7 +2218,18 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     declined one. An abandoned finding is in the remainder and is filed at
     completion like any other left finding: the allowance refused the pass,
     not the finding. None, or empty, is a verdict that met no spent allowance,
-    and then the split is exactly as before the parameter existed. For
+    and then the split is exactly as before the parameter existed.
+
+    `rejected` is the third cause the seam carries, a mapping from routed slug
+    to the ground it is left on: the finding was repaired under a decision the
+    repair pass carried, and the verification that pass returned to rejected
+    the decision. It reaches the split through the same set the refusals and
+    the abandonments do, so a rejected slug is left whatever the verdict
+    named, and its ground is recorded as the reason the finding was left —
+    the verification's own words, so `reason_given` is true — which is what
+    the completion report names it by and what the filing at completion sends
+    to the backlog. None, or empty, is a verdict that rejected nothing, and
+    the split is then exactly as before the parameter existed. For
     each finding of the remainder it also records the reason the verdict's
     `declined_findings` gave for its slug, or that none was given, and the
     event says how many were declined each way — a report and never a
@@ -2231,24 +2245,27 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     finds it and splits nothing twice, and a retry, whose findings artifact
     is its own, is accounted under the next attempt's number. What a call
     that finds an already-accounted attempt *can* do is amend: where it names
-    `refused_slugs` or `abandoned`, each routed slug the artifact records as
-    acted on is
-    moved to the remainder, carrying the refusal as its declined reason and
-    the abandonment in its own marker beside it,
+    `refused_slugs`, `abandoned` or `rejected`, each routed slug the artifact
+    records as acted on is
+    moved to the remainder, carrying the refusal or the rejection as its
+    declined reason and the abandonment in its own marker beside it,
     the artifact is rewritten with the counts recomputed, and an event of
     this kind says which slugs moved and why — a refusal the verifier
     discovers on the returning verdict of a correction or repair pass would
     otherwise be logged and then forgotten, with no brief filed for it, and a
     spent allowance met on such a verdict is exactly the same case: the pass
-    whose returning verdict it is was the last one the run had. Two moments
-    reach the amendment: a later verdict of the attempt, and the repair block
+    whose returning verdict it is was the last one the run had. A rejection is
+    a later verdict's by construction: it is judged by the verification a
+    repair pass returns to, against the decision that pass carried, and the
+    verdict that routed the pass is what named the slug as acted on. Two
+    moments reach the amendment: a later verdict of the attempt, and the repair block
     of the verdict the accounting was written on, which is where that pass's
     spent allowance is met and which the coordinator calls this from for the
     reason its own comment there gives. A
-    refused or abandoned slug the artifact already records in the remainder
-    keeps the
+    refused, abandoned or rejected slug the artifact already records in the
+    remainder keeps the
     reason it was recorded with, and one the artifact does not record as
-    routed changes nothing. A call refusing and abandoning nothing
+    routed changes nothing. A call refusing, abandoning and rejecting nothing
     leaves the artifact byte-for-byte what the first verdict wrote.
 
     An attempt that routed nothing is not accounted: a findings artifact that
@@ -2266,6 +2283,7 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
             run_dir, target_root, config, harness_root, story_id,
             artifact=artifact, attempt=attempt, verdict=verdict,
             refused_slugs=refused_slugs, abandoned=abandoned,
+            rejected=rejected,
         )
     except Exception as error:  # noqa: BLE001 - the totality is the guarantee
         print(f"the accounting after the verdict could not run: {error}",
@@ -2281,14 +2299,18 @@ def account_after_verdict(run_dir: Path, target_root: Path, config: dict,
 def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
                            harness_root: Path, story_id: str, *,
                            artifact: str, attempt: int, verdict,
-                           refused_slugs=(), abandoned=None) -> None:
+                           refused_slugs=(), abandoned=None,
+                           rejected=None) -> None:
     """The body of the above, so the guard has one thing to guard."""
     label = f"accounting for the findings routed to {story_id}"
     abandoned = abandoned or {}
+    rejected = rejected or {}
     # The one set the split is decided by, so what "acted on" means is one
-    # rule and not one per reason a slug is in it: a scope extension the
-    # coordinator refused, and a pass a spent allowance refused to run.
-    not_acted = tuple(refused_slugs) + tuple(abandoned)
+    # rule and not one per reason a slug is in it: a fix the coordinator
+    # refused — an extension across a bound, or a decision naming no source —
+    # a pass a spent allowance refused to run, and a decision the verification
+    # a repair pass returned to rejected.
+    not_acted = tuple(refused_slugs) + tuple(abandoned) + tuple(rejected)
     if (Path(run_dir) / accounting_artifact_file(artifact, attempt)).is_file():
         # This attempt is accounted. A second verdict within it — the one a
         # correction or repair pass returns to — changes nothing about what
@@ -2301,7 +2323,7 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
             _amend_accounting(run_dir, story_id, artifact=artifact,
                               attempt=attempt, verdict=verdict,
                               refused_slugs=not_acted, abandoned=abandoned,
-                              label=label)
+                              rejected=rejected, label=label)
         return
     record = _read_findings_record(run_dir, artifact, attempt)
     if record is None or not record.get("ran"):
@@ -2328,7 +2350,12 @@ def _account_after_verdict(run_dir: Path, target_root: Path, config: dict,
     # refused is the run's own allowance, which the verdict has no way to
     # know about. It is recorded as its own marker so the account in the
     # completion report tells the two apart by a field rather than by prose.
-    declined = declined_accounting(remainder, declined_reasons(verdict),
+    # A rejected decision's ground is the reason that finding was left, and it
+    # stands over anything the verdict's declined_findings said of the slug:
+    # the verifier acted on the finding and a later verification rejected the
+    # decision it rested on, which is why it is left.
+    declined = declined_accounting(remainder,
+                                   {**declined_reasons(verdict), **rejected},
                                    not_worth_filing_texts(verdict),
                                    abandoned)
     with_reason = sum(1 for one in declined if one["reason_given"])
@@ -2393,23 +2420,30 @@ def _refusal_reasons(verdict, slugs) -> dict:
 
 def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
                       attempt: int, verdict, refused_slugs, label: str,
-                      abandoned=None) -> None:
+                      abandoned=None, rejected=None) -> None:
     """Move the slugs the attempt's accounting records as acted on that
     nothing acted on into its remainder, and say so.
 
-    Reached where an attempt is already accounted and a refusal or an
-    abandonment names a slug that accounting records as acted on. Two
-    moments reach it: a later verdict of the same attempt, which is where a
-    refusal discovered on the returning verdict of a pass arrives, and the
+    Reached where an attempt is already accounted and a refusal, an
+    abandonment or a rejection names a slug that accounting records as acted
+    on. Two moments reach it: a later verdict of the same attempt, which is
+    where a refusal discovered on the returning verdict of a pass arrives and
+    where every rejection arrives — a decision is rejected by the
+    verification its repair pass returns to — and the
     repair block of the verdict the accounting was written on, which is where
     that pass's spent allowance is met — the clean-clone check between the
     accounting and that block can route the verdict away, so the block records
     its own abandonment rather than the accounting predicting one.
 
     `refused_slugs` is the whole set to
-    move, and `abandoned` is the subset a spent pass allowance refused a pass
-    for — carried beside it so a moved entry records which of the two it was
-    and why, in the marker the account in the completion report reads. The
+    move, `abandoned` is the subset a spent pass allowance refused a pass
+    for, and `rejected` is the subset whose decision the verification
+    rejected, mapped to the ground each is left on. They carry three causes
+    through one seam, and the event names the cause rather than attributing
+    a rejection to a refused fix or to a spent allowance: a rejected slug's
+    entry records the rejection as its reason, the verification's own words,
+    and an abandoned one carries the marker the account in the completion
+    report reads. The
     split itself is not redone: the acted-on set
     is the recorded one minus the moved slugs, the remainder is the routed
     findings less that, so everything the first verdict left stays exactly
@@ -2442,6 +2476,7 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     however the allowance was met.
     """
     abandoned = abandoned or {}
+    rejected = rejected or {}
     accounting = _read_record(
         Path(run_dir) / accounting_artifact_file(artifact, attempt))
     if accounting is None:
@@ -2457,11 +2492,20 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     if not moved:
         return
     # What moved each slug, said once so the event and the artifact cannot
-    # disagree: the abandonment's own words where a spent allowance refused
-    # the pass, and the refusal otherwise.
-    cause = ("a spent pass allowance abandoned some of them"
-             if any(slug in abandoned for slug in moved)
-             else "a scope extension was refused")
+    # disagree: a rejection where the verification rejected the decision
+    # behind a repair, the abandonment where a spent allowance refused the
+    # pass, and the coordinator's refusal of part of the fix otherwise — each
+    # named for what it was rather than attributed to another.
+    causes = []
+    if any(slug in rejected for slug in moved):
+        causes.append("the verification rejected the decision behind some "
+                      "of them")
+    if any(slug in abandoned and slug not in rejected for slug in moved):
+        causes.append("a spent pass allowance abandoned some of them")
+    if any(slug not in abandoned and slug not in rejected for slug in moved):
+        causes.append("the coordinator refused part of the fix for some of "
+                      "them")
+    cause = " and ".join(causes)
     record = _read_findings_record(run_dir, artifact, attempt)
     if record is None:
         _say(run_dir,
@@ -2479,7 +2523,10 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     acted = [one for one in routed if _slug_of(one) and _slug_of(one) in kept]
     acted_ids = {id(one) for one in acted}
     remainder = [one for one in routed if id(one) not in acted_ids]
-    reasons = _refusal_reasons(verdict, moved)
+    # A rejected slug's ground is its rejection, over anything the verdict's
+    # declined_findings said of it, for the reason the first split gives.
+    reasons = {**_refusal_reasons(verdict, moved),
+               **{slug: rejected[slug] for slug in moved if slug in rejected}}
     declined = [one for one in accounting.get("declined") or ()
                 if isinstance(one, dict)]
     for slug in moved:
@@ -2499,9 +2546,12 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
         if ground:
             entry["reason"] = ground
         # A slug moved here was acted on by the first verdict and is left only
-        # because the coordinator refused the extension the repair needed, or
-        # because no allowance was left to run the pass with, so it is filed
-        # rather than dropped whatever else the verdict said. The entries
+        # because the coordinator refused part of the fix the repair needed,
+        # because no allowance was left to run the pass with, or because the
+        # verification the pass returned to rejected the decision the repair
+        # rested on, so it is filed rather than dropped whatever else the
+        # verdict said. A rejection's ground is the verification's own words,
+        # so it is the entry's reason above and `reason_given` is true. The entries
         # carried over above keep whatever they recorded, so a finding the
         # first verdict dropped stays dropped across an amendment.
         entry["dropped"] = False
@@ -2512,9 +2562,10 @@ def _amend_accounting(run_dir: Path, story_id: str, *, artifact: str,
     write_accounting(run_dir, artifact, attempt, story_id, routed=routed,
                      acted_on=acted, remainder=remainder, declined=declined)
     why = "; ".join(
+        f"{slug}: {rejected[slug]}" if slug in rejected else
         f"{slug}: {abandoned[slug]}" if slug in abandoned else
         f"{slug}: {reasons[slug]}" if slug in reasons else
-        f"{slug}: the coordinator refused a scope extension of it, "
+        f"{slug}: the coordinator refused part of the fix for it, "
         f"and the verdict records no reason"
         for slug in moved
     )

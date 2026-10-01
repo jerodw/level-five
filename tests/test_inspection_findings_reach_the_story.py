@@ -2502,15 +2502,20 @@ def test_the_accounting_offers_no_way_to_stop_a_run():
     # second reason a routed slug the verdict names was not acted on — the pass
     # it named one for had no allowance left — and it is in the same shape and
     # there for the same reason: an input to the split, carrying the words the
-    # record keeps, and no way to stop anything either.
+    # record keeps, and no way to stop anything either. `rejected` (story-219)
+    # is the third: the verification a repair pass returned to rejected the
+    # decision the repair rested on — again an input to the split, carrying
+    # the ground the finding is left on, and no way to stop anything.
     assert list(parameters) == [
         "run_dir", "target_root", "config", "harness_root", "story_id",
-        "artifact", "attempt", "verdict", "refused_slugs", "abandoned"]
+        "artifact", "attempt", "verdict", "refused_slugs", "abandoned",
+        "rejected"]
     # No stage list, because it inspects nothing, and no runner, because it
     # invokes nothing — the two the post-story sibling has that this does not.
     assert set(sibling) - set(parameters) == {"stages", "runner"}
     assert set(parameters) - set(sibling) == {
-        "artifact", "attempt", "verdict", "refused_slugs", "abandoned"}
+        "artifact", "attempt", "verdict", "refused_slugs", "abandoned",
+        "rejected"}
 
 
 @pytest.mark.parametrize("text", ["", "not json", "[1, 2]"],

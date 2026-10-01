@@ -3424,6 +3424,25 @@ DECLARED_HISTORY_READERS = {
         "have resolved to the pre-repair text rather than to today's. "
         "Everything else in the module is a source composed in the test or a "
         "module of this repository read as its subject",
+    "test_a_finding_a_source_settles_is_repaired_under_a_recorded_decision.py":
+        "two of its criteria are claims about this repository's own change and "
+        "nothing else: that the story letting a run repair a finding under a "
+        "recorded decision left the assistant's prompt, the writing stages' "
+        "prompts, the Inspector's prompt, both workflow definitions and the "
+        "filing in orchestration/inspection.py alone, and that the completion "
+        "report's rendering — the functions that compose its account of the "
+        "findings — reads exactly as it did before decisions existed. No "
+        "constructed repository can say what this story did not touch or what "
+        "this deployment's report said before it, and both comparisons are "
+        "made through the shared helpers over the module's own story range "
+        "rather than against HEAD, which would go vacuously green the moment "
+        "the working tree is committed. Each has its control beside it: a pair "
+        "of histories the module builds with conftest.constructed_story, one "
+        "story leaving those paths alone and one editing every one of them, "
+        "and the baseline text with one word of the report's heading changed, "
+        "which the same comparison reports. Everything else in the module "
+        "drives runs against a workflow and a target built under tmp_path, or "
+        "reads the shipped prompts and schemas as its subject",
     "test_a_repair_reaches_outside_the_storys_scope_within_bounds.py":
         "one of its criteria is a claim about this repository's own change and "
         "nothing else: that the story letting a repair reach outside a story's "
