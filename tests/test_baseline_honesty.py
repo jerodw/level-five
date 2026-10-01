@@ -3582,6 +3582,27 @@ DECLARED_HISTORY_READERS = {
         "resolver is about — escalate and never resume, revert and restore, a "
         "hotfix that modifies rather than adds — is built under tmp_path there "
         "rather than looked for here",
+    "test_the_decisions_a_run_made_are_read_riskiest_first.py":
+        "one of its criteria is a claim about this repository's own change and "
+        "nothing else: that the story putting a run's decisions on the "
+        "completion report and in the assistant's prompt left the decision "
+        "machinery, append_event, the filing at completion, the escalation "
+        "summary, both verifier prompts, the schemas, scripts/l5-assist and "
+        "l5-status alone, added no event and no emitter, and kept every "
+        "sentence the report's account wrote before in its words and its "
+        "order. No constructed repository can say what this story did not "
+        "touch or what this deployment's report said before it, and every "
+        "comparison is made through the shared helpers over the module's own "
+        "story range rather than against HEAD, which would go vacuously green "
+        "the moment the working tree is committed. Each has its control beside "
+        "it over the same range: a path and a function this story did change, "
+        "which the same comparisons report; a copy of the coordinator carrying "
+        "one more emitter, which the same scans count; and the report's "
+        "sentences read in the other direction, where the words this story "
+        "added are found missing from the baseline. Everything else in the "
+        "module drives runs against workflows and targets built under "
+        "tmp_path, or reads the assistant's prompt as l5-assist hands it to a "
+        "session, as its subject",
     "test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py":
         "one of its criteria is a claim about this repository's own change and "
         "nothing else: that the story sharing the parenthetical walk and "

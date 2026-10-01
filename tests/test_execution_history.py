@@ -38,6 +38,7 @@ import story_coordinator
 from agent_runner import AgentResult
 from conftest import commit_setup, first_retry_route, load_mutant
 import conftest
+from test_config_keys_are_obeyed import sources_to_scan
 
 REPO_ROOT = Path(story_coordinator.__file__).resolve().parents[1]
 #: The workflow these runs execute, assembled by the builder in
@@ -769,11 +770,135 @@ def test_no_routing_decision_reads_the_history_file():
             assert "execution-history" not in ast.unparse(node), node.name
 
 
-def test_no_other_module_reads_the_history_file():
+#: The coordinator's reader of the history and the helper naming its path,
+#: taken off the functions themselves, so renaming either fails here rather
+#: than leaving the scan below looking for a name nothing spells any more.
+HISTORY_READERS = frozenset({story_coordinator.load_history.__name__,
+                             story_coordinator._history_path.__name__})
+#: The history file's own name, as the coordinator's path helper gives it.
+HISTORY_FILE = story_coordinator._history_path(Path(".")).name
+
+
+def history_reads(source: str) -> list[str]:
+    """What in one source reads a run's execution history: a name, an
+    attribute or an imported name spelling the coordinator's reader or its
+    path helper, or a string the code uses that names the history file or
+    either of those functions.
+
+    Read from the syntax tree rather than the text, so a comment naming the
+    file reads nothing — `orchestration/outbox.py` and
+    `orchestration/plan_mandate.py` each name it beside the timestamp form
+    they share with it — and a string standing as a statement of its own,
+    which is what a docstring is, is passed over for the same reason.
+    """
+    tree = ast.parse(source)
+    standing = {id(node.value) for node in ast.walk(tree)
+                if isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Constant)}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in HISTORY_READERS:
+            found.append(node.id)
+        elif isinstance(node, ast.Attribute) and node.attr in HISTORY_READERS:
+            found.append(node.attr)
+        elif isinstance(node, ast.alias) and node.name in HISTORY_READERS:
+            found.append(node.name)
+        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+              and id(node) not in standing
+              and (HISTORY_FILE in node.value
+                   or node.value in HISTORY_READERS)):
+            found.append(node.value)
+    return found
+
+
+def modules_reading_the_history(root: Path) -> dict[str, list[str]]:
+    """Every source under `root`'s orchestration/ and scripts/ that reads a
+    run's execution history, by its path relative to `root`, with what it
+    reads it by. The coordinator is left out: the test above holds it
+    function by function, which is a finer rule than this one."""
+    found: dict[str, list[str]] = {}
+    for path in sources_to_scan(root):
+        if path == root / "orchestration" / COORDINATOR_PATH.name:
+            continue
+        reads = history_reads(path.read_text(encoding="utf-8"))
+        if reads:
+            found[path.relative_to(root).as_posix()] = reads
+    return found
+
+
+#: Every module but the coordinator that reads a run's execution history, and
+#: why. A reason says why the read decides nothing: a module that would route
+#: on what it read does not belong here, because the history is evidence and
+#: never state. A mapping, so a module cannot sit here without a reason, and
+#: held equal to what the scan reports in both directions, so a reader added
+#: anywhere under orchestration/ or scripts/ is red until it is declared, and a
+#: declaration whose module stopped reading is red too.
+DECLARED_RUN_HISTORY_READERS = {
+    "orchestration/story_inspection.py":
+        "decisions_recorded reads the decisions and rejections a run recorded, "
+        "through the projection the decision log is written by, for the "
+        "completion report's account of the run's findings; the report is "
+        "written once, at completion, and nothing routes on what it says",
+}
+
+
+def test_the_modules_reading_the_history_outside_the_coordinator_are_exactly_the_declared_ones():
+    """Every Python source under orchestration/ but the coordinator, and every
+    script under scripts/, is read for a read of the history, and what reads it
+    is exactly what is declared, each with its reason. The modules this guard
+    used to name alone are among those read, so widening it lost none of
+    them."""
+    scanned = {path.relative_to(REPO_ROOT).as_posix()
+               for path in sources_to_scan(REPO_ROOT)}
     for module in (context_assembler, run_status):
-        source = Path(module.__file__).read_text(encoding="utf-8")
-        assert "execution-history" not in source
-        assert "load_history" not in source
+        assert Path(module.__file__).resolve().relative_to(REPO_ROOT).as_posix() \
+            in scanned, module.__name__
+    assert any(name.startswith("scripts/") for name in scanned), scanned
+
+    reported = modules_reading_the_history(REPO_ROOT)
+    assert set(reported) == set(DECLARED_RUN_HISTORY_READERS), reported
+    for module, reason in DECLARED_RUN_HISTORY_READERS.items():
+        assert reason.strip(), module
+
+
+def test_the_history_reader_scan_reports_a_planted_reader_and_passes_over_a_mention(
+    tmp_path,
+):
+    """The control for the agreement above, so the absence of an undeclared
+    reader is the scan looking rather than the scan unable to see. In a root
+    laid out as this repository's is, the same scan reports a module calling
+    the reader through its import and an extensionless script opening the file
+    by name, and passes over a module naming the file only in a comment and a
+    docstring and over the coordinator, which reads the history and is held
+    above instead — its source, put through the same reading, is found reading
+    it."""
+    root = tmp_path / "planted"
+    (root / "orchestration").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    reader, script, mention = (
+        "orchestration/routes_on_it.py", "scripts/l5-planted",
+        "orchestration/only_mentions_it.py")
+    (root / reader).write_text(
+        f"from story_coordinator import {story_coordinator.load_history.__name__}\n"
+        "\n"
+        "def next_stage(run_dir):\n"
+        f"    return {story_coordinator.load_history.__name__}(run_dir)[-1]\n",
+        encoding="utf-8")
+    (root / script).write_text(
+        "#!/usr/bin/env python3\n"
+        "def last(run_dir):\n"
+        f"    return (run_dir / {HISTORY_FILE!r}).read_text()\n",
+        encoding="utf-8")
+    (root / mention).write_text(
+        f'"""Stamps in the form {HISTORY_FILE} uses."""\n'
+        f"#: The same form {HISTORY_FILE} uses.\n"
+        "STAMP = '%Y-%m-%d %H:%M:%S'\n",
+        encoding="utf-8")
+    (root / "orchestration" / COORDINATOR_PATH.name).write_text(
+        COORDINATOR_SOURCE, encoding="utf-8")
+
+    assert set(modules_reading_the_history(root)) == {reader, script}
+    assert history_reads(COORDINATOR_SOURCE)
 
 
 def test_a_run_whose_history_keeps_disappearing_routes_identically(

@@ -3221,6 +3221,18 @@ def _file_at_completion(run_dir: Path, target_root: Path, config: dict,
 # the report and the filing cannot disagree about what is being sent on. It is
 # a report and never a decision — nothing here files, drops, routes or refuses
 # anything, and the coordinator renders what it returns.
+#
+# The account also carries every decision the run made on the developer's
+# behalf where its approved plan left a choice open — the choices most worth a
+# reviewer's attention, because nobody approved them. They are read off the
+# run's own structured history, which accounts for the whole run across
+# retries and resumed entries, through the projection the decision log is
+# written by: the log's declaration is located by the fields only a decision
+# record carries, and each entry is put through `history_record` against it.
+# So the report names exactly the records the log holds, by one rule, without
+# this module naming the log's file or spelling an event kind. Every decision
+# is shown whatever the workflow declares, ordered costliest to get wrong
+# first, then least sure, then as made — decided in `riskiest_first` alone.
 
 
 @dataclass(frozen=True)
@@ -3246,18 +3258,55 @@ class AccountedFinding:
 
 
 @dataclass(frozen=True)
+class AccountedDecision:
+    """One decision a run made on the developer's behalf, as the decision log
+    holds it, with every rejection a later verification made of it.
+
+    The fields are the record's own: `finding` is the location of the
+    repairable finding the decision was made for, and the rest are the
+    decision's question, answer, cited source, rationale, blast radius and
+    confidence. `rejections` holds the reason of each rejection record paired
+    with this decision — paired with the latest decision recorded before it
+    for the same finding and question — and is empty for a decision no
+    verification rejected. A reason may itself be empty, which is why being
+    rejected is read off the tuple rather than off any one reason. A decision
+    a verification rejected stays in the account in its place, because its
+    change can still be on the branch and a reviewer needs to see it.
+    """
+
+    finding: str = ""
+    question: str = ""
+    answer: str = ""
+    source: str = ""
+    rationale: str = ""
+    blast_radius: str = ""
+    confidence: str = ""
+    rejections: tuple = ()
+
+
+@dataclass(frozen=True)
 class FindingsAccount:
-    """What became of every problem a completed run found in its own work.
+    """What became of every problem a completed run found in its own work, and
+    every decision it made on the developer's behalf.
 
     Four dispositions, disjoint by construction, so a finding is named once:
     `repaired` is what the run's own verdicts acted on, `to_the_backlog` is
     what is being sent on, `discarded` is what a verdict judged not worth
     filing, and `abandoned` is what a spent pass allowance left no pass to run
-    for. `inspected` is whether the loaded workflow declares an inspection at
-    all — a run under one that does not has no account to render, and its
-    report is what it was before this existed. `problem` is why the account
-    could not be derived, and an account carrying one carries nothing else:
-    the report says that in place of the account, and the run completes.
+    for. `decisions` is every decision the run recorded, each an
+    `AccountedDecision`, already in the order the report gives them; a
+    decided finding is still named under the disposition it reached, so a
+    decision is accounted beside the findings rather than as a fifth of them.
+    `inspected` is whether the loaded workflow declares an inspection at all.
+    A run under one that does not still carries its decisions, so the account
+    has nothing to render only where the workflow declares no inspection and
+    the run recorded no decision — and then the report is what it was before
+    this existed. `problem` is why the account could not be derived, and an
+    account carrying one carries nothing else: the report says that in place
+    of the account, and the run completes.
+
+    Every field defaults to empty, so an account constructed without
+    decisions means exactly what it meant before they were carried.
     """
 
     inspected: bool = False
@@ -3266,6 +3315,7 @@ class FindingsAccount:
     to_the_backlog: tuple = ()
     discarded: tuple = ()
     abandoned: tuple = ()
+    decisions: tuple = ()
 
 
 def _ground_of(entry) -> str:
@@ -3284,8 +3334,154 @@ def _ground_of(entry) -> str:
     return ""
 
 
+#: The field a rejection record carries and a decision record does not. The
+#: decision log's declaration tells the two apart by their fields, since the
+#: kind is not projected, and this is the one field that says which a record
+#: is.
+REJECTION_FIELD = "rejection"
+
+#: The two fields the order is decided by, read off the decision log's
+#: declaration for the vocabulary each is declared in.
+BLAST_RADIUS_FIELD = "blast_radius"
+CONFIDENCE_FIELD = "confidence"
+
+
+def riskiest_first(decisions, blast_radii, confidences) -> tuple:
+    """`decisions` in the order a reviewer should read them.
+
+    Costliest to get wrong first, by blast radius; among decisions equally
+    costly, least sure first, by confidence; among decisions equal on both,
+    the order they were made in, which is the order `decisions` is given in.
+    Blast radius leads because confidence is a poor proxy for correctness: a
+    run's own sureness orders decisions of equal cost and never outranks the
+    cost of being wrong, so a costly decision the run was sure of is read
+    before a moderately costly one it was unsure of.
+
+    `blast_radii` and `confidences` are the vocabularies the two levels are
+    declared in, lowest first — read off the declaration rather than spelled
+    here. A level outside its vocabulary is ordered as the riskiest — above
+    the costliest blast radius, below the least sure confidence — so it is
+    read first rather than dropped.
+
+    This is the one function the order is decided in. The assistant's prompt
+    states the same rule in words, because an agent reading the committed log
+    has nothing to call.
+    """
+    blast_radii = list(blast_radii or ())
+    confidences = list(confidences or ())
+
+    def costliest(level) -> int:
+        return -(blast_radii.index(level) if level in blast_radii
+                 else len(blast_radii))
+
+    def least_sure(level) -> int:
+        return confidences.index(level) if level in confidences else -1
+
+    ranked = sorted(
+        enumerate(decisions),
+        key=lambda made: (costliest(made[1].blast_radius),
+                          least_sure(made[1].confidence),
+                          made[0]),
+    )
+    return tuple(decision for _, decision in ranked)
+
+
+def _recorded_text(value) -> str:
+    """One field of a projected record as text: the empty string where the
+    record carried nothing.
+    """
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def decisions_recorded(run_dir: Path) -> tuple:
+    """Every decision this run recorded, with each rejection paired to the
+    decision it rejected, in the order a reviewer should read them.
+
+    Read off the run's own structured history, which accounts for the whole
+    run across retries and resumed entries, through the projection the
+    decision log is written by. The log's declaration is located by the
+    fields only a decision record carries, and each entry is put through
+    `history_record` against it with the run directory's name as the story id
+    — so what comes back is exactly a line the decision log holds for this
+    run, selected by the rule that log was written by. A record carrying a
+    rejection is a rejection; every other record is a decision.
+
+    A rejection is paired with the latest decision recorded before it whose
+    finding and question it carries, so a finding decided twice — its first
+    decision rejected, a second made on a later pass — appears twice, each
+    with its own rejection or none. A rejection pairing with no decision,
+    which a run does not write, is kept as an entry of its own carrying the
+    finding, the question and the rejection, so no record the log holds goes
+    unnamed.
+
+    A declaration set carrying no decision log yields no decisions. Anything
+    that cannot be read raises, for the account's guard to turn into its
+    `problem`.
+    """
+    from story_coordinator import (
+        decision_log_name,
+        history_log_declarations,
+        history_record,
+        load_history,
+    )
+
+    declarations = history_log_declarations()
+    log = decision_log_name(declarations)
+    if log is None:
+        return ()
+    declaration = declarations[log]
+    history = load_history(run_dir)
+    made: list[dict] = []
+    for position, entry in enumerate(history):
+        record = history_record(entry, history[: position + 1], run_dir.name,
+                                declaration)
+        if record is None:
+            continue
+        finding = _recorded_text(record.get("finding"))
+        question = _recorded_text(record.get("question"))
+        if REJECTION_FIELD in record:
+            reason = _recorded_text(record.get(REJECTION_FIELD))
+            paired = next(
+                (one for one in reversed(made)
+                 if one["decided"] and one["finding"] == finding
+                 and one["question"] == question),
+                None,
+            )
+            if paired is None:
+                made.append({"decided": False, "finding": finding,
+                             "question": question, "record": record,
+                             "rejections": [reason]})
+            else:
+                paired["rejections"].append(reason)
+            continue
+        made.append({"decided": True, "finding": finding, "question": question,
+                     "record": record, "rejections": []})
+    decisions = [
+        AccountedDecision(
+            finding=one["finding"],
+            question=one["question"],
+            answer=_recorded_text(one["record"].get("answer")),
+            source=_recorded_text(one["record"].get("source")),
+            rationale=_recorded_text(one["record"].get("rationale")),
+            blast_radius=_recorded_text(one["record"].get(BLAST_RADIUS_FIELD)),
+            confidence=_recorded_text(one["record"].get(CONFIDENCE_FIELD)),
+            rejections=tuple(one["rejections"]),
+        )
+        for one in made
+    ]
+    fields = declaration.get("properties", {})
+    return riskiest_first(
+        decisions,
+        fields.get(BLAST_RADIUS_FIELD, {}).get("enum", ()),
+        fields.get(CONFIDENCE_FIELD, {}).get("enum", ()),
+    )
+
+
 def account_for_the_report(run_dir: Path, stages) -> FindingsAccount:
-    """What became of every finding this run made, for its completion report.
+    """What became of every finding this run made, and every decision it made
+    on the developer's behalf, for its completion report.
 
     Read off the artifacts the run directory already holds — each attempt's
     findings record, its accounting record and its held record — through the
@@ -3301,17 +3497,25 @@ def account_for_the_report(run_dir: Path, stages) -> FindingsAccount:
     verdict did act on it and a later attempt's inspection found it again —
     what the report says of a finding is where it ended up.
 
-    A workflow declaring no inspection returns an account saying so, which the
-    coordinator renders as no section at all. Every failure is caught and
-    returned as `problem`: the completion report is a required artifact of
-    every completed run, so nothing here may stop it being written.
+    The decisions are read by `decisions_recorded`, already ordered, before
+    anything else and whatever the workflow declares: a workflow declaring no
+    inspection returns an account saying so and carrying the run's decisions,
+    which the coordinator renders as no section at all only where there are
+    none. Every failure — the reading of the decisions included — is caught
+    and returned as `problem`: the completion report is a required artifact
+    of every completed run, so nothing here may stop it being written.
     """
+    # True until the workflow has been asked, so a failure before that point
+    # reports as the account always reported a failure.
+    inspected = True
     try:
         from story_coordinator import inspection_declaration
 
         artifact = inspection_declaration(stages or []).get("result")
+        inspected = bool(artifact)
+        decisions = decisions_recorded(run_dir)
         if not artifact:
-            return FindingsAccount()
+            return FindingsAccount(decisions=decisions)
         read = _assemble(run_dir, artifact)
         sent: list = []
         abandoned: list = []
@@ -3348,9 +3552,10 @@ def account_for_the_report(run_dir: Path, stages) -> FindingsAccount:
             to_the_backlog=tuple(sent),
             discarded=discarded,
             abandoned=tuple(abandoned),
+            decisions=decisions,
         )
     except Exception as error:  # noqa: BLE001 - the report must still be written
         return FindingsAccount(
-            inspected=True,
+            inspected=inspected,
             problem=str(error) or error.__class__.__name__,
         )

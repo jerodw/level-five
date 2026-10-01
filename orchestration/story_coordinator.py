@@ -1408,6 +1408,25 @@ def duration_log_name(declarations: dict[str, dict]) -> str | None:
     return None
 
 
+def decision_log_name(declarations: dict[str, dict]) -> str | None:
+    """The declared log whose record shape carries a decision's confidence and
+    blast radius.
+
+    Located through the declaration and never by filename, exactly as
+    `duration_log_name` locates the duration log: those two fields are the
+    ones only a decision record carries, so the log is the one whose
+    `properties` declare both, and a deployment that named the file
+    differently would still be read. The completion report's account of the
+    decisions a run made reads that log's declaration, so the report and the
+    durable log select the same records by one rule.
+    """
+    for name, declaration in declarations.items():
+        fields = declaration.get("properties", {})
+        if "confidence" in fields and "blast_radius" in fields:
+            return name
+    return None
+
+
 def _observation(record: object) -> tuple[float, str, float] | None:
     """One record read as an observation: (when, operation, seconds), or None.
 
@@ -10861,15 +10880,19 @@ def state_story_id(story: dict | None) -> str:
 
 
 def _findings_account_section(account) -> str:
-    """The completion report's account of what became of the run's findings.
+    """The completion report's account of what became of the run's findings,
+    and of the decisions the run made on the developer's behalf.
 
     Rendered in the shape the sections beside it take — a `##` heading and
-    prose — and empty for a run under a workflow that declares no inspection,
-    which has nothing to account for and whose report is byte for byte what it
-    was before this section existed. Every other completed run gets the
-    section, including one whose inspection found nothing to route: a report
-    that omitted the account there would be indistinguishable from one written
-    before the account existed.
+    prose. It is empty only for a run whose workflow declares no inspection
+    and which recorded no decision: such a run has nothing to account for, and
+    its report is byte for byte what it was before this section existed. Every
+    run under a workflow declaring an inspection gets the section, including
+    one whose inspection found nothing to route: a report that omitted the
+    account there would be indistinguishable from one written before the
+    account existed. A run under a workflow declaring none that did record a
+    decision gets the section with the decisions alone, and says nothing about
+    an inspection it did not make.
 
     Each finding is named by the slug it is filed under, because a count says
     which outcome was reached and not which defect reached it. The section
@@ -10877,11 +10900,16 @@ def _findings_account_section(account) -> str:
     briefs reached the queue: the report is written and committed before the
     filing runs, so a number here would be a claim about something that has
     not happened yet.
+
+    The decisions are the section's closing paragraphs, after everything it
+    said before they existed, so the section a run that recorded none renders
+    is unchanged and the decisions read as one block. They arrive already in
+    the order the account decided, and are rendered in it.
     """
-    if not account.inspected:
+    if not account.inspected and not account.decisions and not account.problem:
         return ""
     body: list[str] = []
-    if account.problem:
+    if account.problem and account.inspected:
         # Reported rather than raised: the account is a report, and a report
         # that stopped the completion report being written would be worse
         # than no account at all.
@@ -10890,7 +10918,16 @@ def _findings_account_section(account) -> str:
             f"derived: {account.problem}. events.log carries what each "
             f"inspection and each verdict of this run recorded."
         )
-    else:
+    elif account.problem:
+        # The same report for a run whose workflow declares no inspection,
+        # whose account is its decisions alone: worded so it says nothing
+        # about an inspection the run did not make.
+        body.append(
+            f"The account of the decisions this run made could not be "
+            f"derived: {account.problem}. events.log carries what each "
+            f"verdict of this run recorded."
+        )
+    elif account.inspected:
         if account.repaired:
             # No ground: a finding the run fixed was not declined, so there is
             # no reason for leaving it to report.
@@ -10931,6 +10968,10 @@ def _findings_account_section(account) -> str:
                 "This run's inspection found nothing to route to the story "
                 "and nothing to send on."
             )
+    # The decisions close the section whatever the workflow declares. An
+    # account that could not be derived carries none, so a run whose account
+    # failed says that and nothing more.
+    body.extend(_named_decisions(account.decisions))
     return "## Findings\n" + "\n\n".join(body) + "\n\n"
 
 
@@ -10957,6 +10998,68 @@ def _named_findings(findings, *, with_ground: bool = True) -> str:
     return "; ".join(named)
 
 
+def _named_decisions(decisions) -> list[str]:
+    """The decisions a run made on the developer's behalf, as the closing
+    paragraphs of the account: one sentence saying what follows and the order
+    it is in, then one paragraph per decision.
+
+    A decision's paragraph opens with the finding it was made for, by its
+    location, and the blast radius and confidence it was recorded with — the
+    two things the order is decided by, so a reader skimming the top sees why
+    a decision is there — and beneath that its question, its answer, the
+    source it cites and its rationale. A decision a later verification
+    rejected is marked rejected beside its levels and carries that
+    verification's reason on a line of its own, one per rejection; a decision
+    no verification rejected carries neither. No count is written.
+
+    Every value is the record's own words with runs of whitespace collapsed,
+    so a newline in a rationale cannot split one decision's paragraph in two,
+    and a value the record did not carry is said to be missing rather than
+    left blank. No decision renders nothing at all, which is what keeps the
+    report of a run that recorded none what it was.
+    """
+    if not decisions:
+        return []
+    paragraphs = [
+        "Decisions this run made on the developer's behalf where its approved "
+        "plan left a choice open, each resting on a source it cites. They are "
+        "listed costliest to get wrong first and, among decisions equally "
+        "costly, least sure first:"
+    ]
+    for one in decisions:
+        head = (f"- {_decision_text(one.finding)} — blast radius "
+                f"{_decision_text(one.blast_radius)}, confidence "
+                f"{_decision_text(one.confidence)}")
+        if one.rejections:
+            head += " — rejected"
+        lines = [
+            head,
+            f"  - Question: {_decision_text(one.question)}",
+            f"  - Answer: {_decision_text(one.answer)}",
+            f"  - Source: {_decision_text(one.source)}",
+            f"  - Rationale: {_decision_text(one.rationale)}",
+        ]
+        for reason in one.rejections:
+            said = " ".join(str(reason).split())
+            lines.append(
+                f"  - Rejected by the verification this repair returned to: "
+                f"{said}"
+                if said else
+                "  - Rejected by the verification this repair returned to, "
+                "which gave no reason"
+            )
+        paragraphs.append("\n".join(lines))
+    return paragraphs
+
+
+def _decision_text(value) -> str:
+    """One value of a decision as its paragraph shows it: the record's words
+    with whitespace collapsed, or a statement that the record carried none.
+    """
+    said = " ".join(str(value).split()) if value is not None else ""
+    return said or "none recorded"
+
+
 def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
               *, config: dict | None = None,
               harness_root: Path | None = None,
@@ -10976,13 +11079,16 @@ def _complete(run_dir: Path, state: RunState, story: dict, target_root: Path,
         "Review the branch and merge it when you accept the story."
         + (f" Also: {past_bound}." if past_bound else "")
     )
-    # What became of every problem this run found in its own work. Derived
-    # beside the filing it must agree with, from the artifacts the run
-    # directory already holds, and guarded there — the section below renders
-    # whatever it returns, and a derivation that could not be made renders as
-    # a sentence saying so, because the completion report is a required
-    # artifact of every completed run and nothing added to it may stop it
-    # being written.
+    # What became of every problem this run found in its own work, and every
+    # decision it made on the developer's behalf. Derived beside the filing it
+    # must agree with, from what the run directory already holds — the
+    # decisions read through the same projection the decision log is written
+    # by — and guarded there: the section below renders whatever it returns,
+    # and a derivation that could not be made renders as a sentence saying
+    # so, because the completion report is a required artifact of every
+    # completed run and nothing added to it may stop it being written. A run
+    # whose workflow declares no inspection gets the section only where it
+    # recorded a decision.
     account = story_inspection.account_for_the_report(run_dir, stages or [])
     report = (
         f"# {state.story_id} Completion Report\n\n"
