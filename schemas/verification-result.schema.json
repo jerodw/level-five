@@ -94,6 +94,40 @@
           "category": {
             "type": "string",
             "description": "The retry category that owns the prose being corrected, spelled exactly as the workflow's retry_routing table declares it. The field introduces no new vocabulary and it does not choose where the pass goes: the entry stage comes off the workflow's own correction_pass declaration, so a pass enters at the same stage whatever category a finding carries. What the category still does is name the kind of prose, and it is still required and still checked against that table — one the workflow does not declare escalates the run naming the categories it does, with the same strictness an unrecognised retry_target gets."
+          },
+          "classification": {
+            "type": "object",
+            "description": "Optional, and asked for on every finding you raise yourself — one whose location names no slug the pre-stage inspection routed to this story. The judgements a brief needs, which only you can make: if the run leaves this finding unfixed — a bound refuses a file of its fix, its decision is rejected, no pass is left to run it, or a correction pass postpones it and the verification it returns to declines it or leaves it unanswered — the coordinator files it once at the run's completion as a brief built from these words, the finding, the correction, the path, why the run left it and the run's workflow, through the one filing call every brief goes through. A finding of your own left without a usable classification is not filed with values the coordinator made up: it is dropped, and the drop is named with its reason in the line the run writes when it completes and in the completion report. Read only if the run leaves the finding; a finding the run fixes is filed nowhere whatever it carries. The vocabulary is a brief's own, as schemas/story-brief.schema.json declares it, and a test holds the two equal. Presence-as-signal on the terms the fields beside it record, and no property is required here: a classification missing a property is read as no classification, which costs only the brief and never the verdict. A value outside a brief's vocabulary is not that: the category, severity, confidence and effort are held to it by the enums below, so a value no brief declares there — the retry category written into category, for instance — makes the whole verdict invalid, and the run stops as it does for any invalid verdict.",
+            "properties": {
+              "slug": {
+                "type": "string",
+                "description": "The slug of your own the finding's location names, in the form a brief's slug takes. It is what the finding is followed by across the verifications of an attempt and what its brief is filed under; a finding of your own carrying none is followed by its location alone and has nothing to be filed under."
+              },
+              "title": {
+                "type": "string",
+                "description": "One line stating the behaviour the finished work produces, in the present tense and as though it already held, as a brief's title does."
+              },
+              "category": {
+                "type": "string",
+                "enum": ["standards-drift", "docs-drift", "cross-path-parity", "structural-duplication", "correctness", "robustness", "complexity", "coverage-gap", "security", "performance", "feature", "refactor"],
+                "description": "The kind of work, in a brief's category vocabulary. Not the retry category beside it, which names the stage that owns the file."
+              },
+              "severity": {
+                "type": "integer",
+                "enum": [1, 2, 3],
+                "description": "How much the work matters, with 3 the highest, on a brief's severity scale."
+              },
+              "confidence": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "How sure you are of the judgement the finding makes, on a brief's confidence scale."
+              },
+              "effort": {
+                "type": "string",
+                "enum": ["S", "M", "L"],
+                "description": "Roughly how big the work is, on a brief's effort scale."
+              }
+            }
           }
         }
       }
@@ -151,7 +185,7 @@
           },
           "decision": {
             "type": "object",
-            "description": "Optional. The choice this fix requires that the approved plan does not make, made here because an existing source settles it — a repository standard, a configured architecture document, or the way this codebase already solves the same problem. A choice the plan does not make and no source settles is declined and filed rather than decided, and a fix that contradicts or is barred by something the plan does say is declined and filed too, because it wants the plan changed rather than a decision made. A fix to the words alone carries no decision, so one that needs such a choice is declined and filed as well. A decision may add to or refine what was approved and never remove any of it. The coordinator records each decision a routed repair pass carries in the decision log under the story's segment of the history directory, where a reviewer can check it after the run directory is gone, and hands it to the verification that pass returns to, which may reject it in rejected_decisions. Its presence is the signal, on the presence-as-signal terms the fields beside it record. Any repairable finding may carry one, a finding you raised yourself as much as one routed to this story — a decided finding you raised yourself names a slug of your own in its location, distinct from every routed slug, so the verification the pass returns to can name it in rejected_decisions — and it spends the repair pass allowance every repairable finding spends and nothing more. source is deliberately absent from this object's required list, and the reason is the point of it: a decision whose source is absent or records no words is refused by the coordinator — the finding and every finding sharing its routed slug leave the pass, the refusal is said in the run's events, and a routed finding is declined with the refusal as its ground and filed at the run's completion — rather than refused as a malformed verdict and asked for again, which would invite a source written to satisfy a validator. Nothing routes on confidence or blast_radius: they are recorded so a reviewer can read the risky decisions first.",
+            "description": "Optional. The choice this fix requires that the approved plan does not make, made here because an existing source settles it — a repository standard, a configured architecture document, or the way this codebase already solves the same problem. A choice the plan does not make and no source settles is declined and filed rather than decided, and a fix that contradicts or is barred by something the plan does say is declined and filed too, because it wants the plan changed rather than a decision made. A fix to the words alone carries no decision, so one that needs such a choice is declined and filed as well. A decision may add to or refine what was approved and never remove any of it. The coordinator records each decision a routed repair pass carries in the decision log under the story's segment of the history directory, where a reviewer can check it after the run directory is gone, and hands it to the verification that pass returns to, which may reject it in rejected_decisions. Its presence is the signal, on the presence-as-signal terms the fields beside it record. Any repairable finding may carry one, a finding you raised yourself as much as one routed to this story — a decided finding you raised yourself names a slug of your own in its location, distinct from every routed slug, so the verification the pass returns to can name it in rejected_decisions — and it spends the repair pass allowance every repairable finding spends and nothing more. source is deliberately absent from this object's required list, and the reason is the point of it: a decision whose source is absent or records no words is refused by the coordinator — the finding and every finding sharing its routed slug leave the pass, the refusal is said in the run's events, and the finding is left with the refusal as its ground and filed at the run's completion unless a later verification of the attempt names it in an entry the coordinator accepts, which decides it as for any left finding — rather than refused as a malformed verdict and asked for again, which would invite a source written to satisfy a validator. Nothing routes on confidence or blast_radius: they are recorded so a reviewer can read the risky decisions first.",
             "required": ["question", "answer", "rationale", "confidence", "blast_radius"],
             "properties": {
               "question": {
@@ -164,7 +198,7 @@
               },
               "source": {
                 "type": "string",
-                "description": "The existing source that settles the question, named so a reviewer can open it: a repository standard, a configured architecture document, or the place in this codebase that already solves the same problem, with the file and the line or passage. A decision naming no source is refused by the coordinator and its finding filed, so this is the field the decision stands on."
+                "description": "The existing source that settles the question, named so a reviewer can open it: a repository standard, a configured architecture document, or the place in this codebase that already solves the same problem, with the file and the line or passage. A decision naming no source is refused by the coordinator and its finding left, to be filed at the run's completion unless a later verification of the attempt names it in an accepted entry, so this is the field the decision stands on."
               },
               "rationale": {
                 "type": "string",
@@ -181,13 +215,47 @@
                 "description": "How costly a wrong answer would be to undo: low where reverting the change touches the fix alone, high where later work would come to lean on it. Recorded for the reviewer and routed on by nothing."
               }
             }
+          },
+          "classification": {
+            "type": "object",
+            "description": "Optional, and asked for on every finding you raise yourself — one whose location names no slug the pre-stage inspection routed to this story. The judgements a brief needs, which only you can make: if the run leaves this finding unfixed — a bound refuses a file of its fix, its decision is rejected, no pass is left to run it, or a correction pass postpones it and the verification it returns to declines it or leaves it unanswered — the coordinator files it once at the run's completion as a brief built from these words, the finding, the correction, the path, why the run left it and the run's workflow, through the one filing call every brief goes through. A finding of your own left without a usable classification is not filed with values the coordinator made up: it is dropped, and the drop is named with its reason in the line the run writes when it completes and in the completion report. Read only if the run leaves the finding; a finding the run fixes is filed nowhere whatever it carries. The vocabulary is a brief's own, as schemas/story-brief.schema.json declares it, and a test holds the two equal. Presence-as-signal on the terms the fields beside it record, and no property is required here: a classification missing a property is read as no classification, which costs only the brief and never the verdict. A value outside a brief's vocabulary is not that: the category, severity, confidence and effort are held to it by the enums below, so a value no brief declares there — the retry category written into category, for instance — makes the whole verdict invalid, and the run stops as it does for any invalid verdict.",
+            "properties": {
+              "slug": {
+                "type": "string",
+                "description": "The slug of your own the finding's location names, in the form a brief's slug takes. It is what the finding is followed by across the verifications of an attempt and what its brief is filed under; a finding of your own carrying none is followed by its location alone and has nothing to be filed under."
+              },
+              "title": {
+                "type": "string",
+                "description": "One line stating the behaviour the finished work produces, in the present tense and as though it already held, as a brief's title does."
+              },
+              "category": {
+                "type": "string",
+                "enum": ["standards-drift", "docs-drift", "cross-path-parity", "structural-duplication", "correctness", "robustness", "complexity", "coverage-gap", "security", "performance", "feature", "refactor"],
+                "description": "The kind of work, in a brief's category vocabulary. Not the retry category beside it, which names the stage that owns the file."
+              },
+              "severity": {
+                "type": "integer",
+                "enum": [1, 2, 3],
+                "description": "How much the work matters, with 3 the highest, on a brief's severity scale."
+              },
+              "confidence": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "How sure you are of the judgement the finding makes, on a brief's confidence scale."
+              },
+              "effort": {
+                "type": "string",
+                "enum": ["S", "M", "L"],
+                "description": "Roughly how big the work is, on a brief's effort scale."
+              }
+            }
           }
         }
       }
     },
     "rejected_decisions": {
       "type": "array",
-      "description": "The decisions the repair pass this verification returned from carried that you reject, each named by the slug its finding's location carries, with the reason. Judge each decision that pass record carries: whether the source says what the decision says, whether a source settles the question at all, and whether the decision takes anything away from what was approved. Reject one that fails any of these here, and undo its change with the routes you already have — a repairable finding restoring the files where a repair pass remains, a failed verdict and a retry where none does: the coordinator records the rejection and does not undo the change itself. A rejection is matched only against the decisions the live repair pass record carries, so a decision an earlier pass made cannot be rejected by a later verification. The coordinator records each rejection in the decision log as a record of its own, beside the decision's record, which is never rewritten, and a routed finding whose decision is rejected is left by the run with the rejection as its ground and filed at the run's completion. A rejection naming no decision that pass carried changes nothing and is said in the run's events. It is honoured on a failing verdict as well as a passing one. Presence-as-signal on the terms every sibling field records, and optional because most verdicts reject nothing.",
+      "description": "The decisions the repair pass this verification returned from carried that you reject, each named by the slug its finding's location carries, with the reason. Judge each decision that pass record carries: whether the source says what the decision says, whether a source settles the question at all, and whether the decision takes anything away from what was approved. Reject one that fails any of these here, and undo its change with the routes you already have — a repairable finding restoring the files where a repair pass remains, a failed verdict and a retry where none does: the coordinator records the rejection and does not undo the change itself. A rejection is matched only against the decisions the live repair pass record carries, so a decision an earlier pass made cannot be rejected by a later verification. The coordinator records each rejection in the decision log as a record of its own, beside the decision's record, which is never rewritten, and a finding whose decision is rejected — routed to this story or raised by you — is left by the run with the rejection as its ground. It comes back only under a decision: where this verification or a later one in the same attempt repairs it again in a repairable finding that names it and carries a decision the coordinator accepts, it is counted as acted on; a repairable finding naming it with no decision is read as the restoring asked for here, and leaves it left, to be filed at the run's completion. A rejection naming no decision that pass carried changes nothing and is said in the run's events. It is honoured on a failing verdict as well as a passing one. Presence-as-signal on the terms every sibling field records, and optional because most verdicts reject nothing.",
       "items": {
         "type": "object",
         "required": ["slug", "reason"],
@@ -198,14 +266,14 @@
           },
           "reason": {
             "type": "string",
-            "description": "Why the decision is rejected: the source does not say what the decision says, no source settles the question, or the decision takes something away from what was approved. Recorded verbatim beside the decision and given as the ground the finding is left on."
+            "description": "Why the decision is rejected: the source does not say what the decision says, no source settles the question, or the decision takes something away from what was approved. Recorded verbatim beside the decision and given as the ground the finding is left on, which it stays on unless a later repair in the same attempt names it under a decision the coordinator accepts."
           }
         }
       }
     },
     "declined_findings": {
       "type": "array",
-      "description": "The findings routed to this story — the pre-stage inspection's findings about the story's own change — that the verifier declined to correct or repair, each with the reason. The default is that a routed finding is corrected or repaired unless there is a reason not to, and this is where the reason goes: an entry names the routed finding's slug and says why it was left. Its presence is the signal, on the terms retry_target, unfinishable_by_retry, correctable_findings and repairable_findings already record: this validator subset has no if/then and no dependentRequired, so presence-as-signal is the only shape with no state where the signal is set and the payload is missing. Nothing routes on it. An entry carrying a reason alone changes nothing about what is filed: the coordinator's accounting after the verdict still files, at the run's completion, every routed finding whose slug no blocking issue, correctable finding or repairable finding names, whether or not an entry here declines it with a reason — what such an entry changes is that the accounting records the reason beside the slug rather than recording that none was given. An entry that also carries not_worth_filing is the one exception, and it is a drop rather than a decline: nothing is filed for that finding, and the accounting and the completion line say it was dropped and what the verdict said about it. It is optional because most verdicts decline nothing, and a verdict carrying none is accounted exactly as before, with every routed finding the verdict left recorded as declined without a reason.",
+      "description": "The findings routed to this story — the pre-stage inspection's findings about the story's own change — that the verifier declined to correct or repair, each with the reason. The default is that a routed finding is corrected or repaired unless there is a reason not to, and this is where the reason goes: an entry names the routed finding's slug and says why it was left. Its presence is the signal, on the terms retry_target, unfinishable_by_retry, correctable_findings and repairable_findings already record: this validator subset has no if/then and no dependentRequired, so presence-as-signal is the only shape with no state where the signal is set and the payload is missing. Nothing routes on it but one answer: on the verification a correction pass returns to, naming a repair that pass postponed here is what answers it and keeps the coordinator from sending that verification back, and nothing else routes on the array. An entry carrying a reason alone changes nothing about what is filed: the latest verification of the attempt that deals with a finding decides what became of it, and the coordinator's accounting files at the run's completion every routed finding that verification left, whether or not an entry here declines it with a reason — what such an entry changes is that the accounting records the reason beside the slug rather than recording that none was given. A verification that names a finding in a blocking issue, a correctable finding or a repairable finding the coordinator accepts counts it as acted on even where an earlier verdict of the attempt left it, except where the coordinator refused a file of its fix — it then counts only once a later verification names it in an accepted entry for each refused file — or rejected the decision its repair rested on, which only a corrected decision undoes; a verification that names nothing about a finding keeps what was decided before. On the verification a correction pass returns to, a repair that pass postponed is declined by naming its slug here, which leaves it on the terms any decline takes; one neither asked for again nor named here is unanswered, and the coordinator sends that verification back once to answer it. An entry that also carries not_worth_filing is the one exception, and it is a drop rather than a decline: nothing is filed for that finding, and the accounting and the completion line say it was dropped and what the verdict said about it. It is optional because most verdicts decline nothing, and a verdict carrying none is accounted exactly as before, with every routed finding the verdict left recorded as declined without a reason.",
       "items": {
         "type": "object",
         "required": ["slug", "reason"],

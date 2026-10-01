@@ -2294,6 +2294,22 @@ DECLARED_LIVE_ARTIFACT_READERS = {
         "beside the other inspection keys. Neither is a claim a fixture "
         "configuration could make, because both are claims about the files "
         "this repository ships",
+    "test_a_finding_is_reported_fixed_exactly_when_a_check_fixed_it.py":
+        "every run it drives goes through a workflow it derives from the "
+        "sibling modules' built ones and a target it constructs, because the "
+        "passes, their allowances, the judging stage's re-run budgets and the "
+        "artifact names are inputs to what becomes of a finding. What it "
+        "resolves live is what its criteria about this harness's own text are "
+        "about and nothing else: every prompt template and every schema under "
+        "prompts/ and schemas/, because the claim is that none of them still "
+        "states the rule the story superseded; and the stage declaring an "
+        "inspection in each definition under workflows/, because the claim is "
+        "that both shipped workflows record why each pass budget and the "
+        "send-back budget is what it is, without any number being held. A "
+        "fixture would say back only what the module had written into it. "
+        "Each absence it asserts of those texts is controlled by the same "
+        "reading over a shipped text with the superseded sentence planted "
+        "back into it",
     "test_a_finding_missing_only_its_workflow_is_filed.py":
         "every inspection it drives runs against a mirrored harness root it "
         "builds and a target it configures, because which workflows exist and "
@@ -3443,6 +3459,28 @@ DECLARED_HISTORY_READERS = {
         "which the same comparison reports. Everything else in the module "
         "drives runs against a workflow and a target built under tmp_path, or "
         "reads the shipped prompts and schemas as its subject",
+    "test_a_finding_is_reported_fixed_exactly_when_a_check_fixed_it.py":
+        "three of its assertions are claims about this repository's own change "
+        "and nothing else: that the story deciding a finding by the latest "
+        "check of its attempt left the writing stages' and the Inspector's "
+        "prompts, the assistant's prompt, the execution rules, the filing in "
+        "orchestration/inspection.py, the brief schema and the module holding "
+        "the decisions' order alone; that the two history schemas declare "
+        "exactly the event kinds and fields they declared, whatever their "
+        "descriptions now say; and that the completion report's layout and "
+        "its decisions part read as they did. No constructed repository can "
+        "say what this story did not touch or what this deployment declared "
+        "before it, and each comparison is made through the shared helpers "
+        "over the module's own story range rather than against HEAD, which "
+        "would go vacuously green the moment the working tree is committed. "
+        "Each has its control beside it: a pair of histories built with "
+        "conftest.constructed_story, one story leaving those paths alone and "
+        "one editing every one of them; the baseline history schema with a "
+        "kind and a field added, which the same comparison reports while a "
+        "rewritten description it does not; and the baseline report text with "
+        "one word of a clause changed. Everything else in the module drives "
+        "runs against a workflow and a target built under tmp_path, or reads "
+        "the shipped prompts, schemas and workflows as its subject",
     "test_a_repair_reaches_outside_the_storys_scope_within_bounds.py":
         "one of its criteria is a claim about this repository's own change and "
         "nothing else: that the story letting a repair reach outside a story's "
@@ -3542,10 +3580,15 @@ DECLARED_HISTORY_READERS = {
         "of both definitions is byte-identical to it, and that the planner "
         "template and inspection.py at that baseline still carried the "
         "instruction, the private reader and none of the backstop — the "
-        "controls for the absences the module asserts today. Each is a claim "
-        "about this repository's own change, which no constructed repository "
-        "can answer; the control that the resolution still reports a story "
-        "that touched those prompts is built under tmp_path",
+        "controls for the absences the module asserts today. It holds "
+        "story-172's and story-174's claims about the definitions the same "
+        "way, each across that story's own range, resolved through "
+        "conftest's shared resolution by the record the story's run wrote "
+        "when it ended rather than against today's files, which every later "
+        "change to a configured number would move. Each is a claim about "
+        "this repository's own change, which no constructed repository can "
+        "answer; the control that the resolution still reports a story that "
+        "touched those prompts is built under tmp_path",
     "test_planning_declares_how_hard_it_thinks.py":
         "one of its criteria is a claim about this repository's own change and "
         "nothing else: that the story stating how hard planning thinks left "

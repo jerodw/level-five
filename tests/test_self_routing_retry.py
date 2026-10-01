@@ -682,7 +682,12 @@ FAILURE_IDS = [name for name, _ in FAILURES]
 #: coordinator's own before-and-after comparison of the target tree shows the
 #: stage changed is a fact computed from what the stage produced rather than
 #: an output it failed to produce at all, so it has no plan here and is driven
-#: by the module validating that check.
+#: by the module validating that check. story-221 added another on the same
+#: terms: a verification a correction pass returned to that answered none of
+#: the repairs the pass postponed is a fact computed from the slugs its verdict
+#: names rather than an output it failed to produce, so it has no plan here
+#: and is driven by
+#: tests/test_a_finding_is_reported_fixed_exactly_when_a_check_fixed_it.py.
 #:
 #: story-066 added a third — a suite the coordinator ran after the stage's turn
 #: ended and that exited non-zero — and story-137 removed it again, because a
@@ -692,6 +697,7 @@ FAILURE_IDS = [name for name, _ in FAILURES]
 #: this list is compared against.
 NON_MECHANICAL_FAILURES = [
     "defective-retry-guidance", "incomplete-changed-files",
+    "unanswered-postponed-repairs",
 ]
 
 

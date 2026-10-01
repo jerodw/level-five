@@ -140,6 +140,7 @@ import ast
 import contextlib
 import fcntl
 import json
+import re
 import shlex
 import signal
 import os
@@ -2400,7 +2401,20 @@ def test_a_configuration_still_carrying_the_old_key_is_refused_naming_both_keys(
     assert story_coordinator.suite_turn_wait_problems({OLD_KEY: "an hour"}) == []
 
 
+def configured_value(text: str) -> str | None:
+    """The value a configuration file's text sets the key to, read off the
+    line that begins with it, or None where no line sets it. Read rather than
+    compared to a number, because the number is the deployment's to choose."""
+    line = re.search(rf"^{re.escape(KEY)}:\s*(\S+)", text, re.MULTILINE)
+    return line.group(1) if line else None
+
+
 def test_the_key_is_declared_and_set_in_both_configurations():
+    """Each configuration sets the key to a value the pre-flight accepts,
+    whatever value that is: the number is configuration, so it is read where
+    it is declared rather than held here. That the pre-flight refuses what it
+    should is shown by the refusal test above, which is what keeps the
+    acceptance assertions below from being vacuous."""
     schema = schema_validator.load_schema("harness-config")
     assert KEY in schema["properties"]
     assert OLD_KEY not in schema["properties"]
@@ -2410,14 +2424,22 @@ def test_the_key_is_declared_and_set_in_both_configurations():
     assert "sixty minutes" in description and "fallback" in description
     assert "pre-flight" in description
     assert "takes the turn" in description
-    assert conftest.repository_config()[KEY] == "5"
+    assert KEY in conftest.repository_config()
+    assert story_coordinator.suite_turn_wait_problems(
+        {KEY: conftest.repository_config()[KEY]}) == []
     assert OLD_KEY not in conftest.repository_config()
     template = (REPO_ROOT / "templates" / "config.yaml").read_text(encoding="utf-8")
-    assert f"{KEY}: 5" in template and OLD_KEY not in template
+    assert configured_value(template) is not None
+    assert story_coordinator.suite_turn_wait_problems(
+        {KEY: configured_value(template)}) == []
+    assert OLD_KEY not in template
     assert "counts suite runs" in template
     assert "duration" in template and "core count" in template
     shipped = (REPO_ROOT / ".harness" / "config.yaml").read_text(encoding="utf-8")
-    assert f"{KEY}: 5" in shipped and OLD_KEY not in shipped
+    assert configured_value(shipped) is not None
+    assert story_coordinator.suite_turn_wait_problems(
+        {KEY: configured_value(shipped)}) == []
+    assert OLD_KEY not in shipped
     assert "counts suite runs" in shipped
     assert "duration" in shipped and "core count" in shipped
 

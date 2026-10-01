@@ -744,9 +744,13 @@ def test_the_amendment_moves_the_slug_with_the_refusal_as_its_reason(accounted):
     (entry,) = recorded["declined"]
     # `abandoned` false: what moved this slug was a refused scope extension
     # and not a spent pass allowance, and story-213's marker is what tells the
-    # two apart on an entry the amendment wrote.
+    # two apart on an entry the amendment wrote. story-221's `refused_files`
+    # is empty because this call names the refused slug alone and no file a
+    # bound refused of it, and `decision_rejected` is false because no
+    # decision was rejected.
     assert entry == {"slug": SLUG, "reason_given": True, "reason": refusal,
-                     "dropped": False, "abandoned": False}
+                     "dropped": False, "abandoned": False,
+                     "refused_files": [], "decision_rejected": False}
     assert recorded["declined_with_reason"] == 1
     assert recorded["declined_without_reason"] == 0
     assert (recorded["filed"], recorded["dropped"]) == (0, 0)
@@ -777,8 +781,11 @@ def test_the_amendment_records_the_slug_declined_without_a_reason_where_none_is_
     # `dropped` false: a slug moved here by a refused scope extension is
     # left for the backlog and never dropped, whatever else the verdict said.
     # `abandoned` false for the reason above it: no allowance was spent here.
+    # `refused_files` and `decision_rejected` empty and false for the reason
+    # the test above gives.
     assert entry == {"slug": SLUG, "reason_given": False, "dropped": False,
-                     "abandoned": False}
+                     "abandoned": False, "refused_files": [],
+                     "decision_rejected": False}
     assert recorded["declined_without_reason"] == 1
     assert "records no reason" in accounting_lines(accounted)[1]
 
@@ -952,7 +959,8 @@ def test_the_amendment_keeps_a_slug_the_first_verdict_left_beside_the_moved_one(
     first_entry = declined_by_slug(recorded)[OTHER_SLUG]
     assert first_entry == {"slug": OTHER_SLUG, "reason_given": True,
                            "reason": verifier_reason, "dropped": False,
-                           "abandoned": False}
+                           "abandoned": False, "refused_files": [],
+                           "decision_rejected": False}
 
     handed, named = refusing(REFUSED_ON_RETURN)
     refusal = handed["declined_findings"][-1]["reason"]
@@ -965,7 +973,8 @@ def test_the_amendment_keeps_a_slug_the_first_verdict_left_beside_the_moved_one(
     assert declined[OTHER_SLUG] == first_entry
     assert declined[SLUG] == {"slug": SLUG, "reason_given": True,
                               "reason": refusal, "dropped": False,
-                              "abandoned": False}
+                              "abandoned": False, "refused_files": [],
+                              "decision_rejected": False}
     assert amended["declined_with_reason"] == 2
     assert amended["declined_without_reason"] == 0
     assert story_inspection.remainder_findings(

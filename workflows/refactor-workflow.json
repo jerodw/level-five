@@ -55,6 +55,8 @@
       "prompt": "refactor-verifier.md",
       "may_not_run_suite": true,
       "max_self_routes": 1,
+      "max_bookkeeping_self_routes": 2,
+      "max_bookkeeping_self_routes_reason": "Two, spent on the record-keeping causes and on one cause of this stage's own: a verification a correction pass returned to that left a repair the pass postponed unanswered, which the coordinator sends back once, in place, naming the unanswered repairs, so the run settles the repair rather than filing it. It is a budget of its own rather than a share of max_self_routes so neither a send-back nor a forgotten verdict spends the one re-run kept for a crashed invocation, and it is two because of what one entry of the verifier can spend: both self-route counts are zeroed whenever the verifier is entered other than by a self-route, so however many correction passes a run takes, an entry spends at most the one send-back the coordinator makes for it and one record-keeping re-run beside it, for a verdict that is missing or a previous attempt's. A send-back this budget has no room for is not an escalation: the unanswered repair is treated as declined without a reason and the run goes on. The number guards against runaway processing rather than measuring the work. Nothing reads this key; it records the judgement where a reader of the definition meets the budget.",
       "max_execution_cost_usd": 30,
       "max_execution_cost_usd_reason": "This workflow has no cost corpus of its own yet, so it inherits story-workflow's verifier ceiling until it has one; that definition's reason string carries the derivation the figure came from. Nothing reads this key; it records the judgement where a reader of the definition meets the number.",
       "effort": "max",
@@ -76,13 +78,14 @@
       },
       "correction_pass": {
         "result": "correction-pass.json",
-        "budget": 1,
+        "budget": 5,
+        "budget_reason": "Five, raised from one by story-221, and the number guards against runaway processing rather than measuring the work. A pass corrects the words its findings name, and since story-221 more of what a verification finds is finished inside the run rather than filed: the verification a pass returns to must answer every repair the pass postponed, a later verification may correct a finding an earlier one passed over, and a request the run has no pass left for is abandoned and filed, which is the outcome that story exists to prevent. Five is a ceiling on a run that keeps finding more, not an estimate of how many passes a run needs, and the run's spending limit still stops one that does. A pass changes prose and never behaviour, so no pass can move what any test asserts. Nothing reads this key; it records the judgement where a reader of the definition meets the budget.",
         "stage": "documenter"
       },
       "repair_pass": {
         "result": "repair-pass.json",
-        "budget": 2,
-        "budget_reason": "Two rather than one, on the correction pass's arithmetic: a pass fixes the findings a verification raises, and the verification after it can find one the first findings did not reach, and a separate story to carry a leftover finding costs more than a second pass in the run that found it. Bounded at all because a repair pass may change behaviour, which is why it carries the findings and no guidance, routes only after the clean-clone check on the routing verdict has passed, and returns to a verification that runs the check again on the repaired tree. The stage comes off the retry_routing table below rather than off this declaration, so a finding is fixed by the stage that owns its file. Nothing reads this key; it records the judgement where a reader of the definition meets the budget."
+        "budget": 5,
+        "budget_reason": "Five, raised from two by story-221, and the number guards against runaway processing rather than measuring the work. Since story-221 more of the fixing stays inside the run: a finding whose decision a verification rejected is repaired again under a corrected decision, a finding an earlier verification passed over is repaired when a later one names it, and a repair a correction pass postponed is asked for again on the verification that pass returns to. A request the run has no pass left for is abandoned and filed, which is the outcome that story exists to prevent. Five is a ceiling on a run that keeps finding more, not an estimate of how many passes a run needs, and the run's spending limit still stops one that does. Bounded at all because a repair pass may change behaviour, which is why it carries the findings and no guidance, routes only after the clean-clone check on the routing verdict has passed, and returns to a verification that runs the check again on the repaired tree. The stage comes off the retry_routing table below rather than off this declaration, so a finding is fixed by the stage that owns its file. Nothing reads this key; it records the judgement where a reader of the definition meets the budget."
       },
       "on_failure": {
         "retry_routing": {

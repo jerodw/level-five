@@ -2194,7 +2194,9 @@ def test_one_attempt_is_accounted_once_across_a_correction_pass(
     returns to — and the attempt is accounted exactly once, at the first
     verdict rather than again on the second, with one accounting artifact,
     one event and one cross-run record for the attempt; the routed finding is
-    then filed exactly once, at completion."""
+    then filed exactly once, at completion. Since story-221 a later verdict
+    of the attempt can move a finding, and it is because the second verdict
+    here says nothing about any finding that it writes nothing."""
     run = driven(findings=[OWN_FINDING],
                  verdicts=[passing_with(CORRECTABLE_FINDING), PASS])
 
@@ -2506,16 +2508,24 @@ def test_the_accounting_offers_no_way_to_stop_a_run():
     # is the third: the verification a repair pass returned to rejected the
     # decision the repair rested on — again an input to the split, carrying
     # the ground the finding is left on, and no way to stop anything.
+    # story-221 adds the rest of what the one rule reads on every verdict of an
+    # attempt: `refused_files`, the files a bound refused of each finding's
+    # fix, which stay owed; `decided`, the findings named in an accepted
+    # repairable finding carrying a decision, which is what brings back a
+    # rejected one; `postponed`, the postponed repairs the returning
+    # verification declined or left unanswered; and `own_findings`, the
+    # findings the checking stage raised itself, as it wrote them. Each is an
+    # input to the rule and none is a way to stop anything.
     assert list(parameters) == [
         "run_dir", "target_root", "config", "harness_root", "story_id",
         "artifact", "attempt", "verdict", "refused_slugs", "abandoned",
-        "rejected"]
+        "rejected", "refused_files", "decided", "postponed", "own_findings"]
     # No stage list, because it inspects nothing, and no runner, because it
     # invokes nothing — the two the post-story sibling has that this does not.
     assert set(sibling) - set(parameters) == {"stages", "runner"}
     assert set(parameters) - set(sibling) == {
         "artifact", "attempt", "verdict", "refused_slugs", "abandoned",
-        "rejected"}
+        "rejected", "refused_files", "decided", "postponed", "own_findings"}
 
 
 @pytest.mark.parametrize("text", ["", "not json", "[1, 2]"],
@@ -2555,6 +2565,11 @@ def test_a_failure_inside_the_accounting_changes_no_routing_and_no_status(
     The working run is driven first, so the fault is installed once and is
     undone by the fixture's own teardown rather than by hand — an undo by hand
     would also undo the autouse guard on the agent runner.
+
+    The fault is installed in `_decide`, the one rule the accounting applies
+    to every finding on every verdict since story-221, rather than in
+    `acted_on_by`, which the accounting no longer calls: a fault there would
+    be a fault in nothing this run reaches.
     """
     working = drive(build_target(tmp_path / "working"), harness, tmp_path,
                     findings=[OWN_FINDING], verdicts=[verdict, PASS],
@@ -2566,7 +2581,7 @@ def test_a_failure_inside_the_accounting_changes_no_routing_and_no_status(
     def cannot_reach(*args, **keywords):
         raise RuntimeError("MARKER-FAULT the queue cannot be reached")
 
-    monkeypatch.setattr(story_inspection, "acted_on_by", cannot_reach)
+    monkeypatch.setattr(story_inspection, "_decide", cannot_reach)
     faulted = drive(build_target(tmp_path / "faulted"), harness, tmp_path,
                     findings=[OWN_FINDING], verdicts=[verdict, PASS],
                     name="faulted-journal")

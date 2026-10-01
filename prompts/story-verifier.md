@@ -234,17 +234,25 @@ may reject it. A decision may add to or refine what was approved and never
 remove any of it, and a choice no source settles is declined rather than
 decided: a decision naming no source is refused, every file of its fix leaves
 the pass, and a routed finding is declined with the refusal as its ground.
-A decided finding you raised yourself names a slug of your own in its
-location, distinct from every slug routed to this story, as a fix spanning
-files already does, so the verification the pass returns to can name its
-decision.
+Every finding you raise yourself, decided or not, names a slug of your own in
+its location, distinct from every slug routed to this story, as a fix
+spanning files already does, and carries a `classification` giving the
+judgements a brief needs — that slug, a one-line title stating the finished
+behaviour, and a brief's category, severity, confidence and effort — because
+if the run leaves it unfixed it is filed as a brief from those words, one
+left without them is dropped rather than filed, and the slug is how the
+verification the pass returns to can name its decision.
 A verdict carrying both kinds — correctable findings and
 repairable findings together — is routed as a correction pass, the cheaper
-one, and the repairable findings are deferred rather than lost: they are
-named in the record the returning verification reads, under
-deferred_repairable_findings, so raise them again there: the returning
-verification is the one the clean-clone check runs on, and a repair pass
-routed from it is built on the tree that check verified. A repair pass is
+one, and the repairable findings are deferred: they are named in the record
+the returning verification reads, under deferred_repairable_findings, and
+that verification must answer each of them — ask for it again in an entry
+naming it, or decline it by name in declined_findings with your reason. A
+returning verification that leaves one unanswered is sent back once to
+answer it, and a repair still unanswered after that is treated as declined
+without a reason and filed rather than fixed. The returning verification is
+the one the clean-clone check runs on, and a repair pass routed from it is
+built on the tree that check verified. A repair pass is
 routed only after
 the clean-clone check on your verdict has passed where the workflow declares
 one, because a repair may change behaviour and is built on a verified tree,
@@ -443,11 +451,17 @@ those are filed as briefs, which is where a backlog item belongs. When you
 raise a blocking issue, a correctable finding or a repairable finding from one
 of these findings, name that finding's `slug` in the entry's `location` beside
 the file. The slug is how the coordinator tells which of these you acted on:
-after your verdict, every finding here whose slug no entry names is
-filed as a brief at the run's completion, so declining one sends it to the
-backlog rather than losing it — and the accounting records, for each one
-left, the reason your declined_findings gave for its slug or that none was
-given, so a decline with no entry is recorded as silent. One left finding is
+after your verdict, every finding here that the latest verification of this
+attempt to deal with it left is filed as a brief at the run's completion, so
+declining one sends it to the backlog rather than losing it — and the
+accounting records, for each one left, the reason your declined_findings gave
+for its slug or that none was given, so a decline with no entry is recorded as
+silent. On a returning verification, naming a finding in an entry counts even
+where an earlier verdict of this attempt left it, so one passed over or
+declined before is acted on once you name it now; a finding part of whose fix
+the coordinator refused counts only once that very part is made, in an entry
+naming it for each refused file, and a finding you leave unnamed keeps what
+was decided before. One left finding is
 not filed: one your declined_findings dropped through not_worth_filing, which
 the harness drops rather than sending to the backlog, recording the drop and
 what you said about it. A finding you act on without naming its slug is filed
@@ -485,11 +499,15 @@ the decision takes anything away from what was approved. Reject one that fails
 any of these by naming the slug its finding's location carries — the routed
 slug, or the slug of your own a finding you raised yourself names there — with
 your reason, in rejected_decisions, whether your verdict passes or fails: the coordinator
-records the rejection beside the decision and sends a routed finding to the
-backlog with the rejection as its ground, and it does not undo the change
+records the rejection beside the decision and leaves the finding, routed or
+your own, with the rejection as its ground, and it does not undo the change
 itself. Undo it with the routes you already have — a repairable finding
 restoring the files the decision changed, or, where the run has no repair
-pass left to take, a failed verdict and a retry. Only the decisions this record
+pass left to take, a failed verdict and a retry. Restoring alone leaves the
+finding to be filed as a brief; to repair it again under a corrected choice,
+record a repairable finding naming it that carries a new `decision` the
+coordinator accepts, which counts it as acted on — a repairable finding naming
+it with no decision is read as the restoring and not as a fresh repair. Only the decisions this record
 carries can be rejected here. The clean-clone check runs again on this
 verification:
 {{repair_pass_result}}

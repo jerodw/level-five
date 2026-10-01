@@ -274,15 +274,9 @@ def before_the_numbered_steps(section: str) -> str:
 
 
 def raw_definition(name: str) -> dict:
-    """A shipped definition as the file holds it, tokens unresolved, so the
-    comparison against the base commit is byte-for-byte on each key."""
+    """A shipped definition as the file holds it, tokens unresolved, which is
+    what the assertions about what the statements say today read."""
     return json.loads((WORKFLOWS / f"{name}.json").read_text(encoding="utf-8"))
-
-
-def baseline_definition(name: str) -> dict:
-    return json.loads(repository_file_at(f"workflows/{name}.json",
-                                         validation_file=Path(__file__),
-                                         bound=BASELINE))
 
 
 def missing_standards(rendered: str, standards: dict[str, str]) -> set[str]:
@@ -2984,176 +2978,175 @@ def test_the_two_statements_name_the_confinement_from_opposite_sides():
         assert "may write" not in statement
 
 
+# --------------------------------------------------------------------------
+# What three stories changed in the shipped definitions, each read across that
+# story's own revisions
+#
+# story-171, story-172 and story-174 each claimed to have changed nothing in
+# the shipped definitions but their applies_when statements. Each claim is
+# held across the revisions that story started from and finished with, and
+# never against the definitions as they stand today: a definition's budgets,
+# ceilings and effort levels are configured values, and later stories have
+# moved them legitimately — story-209 declared the effort keys, the cost
+# ceilings have been re-derived since, and story-221 raised the pass budgets.
+# A comparison against the current file turned each of those decisions into a
+# red suite with nothing broken; one between a story's own revisions holds
+# exactly the claim that story made, and no later edit to a definition can
+# move it.
+#
+# story-171 is this module's own story. story-172 and story-174 wrote no
+# module of their own, so each range is found through the shared resolution
+# by the record the run wrote when it ended: the commit that first added the
+# story's copy of that log is where its run first ended — the completion, or
+# the escalation the resolution follows to the completion after it.
+# --------------------------------------------------------------------------
+
+
+#: The kind of the record a run writes when it ends, and the log the history
+#: declaration routes that kind to — read off the declaration rather than
+#: named, so this module writes no log filename of its own.
+ENDING_KIND = "story-completed"
+ENDING_LOG = next(
+    name for name, log in schema_validator.load_schema(
+        story_coordinator.CROSS_RUN_HISTORY_SCHEMA)["properties"].items()
+    if ENDING_KIND in log["items"]["properties"]["event"]["enum"])
+
+#: Each story whose claim this section holds, mapped to the definitions whose
+#: statement it changed. Every other definition the story left exactly as it
+#: found it.
+STATEMENT_STORIES = {
+    "story-171": SHIPPED_DEFINITIONS,
+    "story-172": ("refactor-workflow",),
+    "story-174": ("story-workflow",),
+}
+
+
+def ending_record(story_id: str) -> Path:
+    """The story's copy of the log its run's ending is written to, under the
+    history segment the harness writes it to, resolved through the
+    writer-side resolver rather than spelled."""
+    history = harness_config.history_dir(REPO_ROOT,
+                                         harness_config.load_config(REPO_ROOT))
+    return harness_config.history_segment(history, story_id) / ENDING_LOG
+
+
+def definition_text_at(name: str, story_id: str, bound: str) -> str:
+    """A shipped definition's text at one end of `story_id`'s own range,
+    through the shared resolution rather than as `HEAD` or the working tree."""
+    return repository_file_at(f"workflows/{name}.json",
+                              validation_file=ending_record(story_id),
+                              bound=bound)
+
+
+def definition_at(name: str, story_id: str, bound: str) -> dict:
+    return json.loads(definition_text_at(name, story_id, bound))
+
+
+def keys_changed(before: dict, after: dict) -> set[str]:
+    """The top-level keys of a definition that differ between two readings
+    of it, a key present in one alone included."""
+    return {key for key in set(before) | set(after)
+            if before.get(key) != after.get(key)}
+
+
+def test_story_171_is_this_modules_own_story():
+    """The premise of reading story-171's range by its record: it is the range
+    this module's own resolution answers with, so the two routes to it agree
+    rather than one of them being bounded at another story's commits."""
+    for bound in (BASELINE, ENDPOINT):
+        for name in SHIPPED_DEFINITIONS:
+            assert definition_text_at(name, "story-171", bound) == \
+                repository_file_at(f"workflows/{name}.json",
+                                   validation_file=Path(__file__), bound=bound)
+
+
 @pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
 def test_each_statement_extends_the_one_the_base_commit_carried(name):
-    """Extended rather than rewritten: what each said before is what it still
-    says first, and this is also the control for the byte-identity below —
-    the two reads are of different revisions, or this would not differ."""
-    before = baseline_definition(name)["applies_when"]
-    after = raw_definition(name)["applies_when"]
+    """Extended rather than rewritten, across story-171's own revisions: what
+    each said before is what it still said first when that story finished, and
+    this is also the control for the identity below — the two reads are of
+    different revisions, or this would not differ."""
+    before = definition_at(name, "story-171", BASELINE)["applies_when"]
+    after = definition_at(name, "story-171", ENDPOINT)["applies_when"]
     assert after != before
     assert after.startswith(before)
     assert isinstance(after, str)
 
 
-#: The keys story-209 declared on every stage of both definitions, and on each
-#: verifier's inspection block, so that every agent this harness runs says how
-#: hard it thinks. The comparisons below read the stages with these removed
-#: rather than dropping the stages from the comparison: what each assertion is
-#: about is that nothing *else* about a stage moved, and stripping exactly the
-#: two keys this story added leaves every other key of every stage still held
-#: byte for byte against the revision it is being compared with.
-EFFORT_KEYS = ("effort", "effort_reason")
-
-#: The money ceilings, which are re-derived from a fresh window of run records
-#: whenever the workload grows under them — most recently on 2026-09-28, by the
-#: commit that raised the implementer's per-invocation allowance and the run
-#: ceiling with it. The run ceiling and its reason are declared at the top
-#: level of both definitions and the per-invocation ceiling and its reason on
-#: every stage, so the strip reaches both levels.
-#:
-#: These are stripped from *both* sides of the comparisons below where the
-#: effort keys are stripped from one, and the asymmetry is what each set is:
-#: story-209 added the effort keys, so the revisions being compared against
-#: declare none, while story-063 added these, so every revision declares them
-#: and what a re-derivation moves is the value. The reason for stripping them
-#: at all is EFFORT_KEYS' own: what each assertion is about is that nothing
-#: *else* about a definition moved, and a ceiling re-derived from a wider
-#: window of what runs actually cost is a fresh measurement rather than a
-#: change to what any stage does or to which stage does it.
-RUN_COST_KEYS = ("max_run_cost_usd", "max_run_cost_usd_reason")
-STAGE_COST_KEYS = ("max_execution_cost_usd", "max_execution_cost_usd_reason")
-
-
-def without_effort(definition: dict) -> dict:
-    """`definition` with the effort declarations story-209 added removed."""
-    stripped = dict(definition)
-    stages = []
-    for stage in definition.get("stages", []):
-        stage = {k: v for k, v in stage.items() if k not in EFFORT_KEYS}
-        inspection = stage.get("inspection")
-        if isinstance(inspection, dict):
-            stage["inspection"] = {
-                k: v for k, v in inspection.items() if k not in EFFORT_KEYS}
-        stages.append(stage)
-    stripped["stages"] = stages
-    return stripped
-
-
-def without_cost_ceilings(definition: dict) -> dict:
-    """`definition` with the money ceilings removed, at both levels they are
-    declared at."""
-    stripped = {key: value for key, value in definition.items()
-                if key not in RUN_COST_KEYS}
-    stripped["stages"] = [
-        {key: value for key, value in stage.items()
-         if key not in STAGE_COST_KEYS}
-        for stage in definition.get("stages", [])
-    ]
-    return stripped
-
-
-def as_pinned(definition: dict) -> dict:
-    """A definition reduced to what the two comparisons below hold byte for
-    byte: everything but the effort declarations and the money ceilings.
-    Applied to both sides, so what each equality is over is every other key of
-    every stage."""
-    return without_cost_ceilings(without_effort(definition))
-
-
+@pytest.mark.parametrize("story_id", sorted(STATEMENT_STORIES))
 @pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
-def test_everything_but_the_statement_is_byte_identical_to_the_base_commit(name):
-    before = as_pinned(baseline_definition(name))
-    after = as_pinned(raw_definition(name))
+def test_each_story_changed_nothing_in_a_definition_but_its_statement(
+        story_id, name):
+    """Across the story's own revisions, the definition differs in its
+    applies_when where the story reworded it and in nothing at all where it
+    did not — every stage, every budget, ceiling and level, the escalation
+    rules and the name read the same at both ends. No key is stripped, because
+    a story's own two revisions differ only in what that story did."""
+    before = definition_at(name, story_id, BASELINE)
+    after = definition_at(name, story_id, ENDPOINT)
     assert set(before) == set(after)
     for key in ("stages", "escalation_rules", "name"):
         assert key in before
         assert after[key] == before[key], key
-    assert {key for key in after if after[key] != before[key]} == {"applies_when"}
+    expected = ({"applies_when"} if name in STATEMENT_STORIES[story_id]
+                else set())
+    assert keys_changed(before, after) == expected
 
 
-@pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
-def test_the_effort_keys_are_the_only_thing_the_stripping_removes(name):
-    """Control for the two comparisons that read a stripped definition: the
-    unstripped text really does differ from the revisions above, so a stripping
-    that had quietly removed nothing would not make them pass."""
-    shipped = raw_definition(name)
-    assert without_effort(shipped) != shipped
-    for stage, bare in zip(shipped["stages"],
-                           without_effort(shipped)["stages"]):
-        assert set(stage) - set(bare) == set(EFFORT_KEYS)
+def test_the_comparison_reports_a_definition_whose_budget_moved():
+    """Control for the identities above: the same reading of a story's own
+    baseline beside a copy of it with one pass budget raised and one stage
+    gaining a key reports the stages as changed, so an empty or one-key
+    result is two revisions agreeing rather than a reading that cannot see a
+    configured number move."""
+    before = definition_at("story-workflow", "story-174", BASELINE)
+    moved = json.loads(json.dumps(before))
+    judging = next(stage for stage in moved["stages"] if "repair_pass" in stage)
+    judging["repair_pass"]["budget"] += 1
+    assert keys_changed(before, moved) == {"stages"}
+    widened = json.loads(json.dumps(before))
+    widened["stages"][0]["a-key-no-story-declared"] = 1
+    assert keys_changed(before, widened) == {"stages"}
+    assert keys_changed(before, before) == set()
 
 
 def definition_where_story_172_started(name: str) -> str:
-    """A shipped definition's text at the commit story-172 started from.
-
-    This module's own range is story-171's, and its ENDPOINT — the commit that
-    added this module, which is the commit story-171 finished with — is
-    exactly where story-172 began. Read through the shared resolution rather
-    than as `HEAD`, which would go vacuously green the moment this story
-    commits.
-    """
-    return repository_file_at(f"workflows/{name}.json",
-                              validation_file=Path(__file__), bound=ENDPOINT)
+    """A shipped definition's text at the commit story-172 started from: the
+    baseline of that story's own range, read through the shared resolution
+    rather than as `HEAD`, which would go vacuously green the moment a story
+    commits."""
+    return definition_text_at(name, "story-172", BASELINE)
 
 
-@pytest.mark.parametrize("name", SHIPPED_DEFINITIONS)
-def test_the_cost_ceilings_are_the_only_other_thing_the_stripping_removes(name):
-    """Control for the same two comparisons, and the other half of what the
-    named-key loop in the first of them used to buy.
-
-    Every revision those comparisons read declares both ceilings at both
-    levels, so the strip removes something real on each side of each of them —
-    a strip that had quietly removed nothing would leave them passing while
-    checking less — and the values really do differ across each pair, which is
-    why stripping is what the comparisons need rather than an equality.
-    """
-    revisions = (raw_definition(name), baseline_definition(name),
-                 json.loads(definition_where_story_172_started(name)))
-    for definition in revisions:
-        bare = without_cost_ceilings(definition)
-        assert set(definition) - set(bare) == set(RUN_COST_KEYS)
-        assert definition["stages"], name
-        for stage, stripped in zip(definition["stages"], bare["stages"]):
-            assert set(stage) - set(stripped) == set(STAGE_COST_KEYS), \
-                stage["name"]
-    shipped, baseline, started = revisions
-    for older in (baseline, started):
-        assert shipped["max_run_cost_usd"] != older["max_run_cost_usd"]
-    assert as_pinned(shipped) != without_effort(shipped)
-
-
-def test_since_story_172_started_only_the_two_statements_changed():
-    """The definitions stand as story-070 declared them: each shipped
-    definition differs from where story-172 started in applies_when and in
-    no other key. story-172 reworded the refactor statement; story-174
-    reworded the story statement to match it, so the byte-for-byte pin that
-    held story-workflow.json to that revision is rebounded here to the same
-    claim its sibling was already held to."""
-    for name in SHIPPED_DEFINITIONS:
-        started = as_pinned(json.loads(definition_where_story_172_started(name)))
-        after = as_pinned(raw_definition(name))
-        assert set(started) == set(after), name
-        assert {key for key in after if after[key] != started[key]} == {
-            "applies_when"}, name
-
+def test_story_172_took_the_permission_out_of_the_refactor_statement():
+    """What story-172 reworded, across its own revisions: the refactor
+    statement it started from said the workflow had "no stage that may write"
+    the assertion, and the one it finished with does not."""
     started = json.loads(definition_where_story_172_started("refactor-workflow"))
-    after = raw_definition("refactor-workflow")
+    finished = definition_at("refactor-workflow", "story-172", ENDPOINT)
     assert "no stage that may write" in started["applies_when"]
-    assert "no stage that may write" not in after["applies_when"]
+    assert "no stage that may write" not in finished["applies_when"]
 
 
-def test_the_start_of_story_172_is_neither_the_baseline_nor_the_working_tree():
-    """Control for the identity above: the revision it reads is a third one.
-    It differs from this module's BASELINE, where story-171 had not yet
-    written the finishing test into either statement, and it differs from the
-    working tree on the one key each of story-172 and story-174 changed — so
-    the equality above on every other key is two revisions agreeing, not one
-    revision read twice."""
-    for name in SHIPPED_DEFINITIONS:
-        started = json.loads(definition_where_story_172_started(name))
-        assert started["applies_when"] != baseline_definition(name)["applies_when"]
-        assert started["applies_when"] != raw_definition(name)["applies_when"]
+def test_each_later_story_started_where_the_one_before_it_left_the_statements():
+    """Control for the identities above, and the reason three ranges are read
+    rather than one: story-172 started from the statements story-171 finished
+    with, story-174 from the ones story-172 finished with, and in each story
+    the statement it reworded differs between its two reads — so the
+    identities are made over three distinct pairs of revisions, each joined to
+    the next, rather than over one revision read several times."""
+    def statement(name: str, story_id: str, bound: str) -> str:
+        return definition_at(name, story_id, bound)["applies_when"]
+
+    for earlier, later in (("story-171", "story-172"),
+                           ("story-172", "story-174")):
+        for name in SHIPPED_DEFINITIONS:
+            assert statement(name, later, BASELINE) == \
+                statement(name, earlier, ENDPOINT), (earlier, later, name)
+    for story_id, reworded in STATEMENT_STORIES.items():
+        for name in reworded:
+            assert statement(name, story_id, BASELINE) != \
+                statement(name, story_id, ENDPOINT), (story_id, name)
 
 
 def test_the_two_statements_still_differ_and_still_load_as_candidates():

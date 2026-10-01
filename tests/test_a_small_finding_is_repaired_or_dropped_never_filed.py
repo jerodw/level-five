@@ -153,8 +153,15 @@ DROPPED_SLUGS = "dropped_slugs"
 #: excluding them by name is what keeps that claim an equality. The claim they
 #: carry is held by
 #: `tests/test_a_completed_run_says_what_became_of_its_findings.py`.
+#:
+#: story-221's two are what a later verdict of the attempt reads to decide
+#: whether it can bring a left finding back: the files a bound refused of its
+#: fix, and whether its decision was rejected. They are written on every
+#: declined entry and are not about dropping, so they are excluded by name on
+#: the same terms; the claim they carry is held by
+#: `tests/test_a_finding_is_reported_fixed_exactly_when_a_check_fixed_it.py`.
 FIELDS_ADDED_SINCE = ("abandoned_slugs", "abandoned_by_spent_allowance")
-ENTRY_FIELDS_ADDED_SINCE = ("abandoned",)
+ENTRY_FIELDS_ADDED_SINCE = ("abandoned", "refused_files", "decision_rejected")
 
 #: The module whose text this repository's history is asked about, and the
 #: relative path of each prompt, composed from what `verifier_prompts` found

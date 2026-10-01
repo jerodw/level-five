@@ -719,11 +719,16 @@ def test_declined_accounting_marks_a_reason_given_or_not_per_left_finding():
     # finding as one the run files rather than drops. `abandoned` is
     # story-213's, on exactly those terms: a caller that names no abandoned
     # slug records every left finding as one a pass allowance did not refuse.
+    # `refused_files` and `decision_rejected` are story-221's, written on
+    # every entry on the same terms: a caller that names no refusal and no
+    # rejection records that no part of the fix is owed and no decision was
+    # rejected.
     assert declined == [
         {SLUG: OWN_FINDING["slug"], "reason_given": True,
-         REASON: DECLINED_ENTRY[REASON], "dropped": False, "abandoned": False},
+         REASON: DECLINED_ENTRY[REASON], "dropped": False, "abandoned": False,
+         "refused_files": [], "decision_rejected": False},
         {SLUG: BOTH_FINDING["slug"], "reason_given": False, "dropped": False,
-         "abandoned": False},
+         "abandoned": False, "refused_files": [], "decision_rejected": False},
     ]
     assert story_inspection.declined_accounting([], reasons) == []
 
@@ -754,12 +759,14 @@ def test_write_accounting_without_declined_records_every_left_as_silent(
                                            BOTH_FINDING["slug"]]
     # `dropped` and `abandoned` false on every entry, for the reason the test
     # beside this one records: a caller that names no dropped slug and no
-    # abandoned one records every left finding as one the run files.
+    # abandoned one records every left finding as one the run files. story-221's
+    # `refused_files` and `decision_rejected` are empty and false on the same
+    # terms.
     assert recorded["declined"] == [
         {SLUG: OWN_FINDING["slug"], "reason_given": False, "dropped": False,
-         "abandoned": False},
+         "abandoned": False, "refused_files": [], "decision_rejected": False},
         {SLUG: BOTH_FINDING["slug"], "reason_given": False, "dropped": False,
-         "abandoned": False},
+         "abandoned": False, "refused_files": [], "decision_rejected": False},
     ]
     assert recorded["declined_with_reason"] == 0
     assert recorded["declined_without_reason"] == 2

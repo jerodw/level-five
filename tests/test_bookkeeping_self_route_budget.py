@@ -26,6 +26,10 @@ What this module holds:
     had if the forgotten file had never happened. Its control is the identical
     plan under a definition declaring no bookkeeping budget, which escalates one
     failure earlier and with the wording it escalated with before this story.
+    The same pair is driven for every bookkeeping cause, story-221's included:
+    a verdict that left a repair a correction pass postponed unanswered, which
+    only the verifying stage can meet, so the verifying stage here declares
+    both passes and both budgets on the terms the declaring stage does.
   * a stage that never writes its required artifact, which still stops, with an
     escalation reason naming the bookkeeping budget it exhausted rather than
     the failure budget it never touched.
@@ -149,15 +153,40 @@ def declaring_stage(*, bookkeeping: object = BOOKKEEPING_BUDGET) -> dict:
                  conftest.TESTER_CHANGED_FILES: "changed-files"})
 
 
+#: The two passes the verifying stage declares, so a verdict carrying both kinds
+#: of finding can route a correction pass that postpones the repairable ones —
+#: which is how the verifier comes to owe the answer story-221's bookkeeping
+#: cause is about. One pass of each, because no sequence here takes a second.
+#: The artifact names are this module's own.
+CORRECTION_PASS = {"result": "correction-probe.json", "budget": 1,
+                   "stage": conftest.StageRef(0)}
+REPAIR_PASS = {"result": "repair-probe.json", "budget": 1}
+
+
+def checking_stage(*, bookkeeping: object = BOOKKEEPING_BUDGET) -> dict:
+    """The verifying stage `tests/test_coordinator_runs_the_suite.py` builds,
+    declaring both passes and both budgets on exactly the terms the declaring
+    stage declares its own, so a cause only the verifier can meet has a
+    failure budget to reach and a split to be compared against."""
+    stage = verifying_stage()
+    stage["correction_pass"] = dict(CORRECTION_PASS)
+    stage["repair_pass"] = dict(REPAIR_PASS)
+    stage[BUDGET_KEY] = FAILURE_BUDGET
+    if bookkeeping is not None:
+        stage[BOOKKEEPING_KEY] = bookkeeping
+    return stage
+
+
 def build(name: str, *, bookkeeping: object = BOOKKEEPING_BUDGET) -> dict:
     return conftest.build_workflow(
-        declaring_stage(bookkeeping=bookkeeping), verifying_stage(),
+        declaring_stage(bookkeeping=bookkeeping),
+        checking_stage(bookkeeping=bookkeeping),
         escalation_rules={"max_retries_exceeded": {"action": "escalate"}},
         name=name)
 
 
 #: The definition that opted into the split, and the one that did not. Both
-#: carry the same stages, the same outputs and the same failure budget, so a
+#: carry the same stages, the same outputs and the same failure budgets, so a
 #: run that differs between them differs by the one declaration.
 SPLIT = build("split-budget-workflow")
 UNSPLIT = build("unsplit-budget-workflow", bookkeeping=None)
@@ -168,14 +197,16 @@ DECLARING, VERIFYING = [stage["name"] for stage in SPLIT["stages"]]
 def test_the_two_definitions_differ_by_exactly_the_bookkeeping_budget():
     """The premise every subject-and-control pair below rests on, stated so a
     change to the builder reddens here rather than quietly making the control
-    differ by something else as well."""
-    split, unsplit = SPLIT["stages"][0], UNSPLIT["stages"][0]
-    assert split[BOOKKEEPING_KEY] == BOOKKEEPING_BUDGET
-    assert BOOKKEEPING_KEY not in unsplit
-    assert {k: v for k, v in split.items() if k != BOOKKEEPING_KEY} == unsplit
-    assert split[BUDGET_KEY] == unsplit[BUDGET_KEY] == FAILURE_BUDGET
-    # The keys this module builds with are the keys the coordinator reads.
-    assert BUDGET_KEY in split and BOOKKEEPING_KEY in split
+    differ by something else as well. Held for both stages, because since
+    story-221 a cause the verifier alone can meet is driven here too."""
+    for split, unsplit in zip(SPLIT["stages"], UNSPLIT["stages"]):
+        assert split[BOOKKEEPING_KEY] == BOOKKEEPING_BUDGET
+        assert BOOKKEEPING_KEY not in unsplit
+        assert {k: v for k, v in split.items() if k != BOOKKEEPING_KEY} \
+            == unsplit
+        assert split[BUDGET_KEY] == unsplit[BUDGET_KEY] == FAILURE_BUDGET
+        # The keys this module builds with are the keys the coordinator reads.
+        assert BUDGET_KEY in split and BOOKKEEPING_KEY in split
 
 
 # --------------------------------------------------------------------------
@@ -421,11 +452,47 @@ def omitted_then_dead() -> dict:
             "verdicts": [PASS]}
 
 
+#: Two findings for the verifying stage's verdict to carry, categorised for the
+#: one category its routing table declares, so a verdict carrying both kinds
+#: routes the correction pass and postpones the repair rather than escalating
+#: on a category the definition does not define.
+WORK = next(iter(SPLIT["stages"][1]["on_failure"]["retry_routing"]))
+CORRECTABLE = {"path": "src/app.py", "location": "src/app.py - the docstring",
+               "finding": "the docstring is stale", "correction": "reword it",
+               "category": WORK}
+REPAIRABLE = {"path": "src/app.py", "location": "src/app.py - the helper",
+              "finding": "the helper misses a case",
+              "correction": "handle the case", "category": WORK}
+BOTH_KINDS = {**PASS, "correctable_findings": [CORRECTABLE],
+              "repairable_findings": [REPAIRABLE]}
+
+
+def unanswered_then_dead() -> dict:
+    """story-221's cause, which only the verifying stage meets. Its first
+    verdict carries both kinds of finding, so the correction pass routes and
+    postpones the repair; the verdict that pass returns to answers nothing, so
+    the verifying stage is sent back once to answer it; and every invocation
+    after that dies without completing."""
+    return {"plan": {VERIFYING: [OK, OK] + [DEAD] * (FAILURE_BUDGET + 1)},
+            "verdicts": [BOTH_KINDS, PASS]}
+
+
 SEQUENCES = {
     story_coordinator.MISSING_REQUIRED_ARTIFACTS: missing_then_dead,
     story_coordinator.STALE_REQUIRED_ARTIFACTS: stale_then_dead,
     story_coordinator.INCOMPLETE_CHANGED_FILES: omitted_then_dead,
+    story_coordinator.UNANSWERED_POSTPONED_REPAIRS: unanswered_then_dead,
 }
+
+#: The stage each sequence re-enters, where it is not the declaring stage. A
+#: verdict that leaves a postponed repair unanswered is the verifying stage's
+#: own record, so that cause sends the verifying stage back and spends its
+#: budgets, which it declares on the same terms the declaring stage does.
+RE_ENTERED = {story_coordinator.UNANSWERED_POSTPONED_REPAIRS: VERIFYING}
+
+
+def re_entered(cause: str) -> str:
+    return RE_ENTERED.get(cause, DECLARING)
 
 
 def test_every_bookkeeping_cause_is_driven_to_a_failure():
@@ -434,6 +501,7 @@ def test_every_bookkeeping_cause_is_driven_to_a_failure():
     without a sequence would leave the pair below silently untested."""
     assert set(SEQUENCES) == set(
         story_coordinator.BOOKKEEPING_SELF_ROUTE_FAILURES)
+    assert set(RE_ENTERED) <= set(SEQUENCES)
 
 
 @pytest.mark.parametrize("cause", sorted(SEQUENCES), ids=sorted(SEQUENCES))
@@ -451,11 +519,12 @@ def test_a_bookkeeping_re_entry_leaves_the_failure_budget_whole(
     """
     target_root = make_target(f"split-{cause}")
     code, runner, run_dir = drive(target_root, harness_root, **SEQUENCES[cause]())
+    stage = re_entered(cause)
 
     assert code == 2
     state = state_of(run_dir)
     assert state["status"] == "escalated"
-    assert state["current_stage"] == DECLARING
+    assert state["current_stage"] == stage
 
     # One bookkeeping re-entry, then a failure for every unit of the
     # failure budget — the sequence a stage whose budget was not split could
@@ -471,7 +540,7 @@ def test_a_bookkeeping_re_entry_leaves_the_failure_budget_whole(
         == FAILURE_BUDGET
 
     # And it stopped on the budget that governed the failure it met.
-    assert f"{DECLARING} has exhausted its {BUDGET_KEY} budget of " \
+    assert f"{stage} has exhausted its {BUDGET_KEY} budget of " \
         f"{FAILURE_BUDGET}" in reason_of(run_dir)
 
 
@@ -504,7 +573,7 @@ def test_the_same_sequence_under_an_unsplit_budget_stops_one_failure_early(
     assert state["bookkeeping_self_route_count"] == 0
 
     reason = reason_of(run_dir)
-    assert f"{DECLARING} has exhausted its self-route budget of " \
+    assert f"{re_entered(cause)} has exhausted its self-route budget of " \
         f"{FAILURE_BUDGET}" in reason
     assert BUDGET_KEY not in reason
     assert BOOKKEEPING_KEY not in reason
@@ -530,7 +599,8 @@ def test_the_split_run_reached_a_failure_the_unsplit_one_never_saw(
     _, unsplit, unsplit_dir = drive(unsplit_root, harness_root,
                                     **SEQUENCES[cause](), workflow=UNSPLIT)
 
-    assert split.calls.count(DECLARING) == unsplit.calls.count(DECLARING) + 1
+    stage = re_entered(cause)
+    assert split.calls.count(stage) == unsplit.calls.count(stage) + 1
     assert causes_of(split_dir).count(story_coordinator.AGENT_PROCESS_FAILED) == \
         causes_of(unsplit_dir).count(story_coordinator.AGENT_PROCESS_FAILED) + 1
 

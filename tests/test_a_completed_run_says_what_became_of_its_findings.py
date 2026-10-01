@@ -48,15 +48,19 @@ The subjects, in the order the criteria state them:
     same set. The verifier may name a finding of its own in the same array as
     one the inspection routed, and a spent allowance abandons both: the count
     in the committed history is over every finding the verdict named, while the
-    account, the accounting and the filing are about the routed ones, because a
-    finding nothing routed has no routed finding for them to be about. One run
-    drives exactly that verdict, and the texts a reader consults to learn what
-    the number means are held to saying which set each covers.
+    accounting's counts are about the routed ones. Since story-221 the
+    verifier's own finding is not lost for that: the run accounts it under a
+    key of its own and files it from the classification the verifier gave it,
+    and one given none — as the one this module drives is — is dropped with
+    that reason named in the account. One run drives exactly that verdict, and
+    the texts a reader consults to learn what the number means are held to
+    saying which set each covers.
 
   * **a pass the run never reached**, which abandons nothing. The clean-clone
     check sits between the two pass blocks, so a verdict whose check fails is
     routed away before the repair block; and a verdict the correction block
-    routes on defers its repairable findings rather than leaving them. Each is
+    routes on defers its repairable findings to the verification that pass
+    returns to, which since story-221 must answer each of them. Each is
     driven as a run, each beside a run differing from it in one respect only,
     where the same spent allowance *is* met and recorded. The same question for
     the correction pass is asked of a verdict the routing refuses, whose
@@ -1409,6 +1413,11 @@ def the_correction_pass_routed(target, harness, tmp_path, filings):
     would meet the spent repair allowance is never reached on this verdict
     either. The verdict the correction pass returns to carries nothing and the
     run completes.
+
+    Since story-221 that last verdict owes an answer to the deferred repair,
+    and carrying nothing it gives none. The judging stage here declares no
+    re-run to send it back with, so the repair is treated as declined without
+    a reason — left, and not abandoned, because no allowance refused anything.
     """
     run = inspected.drive(
         target, harness, tmp_path, findings=[FOR_REPAIR, FOR_CORRECTION],
@@ -1439,11 +1448,24 @@ def test_a_verdict_the_correction_pass_routes_abandons_no_repairable_finding(
     The control is the run beside it, where the same spent repair allowance is
     met on a verdict no pass routed away from: there the block is reached and
     the abandonment is recorded, so the absence here is the routing deciding.
+
+    What the accounting records otherwise follows story-221's rule, that the
+    latest verdict of the attempt to deal with a finding decides it. The
+    second routed finding, which the first verdict passed over, is acted on
+    once the second verdict names it for correction. The deferred repair,
+    which the verdict the correction pass returned to left unanswered, is
+    left without a reason — in the remainder and sent to the backlog, and in
+    no record of an abandonment.
     """
     run = the_correction_pass_routed
     recorded = inspected.accounting(run, 1)
     assert recorded["abandoned_slugs"] == []
-    assert recorded["acted_on_slugs"] == [FOR_REPAIR["slug"]]
+    assert recorded["acted_on_slugs"] == [FOR_CORRECTION["slug"]]
+    assert recorded["remainder_slugs"] == [FOR_REPAIR["slug"]]
+    left = declined_entry(recorded, FOR_REPAIR["slug"])
+    assert left["reason_given"] is False
+    assert left[ABANDONED] is False
+    assert set(named_in(report_of(run), "backlog")) == {FOR_REPAIR["slug"]}
     assert abandonment_records(run) == []
     assert named_in(report_of(run), "abandoned") == {}
     kinds = [one["event"] for one in story_coordinator.load_history(run.run_dir)]
@@ -1807,11 +1829,12 @@ def test_the_same_harness_with_a_usable_budget_runs_the_whole_workflow(
 # The verifier may name a finding of its own in the same array as one the
 # inspection routed to the story, and a spent allowance abandons both. The
 # count in the committed history is over every finding the verdict named; the
-# account, the accounting and the filing are about routed findings, because a
-# finding nothing routed has no routed finding for them to be about. That is a
-# gap rather than a defect in the count — a verifier's own finding reaches no
-# backlog by any route — and what this holds is that the count says so and the
-# account does not pretend otherwise.
+# accounting's counts are about routed findings. Until story-221 that was the
+# whole of it — a verifier's own finding reached no backlog by any route. It is
+# now accounted under a key of its own and filed from the classification the
+# verifier gave it; the one driven here was given none, so it is dropped with
+# that reason, which the account and the completion line both name, and
+# nothing is filed for it.
 # ==========================================================================
 
 
@@ -1847,9 +1870,13 @@ def a_verifiers_own_finding_abandoned(target, harness, tmp_path, filings):
 
 def test_the_count_covers_a_finding_the_account_has_no_routed_finding_for(
         a_verifiers_own_finding_abandoned, filings):
-    """The count is over both; the account, the accounting and the filing carry
-    the routed one. What records the verifier's own instead is the run's own
-    event, which names it — and that, with the count, is the whole of it."""
+    """The count is over both; the accounting's counts and the abandoned clause
+    carry the routed one. The verifier's own is accounted under its own key —
+    `story_inspection.own_finding_key`, which for an entry carrying no
+    classification is its location — and, carrying no classification, it is
+    dropped rather than filed: the account names it under the discarded
+    clause with that reason, the completion line counts the drop under it,
+    and the one filing carries the routed finding alone."""
     run = a_verifiers_own_finding_abandoned
     (record,) = abandonment_records(run)
     assert record[ABANDONED] == 2
@@ -1857,10 +1884,25 @@ def test_the_count_covers_a_finding_the_account_has_no_routed_finding_for(
     report = report_of(run)
     assert set(named_in(report, "abandoned")) == {FOR_CORRECTION["slug"]}
     assert THE_VERIFIERS_OWN["finding"] not in account_section(report)
-    assert inspected.accounting(run)["abandoned_slugs"] == \
-        [FOR_CORRECTION["slug"]]
+    recorded = inspected.accounting(run)
+    assert recorded["abandoned_slugs"] == [FOR_CORRECTION["slug"]]
     assert [slug for call in filings for slug in call] == \
         [FOR_CORRECTION["slug"]]
+
+    key = story_inspection.own_finding_key(THE_VERIFIERS_OWN,
+                                           (FOR_CORRECTION["slug"],))
+    assert key
+    (own,) = recorded["own_left"]
+    assert own["slug"] == key
+    assert own[ABANDONED] is True
+    assert own["finding"] == THE_VERIFIERS_OWN
+    (discarded,) = [one for one in account_body(report)
+                    if one.startswith(CLAUSES["discarded"])]
+    assert f"{key} ({story_inspection.UNCLASSIFIED_OWN_FINDING}" in discarded
+    assert own["abandoned_because"] in discarded
+    (filed,) = inspected.filed_events(run)
+    assert story_inspection.UNCLASSIFIED_OWN_FINDING in filed["message"]
+    assert filed["dropped"] == 1
 
     (event,) = [one for one in story_coordinator.load_history(run.run_dir)
                 if ABANDONED in one]

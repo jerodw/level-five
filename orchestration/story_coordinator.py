@@ -7397,6 +7397,15 @@ STALE_REQUIRED_ARTIFACTS = "stale-required-artifacts"
 #: re-enters that stage rather than being repaired anywhere else.
 INCOMPLETE_CHANGED_FILES = "incomplete-changed-files"
 
+#: The verification a correction pass returned to left a repair that pass
+#: postponed unanswered: it neither asked for the repair again nor declined it
+#: by name. A fact about the verdict's record rather than a judgement about
+#: the work, decided by the slugs its entries name, so it is classified with
+#: the record-keeping causes. It is sent back once and never escalates: a
+#: repair still unanswered after that, or with no re-run left, is treated as
+#: declined without a reason.
+UNANSWERED_POSTPONED_REPAIRS = "unanswered-postponed-repairs"
+
 #: Every cause a self-route can be taken for. Declared so the classification
 #: below is held *total* against it rather than against a list written at a
 #: call site or in a test: a cause added later and left unclassified is a
@@ -7408,11 +7417,14 @@ SELF_ROUTE_FAILURES = (
     STALE_REQUIRED_ARTIFACTS,
     DEFECTIVE_RETRY_GUIDANCE,
     INCOMPLETE_CHANGED_FILES,
+    UNANSWERED_POSTPONED_REPAIRS,
 )
 
 #: The bookkeeping subset: the stage did the work and did not record it, or
 #: recorded it somewhere the freshness check reads as a previous attempt's, or
-#: recorded it incompletely. Nothing about the work is in question in any of
+#: recorded it incompletely — and, for the verifier, a verdict that did not
+#: record its answer to a repair a correction pass postponed, which the stage
+#: is sent back once to write down. Nothing about the work is in question in any of
 #: the three, which is what makes spending a budget of its own the right price
 #: for them. The incomplete record is the sharpest instance of the fact the
 #: other two state: the tree already holds the change and the account of it is
@@ -7429,6 +7441,7 @@ BOOKKEEPING_SELF_ROUTE_FAILURES = (
     MISSING_REQUIRED_ARTIFACTS,
     STALE_REQUIRED_ARTIFACTS,
     INCOMPLETE_CHANGED_FILES,
+    UNANSWERED_POSTPONED_REPAIRS,
 )
 
 #: The declaration each budget is read off, and the name a stop is reported
@@ -7600,6 +7613,23 @@ def self_route_statement(
             f"re-taken, so an omission left uncorrected is reported again. No "
             f"retry has been spent and no attempt archived; this is the same "
             f"attempt, running again."
+        )
+    if failure == UNANSWERED_POSTPONED_REPAIRS:
+        listed = "; ".join(entries or [])
+        return (
+            f"The correction pass this verification returned from postponed "
+            f"repairs to it, and your verdict answered none of these: "
+            f"{listed}. Each postponed repair must be answered on this "
+            f"verification — asked for again in an entry naming it, or "
+            f"declined by name in declined_findings with the reason. This is "
+            f"the coordinator's own statement, not an agent's: it compared the "
+            f"slugs the postponed repairs name with the slugs your entries and "
+            f"declined findings name, and read nothing as language. You are "
+            f"sent back once. A repair still unanswered after this is treated "
+            f"as declined without a reason and is filed at the run's "
+            f"completion rather than fixed here. The artifacts it is between "
+            f"are {named}. No retry has been spent and no attempt archived; "
+            f"this is the same attempt, running the verification again."
         )
     raise ValueError(f"no self-route statement for failure {failure!r}")
 
@@ -8939,10 +8969,10 @@ def refused_routed_slugs(
     the refusals were made and each slug once.
 
     This is the one match between a refusal and a routed finding:
-    `verdict_after_refusals` keys its declined entries by it, and the
-    accounting is handed it as `refused_slugs`, so the two cannot disagree
-    about which routed finding a refusal was of. A check that refused nothing
-    names nothing.
+    `verdict_after_refusals` keys its declined entries by it, and
+    `refusal_facts`, which hands the accounting its refused keys, matches by
+    the same `names_a_slug`, so the two cannot disagree about which routed
+    finding a refusal was of. A check that refused nothing names nothing.
     """
     named: list[str] = []
     for one in check.refused:
@@ -8975,8 +9005,17 @@ def verdict_after_refusals(
 
     A refused decision is removed and declined here on exactly those terms,
     with `decision_refusal_reason`'s wording as the reason through
-    `refusal_reason`: the seam carries two kinds of refusal and treats them
-    alike, and only the words differ.
+    `refusal_reason`: the seam carries two kinds of refusal and declines them
+    alike. What becomes of the finding afterwards is not alike, and is not
+    decided here: a bound's refusal leaves the refused file owed, so a later
+    verdict brings the finding back only by making that very part, while a
+    refused decision owes nothing and a later verdict naming the finding
+    decides it as for any left finding. `refusal_facts` hands the accounting
+    which kind each was, off the refusal's own class.
+
+    A refused finding the checking stage raised itself is declined under its
+    own key — the slug its classification carries, or its location — so the
+    accounting reads the refusal as the ground it is left on.
     """
     if not check.refused:
         return verdict
@@ -8987,7 +9026,8 @@ def verdict_after_refusals(
         named = refused_routed_slugs(
             ScopeExtensionCheck(accepted=(), refused=(one,)), routed_slugs
         )
-        for slug in named or (str(location),):
+        own = story_inspection.own_finding_key(one.finding, routed_slugs)
+        for slug in named or (own or str(location),):
             declined.append({"slug": slug, "reason": refusal_reason(one)})
     return {
         **verdict,
@@ -9100,7 +9140,8 @@ PASSES = {
 
 
 def abandoned_routed_slugs(
-    stage: dict, verdict: dict, state: RunState, routed_slugs=(), *, kind: str
+    stage: dict, verdict: dict, state: RunState, routed_slugs=(), *, kind: str,
+    include_own: bool = False,
 ) -> dict[str, str]:
     """The routed slugs the verdict named for the pass `kind` where that pass's
     allowance refuses to run, each with the reason, in the order the findings
@@ -9141,6 +9182,11 @@ def abandoned_routed_slugs(
     there — and the reason it is safe there is now a property of the code
     rather than a claim made here, since every refusal that could stand
     between is made before anything about the verdict is recorded.
+
+    `include_own` adds the findings the checking stage raised itself, keyed
+    by their own keys, so one a spent allowance leaves reaches the accounting
+    and the backlog like a routed one. False by default, so a caller asking
+    about the routed findings alone is answered exactly as before.
     """
     findings_key, count_field, name = PASSES[kind]
     if verdict.get("status") != "passed":
@@ -9154,12 +9200,15 @@ def abandoned_routed_slugs(
         findings, routed_slugs,
         f"the {name} allowance of {pass_budget(declaration)} was already "
         f"spent, so no pass could be run for it",
+        include_own=include_own,
     )
 
 
-def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
+def _abandoned_among(findings, routed_slugs, reason: str, *,
+                     include_own: bool = False) -> dict[str, str]:
     """The routed slugs a set of abandoned findings' locations name, each with
-    `reason`, first naming winning.
+    `reason`, first naming winning — and, where `include_own`, the own key of
+    each finding that names no routed slug.
 
     Decided by `names_a_slug`, the one rule `refused_routed_slugs` is decided
     by, so a refusal and an abandonment cannot disagree about which routed
@@ -9174,6 +9223,10 @@ def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
             if (isinstance(slug, str) and slug and slug not in named
                     and story_inspection.names_a_slug(location, (slug,))):
                 named[slug] = reason
+        if include_own:
+            own = story_inspection.own_finding_key(finding, routed_slugs)
+            if own and own not in named:
+                named[own] = reason
     return named
 
 
@@ -9194,8 +9247,10 @@ def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
 # - A decision whose source is absent or records no words is refused here,
 #   through the seam a refused scope extension takes: the finding and every
 #   finding sharing its routed slug leave the pass, the refusal is one event,
-#   and a routed finding is declined with the refusal as its ground and filed
-#   at completion. It is deliberately not refused as a malformed verdict,
+#   and the finding is left with the refusal as its ground — filed at
+#   completion unless a later verdict of the attempt names it in an accepted
+#   entry, which decides it as for any left finding, since a refused decision
+#   owes no file. It is deliberately not refused as a malformed verdict,
 #   because sending the verdict back for a missing source invites a source
 #   written to satisfy the check.
 # - A decision a routed repair pass carries is recorded as one event per
@@ -9205,9 +9260,14 @@ def _abandoned_among(findings, routed_slugs, reason: str) -> dict[str, str]:
 #   twice. The cross-run projection writes it to the decision log.
 # - The verification that pass returns to may reject a decision. Each
 #   rejection naming a decision the live pass record carries is one event of
-#   its own, the decision's record is never rewritten, and a routed finding
-#   whose decision is rejected is handed to the accounting as left by the run
-#   with the rejection as its ground. The coordinator does not undo the
+#   its own, the decision's record is never rewritten, and a finding whose
+#   decision is rejected is handed to the accounting with the rejection as its
+#   ground: it is left unless that verification or a later one of the attempt
+#   repairs it again in an accepted repairable finding carrying a decision — a
+#   repair carrying none is the restoring the rejection asks for. A finding
+#   the checking stage raised itself is followed by its own key on the same
+#   terms and, if the run leaves it, filed from the classification it carries.
+#   The coordinator does not undo the
 #   change: it cannot tell what later work leans on it, and a tree it changed
 #   after the verification would be a tree nothing verified. Undoing it is
 #   that verification's job, with the routes it already has.
@@ -9437,16 +9497,23 @@ def judge_rejections(
     through `_live_pass_record` on the terms every reader of a pass record
     takes, and it is read here because this runs when the verdict is judged —
     before any new pass routes and before the accounting. A rejection is
-    matched only against the decisions that record carries, by `names_a_slug`
-    over each decided finding's location, so a later verification, which sees
-    the tree but not that record, cannot reject an earlier pass's decision.
+    matched only against the decisions that record carries, by
+    `story_inspection.entry_names_key` over each decided finding — its location,
+    or the slug of its own its classification carries — the reading the
+    accounting names a finding by, so a later verification, which sees the
+    tree but not that record, cannot reject an earlier pass's decision.
 
     Each match is one decision-rejected event. A rejection naming no decision
     the pass carried — or made where no repair pass is live — is said in the
     run's events as a note, records nothing in the decision log, and changes
-    no accounting. The routed slugs returned are the ones a matched finding's
-    location names, and are handed to the accounting through the refusal seam
-    with the rejection as their ground.
+    no accounting. The keys returned are the routed slugs a matched finding's
+    location names, or the finding's own key where it names none — a decided
+    finding the checking stage raised itself — and are handed to the
+    accounting with the rejection as their ground. They leave the finding
+    unless this verdict or a later one of the attempt names it in an accepted
+    repairable finding carrying a decision: a repair naming it with no
+    decision is the restoring a rejection asks for, and is not a fresh
+    repair. The accounting decides that; this only reports the rejections.
 
     A record the state says exists and that cannot be read raises, as it does
     for every reader of a pass record.
@@ -9473,7 +9540,7 @@ def judge_rejections(
         reason = reason if isinstance(reason, str) else ""
         matched = [
             finding for finding in carried
-            if story_inspection.names_a_slug(finding.get("location"), (slug,))
+            if story_inspection.entry_names_key(finding, slug)
         ]
         if not matched:
             where = ("the repair pass this verification returned from"
@@ -9493,7 +9560,185 @@ def judge_rejections(
                         and story_inspection.names_a_slug(
                             finding.get("location"), (routed,))):
                     rejected[routed] = decision_rejection_reason(finding, reason)
+            # A decided finding the checking stage raised itself is left by its
+            # own key on the same terms, so it is filed from its classification
+            # rather than disappearing.
+            own = story_inspection.own_finding_key(finding, routed_slugs)
+            if own and own not in rejected:
+                rejected[own] = decision_rejection_reason(finding, reason)
     return rejected
+
+
+# --------------------------------------------------------------------------
+# What the accounting is told about one verdict
+#
+# The accounting decides what became of each finding by one rule, written once
+# in story_inspection; what it is handed here are the facts that rule needs,
+# each read through the reading the run already has for it: whether an entry
+# names a slug through names_a_slug, whether a finding carries a decision
+# through decision_of, which findings the bounds accepted off the check, which
+# kind a refusal was off its own class, and which repairs a correction pass
+# postponed off the live pass record through _live_pass_record. Nothing here
+# decides what became of a finding, and nothing the accounting records is read
+# back to route.
+# --------------------------------------------------------------------------
+
+
+def _keys_named(finding, routed_slugs=()) -> tuple[str, ...]:
+    """The keys one verdict entry is about: the routed slugs its location
+    names, or the key of the checking stage's own where it names none.
+    """
+    if not isinstance(finding, dict):
+        return ()
+    location = finding.get("location")
+    routed = tuple(
+        slug for slug in routed_slugs
+        if isinstance(slug, str) and slug
+        and story_inspection.names_a_slug(location, (slug,))
+    )
+    if routed:
+        return routed
+    own = story_inspection.own_finding_key(finding, routed_slugs)
+    return (own,) if own else ()
+
+
+def refusal_facts(
+    check: ScopeExtensionCheck, routed_slugs=()
+) -> tuple[tuple[str, ...], dict[str, list[str]]]:
+    """Every key a refusal left, and the files a bound refused for each.
+
+    A refused extension is a bound refusing one file of a fix, so its file is
+    recorded against the finding and stays owed until a later verdict makes
+    that very part. A refused decision takes the fix out of the pass on its
+    own ground and owes no file: a later verdict naming the finding decides it
+    as for any left finding. The kind is read off the refusal's own class.
+    """
+    keys: list[str] = []
+    files: dict[str, list[str]] = {}
+    for one in check.refused:
+        for key in _keys_named(one.finding, routed_slugs):
+            if key not in keys:
+                keys.append(key)
+            if isinstance(one, RefusedExtension):
+                path = one.finding.get("path")
+                if isinstance(path, str) and path:
+                    files.setdefault(key, [])
+                    if path not in files[key]:
+                        files[key].append(path)
+    return tuple(keys), files
+
+
+def decided_keys(check: ScopeExtensionCheck, routed_slugs=()) -> tuple[str, ...]:
+    """The keys the verdict names in an accepted repairable finding carrying
+    a decision — what brings back a finding whose decision was rejected.
+    """
+    keys: list[str] = []
+    for finding in check.accepted:
+        if decision_of(finding) is None:
+            continue
+        for key in _keys_named(finding, routed_slugs):
+            if key not in keys:
+                keys.append(key)
+    return tuple(keys)
+
+
+def own_findings_of(routed_slugs=(), *sources) -> dict[str, dict]:
+    """The findings the checking stage raised itself, keyed by their own
+    keys, as it wrote them — first source first and first finding winning.
+
+    The sources are lists of verdict entries: the verdict's correctable and
+    repairable findings as written, the repairs a live correction pass
+    postponed, and the findings a live repair pass carried, so a finding a
+    later verdict leaves without naming it again is still recorded in the
+    words that described it.
+    """
+    found: dict[str, dict] = {}
+    for source in sources:
+        for finding in source or ():
+            key = story_inspection.own_finding_key(finding, routed_slugs)
+            if key and key not in found:
+                found[key] = finding
+    return found
+
+
+@dataclass(frozen=True)
+class Postponement:
+    """What a correction pass postponed and what the verification it returned
+    to said about each: the postponed findings by key, the keys it asked for
+    again, the keys it declined by name, and the keys it left unanswered.
+    """
+
+    findings: dict
+    asked: tuple
+    declined: tuple
+    unanswered: tuple
+
+
+def postponed_repairs(
+    run_dir: Path,
+    stage: dict,
+    state: RunState,
+    attempt: int,
+    verdict: dict,
+    routed_slugs=(),
+) -> Postponement:
+    """The repairs the live correction pass postponed, and how this verdict
+    answered each.
+
+    The record read is the live correction pass record, through
+    `_live_pass_record` on the terms every reader of one takes: the pass this
+    verification returned from, and only while its counts are the state's. A
+    repair is asked for again where any entry the verdict wrote names its key,
+    and declined where the verdict's declined_findings names it; one neither
+    is unanswered. Whether an entry names a key is
+    `story_inspection.entry_names_key`, the reading the accounting decides by,
+    so a repair of the checking stage's own asked for again in an entry whose
+    location does not spell its slug is still asked for again. Decided by the
+    keys entries name, never by their prose. No live record, or one postponing
+    nothing, postpones nothing.
+    """
+    correction = stage.get("correction_pass") or {}
+    record = _live_pass_record(
+        run_dir, correction.get("result"), state.correction_pass_count,
+        state, attempt,
+    )
+    deferred = (record.parsed.get(DEFERRED_REPAIRABLE_FINDINGS) or []) if record else []
+    findings: dict[str, dict] = {}
+    for finding in deferred:
+        for key in _keys_named(finding, routed_slugs):
+            findings.setdefault(key, finding)
+    entries = story_inspection.verdict_entries(verdict)
+    declined_named = {
+        entry.get("slug") for entry in (verdict.get("declined_findings") or [])
+        if isinstance(entry, dict) and isinstance(entry.get("slug"), str)
+    }
+    asked, declined, unanswered = [], [], []
+    for key in findings:
+        if any(story_inspection.entry_names_key(entry, key) for entry in entries):
+            asked.append(key)
+        elif key in declined_named:
+            declined.append(key)
+        else:
+            unanswered.append(key)
+    return Postponement(findings, tuple(asked), tuple(declined), tuple(unanswered))
+
+
+def sent_back_for_postponed(
+    run_dir: Path, stage_name: str, state: RunState, attempt: int
+) -> bool:
+    """Whether this entry of the stage has already been sent back for an
+    unanswered postponed repair, read off the self-route records this entry
+    wrote — tries 1 to the live count — so it is sent back once.
+    """
+    for number in range(1, state.self_route_count + 1):
+        path = run_dir / self_route_result_file(stage_name, attempt, number)
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get("failure") == UNANSWERED_POSTPONED_REPAIRS:
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -13228,10 +13473,12 @@ def run_story(
             state.verification_iterations += 1
             archive = run_dir / "verification" / f"iteration-{state.verification_iterations}.json"
             archive.write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
-            # Every finding the pre-stage inspection routed to this story is
-            # accounted for here, after the verdict is archived and before any
-            # routing: what the verdict acted on is named by slug, and the rest
-            # is recorded as the remainder in the accounting artifact and filed
+            # Every finding the pre-stage inspection routed to this story, and
+            # every finding the checking stage raised itself that the run
+            # leaves, is accounted for below on every verdict of the attempt,
+            # after the verdict is archived and before any routing: the latest
+            # verdict that deals with a finding decides what became of it, by
+            # one rule the accounting holds, and what the run leaves is filed
             # at the run's completion, not here.
             # Only where the stage declares an inspection, and read off that
             # declaration, so no artifact name is written here. The call is a
@@ -13275,19 +13522,75 @@ def run_story(
                 and repair_declared
                 and bool(_directory_shaped(repairable_as_written))
             )
-            extensions = scope_extension_check(
-                [] if stops_on_a_directory else repairable_as_written,
-                routes, stage_names, stages, reading.parsed, rules,
-                exists=lambda path, root=target_root: (root / path).exists(),
-            )
             # The routed slugs this attempt's inspection handed the verdict,
             # read off its findings record before the accounting exists: a
             # refused extension and a refused decision are declined by them,
-            # and a rejected decision's finding is left by them.
+            # a rejected decision's finding is left by them, and a postponed
+            # repair is answered by them. A pure read, so it sits above the
+            # send-back below, which must be decided before anything about
+            # this verdict is recorded.
             routed_named: tuple = (
                 story_inspection.findings_slugs(
                     run_dir, declared_inspection, attempt
                 ) if declared_inspection else ()
+            )
+            # The repairs a correction pass postponed to this verification,
+            # read off the live correction pass record, and how the verdict
+            # answered each. Every postponed repair must be answered — asked
+            # for again in an entry naming it, or declined by name. One left
+            # unanswered sends this verification back once, in place,
+            # through self_route under a cause of its own, before any refusal,
+            # rejection or accounting is recorded about the verdict, so the
+            # re-run verdict is judged afresh and nothing is recorded twice.
+            # No retry is spent. Where the send-back was already made for
+            # this entry of the stage, or no re-run is left, it is not an
+            # escalation: the unanswered repair is treated as declined
+            # without a reason and handed to the accounting as left. Only a
+            # passing verdict is sent back — a failing one retries, and the
+            # next attempt is inspected and accounted afresh.
+            postponement = postponed_repairs(
+                run_dir, stage, state, attempt, verdict, routed_named
+            )
+            if postponement.unanswered and verdict.get("status") == "passed":
+                if not sent_back_for_postponed(run_dir, name, state, attempt):
+                    unanswered = [
+                        f"{key} ({postponement.findings[key].get('location')})"
+                        for key in postponement.unanswered
+                    ]
+                    decision = self_route(
+                        run_dir,
+                        state,
+                        stage,
+                        failure=UNANSWERED_POSTPONED_REPAIRS,
+                        reason=(
+                            f"the verification a correction pass returned to "
+                            f"left repairs that pass postponed unanswered: "
+                            f"{'; '.join(unanswered)}"
+                        ),
+                        artifacts=sorted(conditional + required),
+                        attempt=attempt,
+                        entries=unanswered,
+                    )
+                    if decision.taken:
+                        self_routed = True
+                        continue
+                append_event(
+                    run_dir,
+                    f"postponed repairs left unanswered on the verification a "
+                    f"correction pass returned to, with no send-back left for "
+                    f"it: {', '.join(postponement.unanswered)}; each is "
+                    f"treated as declined without a reason",
+                    stage=name,
+                )
+            # The keys this verdict leaves through a postponement: declined by
+            # name, or unanswered when no send-back is made for them.
+            postponed_left = tuple(postponement.declined) + tuple(
+                postponement.unanswered
+            )
+            extensions = scope_extension_check(
+                [] if stops_on_a_directory else repairable_as_written,
+                routes, stage_names, stages, reading.parsed, rules,
+                exists=lambda path, root=target_root: (root / path).exists(),
             )
             # A decision naming no source is refused beside the extension
             # bounds and through the same seam, decided over what those
@@ -13301,15 +13604,21 @@ def run_story(
                     _decision_refused(run_dir, name, refused)
                 else:
                     _scope_extension_refused(run_dir, name, refused)
-            # The routed slugs the refusals named, computed once and handed
-            # to the accounting beside the transformed verdict: a routed
-            # finding fixed as two repairable findings sharing one slug is
-            # otherwise counted as acted on through its accepted sibling when
-            # the coordinator refused the other file, and the brief the
-            # refusal promised is never filed. Empty when nothing was refused.
-            refused_slugs: tuple = ()
+            # The keys the refusals left, computed once and handed to the
+            # accounting beside the transformed verdict: a finding fixed as
+            # two repairable findings sharing one slug is otherwise counted as
+            # acted on through its accepted sibling when the coordinator
+            # refused the other file, and the brief the refusal promised is
+            # never filed. Beside them, the files a bound refused for each,
+            # which stay owed until a later verdict makes that very part, and
+            # the keys the verdict names in an accepted repairable finding
+            # carrying a decision, which is what brings back a finding whose
+            # decision was rejected. Each is read off the check — the
+            # accepted findings, and the refusal's own class — rather than
+            # off any prose. Empty when nothing was refused or decided.
+            refused_slugs, refused_files = refusal_facts(extensions, routed_named)
+            decided = decided_keys(extensions, routed_named)
             if extensions.refused:
-                refused_slugs = refused_routed_slugs(extensions, routed_named)
                 verdict = verdict_after_refusals(verdict, extensions, routed_named)
             # Every refusal a passing verdict can meet before its correction
             # block is made here, above everything the run records about that
@@ -13427,7 +13736,7 @@ def run_story(
             if declared_inspection:
                 abandoned = abandoned_routed_slugs(
                     stage, verdict, state, routed_named,
-                    kind="correction_pass",
+                    kind="correction_pass", include_own=True,
                 )
             # The decisions the repair pass this verdict returned from carried,
             # judged against the rejections the verdict makes. Read here, when
@@ -13436,9 +13745,11 @@ def run_story(
             # new pass routing below moves the counts the live record is
             # decided by, and the accounting below is what a rejection
             # amends. Each rejection of a carried decision is a record of its
-            # own; a routed finding whose decision was rejected is handed to
-            # the accounting as left by the run, with the rejection as its
-            # ground. Honoured on a failing verdict too, because this and the
+            # own; a finding whose decision was rejected — routed, or the
+            # checking stage's own — is handed to the accounting with the
+            # rejection as its ground, which leaves it unless this verdict or
+            # a later one of the attempt repairs it again under a decision the
+            # coordinator accepts. Honoured on a failing verdict too, because this and the
             # accounting both run before the passed and failed routing. The
             # change itself is not undone here: that is the verification's
             # own job, with the routes it already has.
@@ -13446,13 +13757,43 @@ def run_story(
                 run_dir, name, stages, state, attempt, verdict, routed_named
             )
             routed_slugs: tuple = ()
+            # What the accounting is told about this verdict, gathered once
+            # and handed to both calls below — this one, and the repair
+            # block's where a spent allowance is met — so the second applies
+            # the rule to the same facts with the abandonment added rather
+            # than to a subset that would undo what the first decided. The
+            # checking stage's own findings are taken from the verdict as
+            # written, from the repairs the live correction pass postponed
+            # and from the findings the live repair pass carried, so one this
+            # verdict leaves without naming again is recorded in the words
+            # that described it. The accounting applies one rule to every
+            # key, and nothing it records is read back here to route.
+            accounting_facts: dict = {}
             if declared_inspection:
+                live_repair = _live_pass_record(
+                    run_dir, repair_pass_declaration(stages).get("result"),
+                    state.repair_pass_count, state, attempt,
+                )
+                accounting_facts = {
+                    "refused_slugs": refused_slugs,
+                    "refused_files": refused_files,
+                    "rejected": rejected,
+                    "decided": decided,
+                    "postponed": postponed_left,
+                    "own_findings": own_findings_of(
+                        routed_named,
+                        repairable_as_written,
+                        verdict.get("correctable_findings") or [],
+                        list(postponement.findings.values()),
+                        (live_repair.parsed.get("findings") or [])
+                        if live_repair else [],
+                    ),
+                }
                 story_inspection.account_after_verdict(
                     run_dir, target_root, config or {}, harness_root,
                     state.story_id, artifact=declared_inspection,
                     attempt=attempt, verdict=verdict,
-                    refused_slugs=refused_slugs, abandoned=abandoned,
-                    rejected=rejected,
+                    abandoned=abandoned, **accounting_facts,
                 )
                 routed_slugs = story_inspection.routed_slugs(
                     run_dir, declared_inspection, attempt
@@ -13521,10 +13862,15 @@ def run_story(
                     else:
                         state.correction_pass_count += 1
                         # The verdict's repairable findings, if any, are
-                        # deferred to the verification the pass returns to
-                        # rather than forgotten: carried verbatim on the
-                        # record under their own key, so the returning
-                        # verifier is handed them, and named in the event.
+                        # deferred to the verification the pass returns to:
+                        # carried verbatim on the record under their own key,
+                        # so the returning verifier is handed them, and named
+                        # in the event. That verification must answer each —
+                        # ask for it again or decline it by name — and one it
+                        # leaves unanswered sends it back once; a repair still
+                        # unanswered after that is declined without a reason
+                        # and filed, so a postponed repair is either fixed or
+                        # filed and never silently counted as made.
                         # The two pass counts recorded here, beside the
                         # attempt, are what pass_record_is_live compares
                         # against the state, so the grant this record makes
@@ -13770,18 +14116,20 @@ def run_story(
                         # failed took the retry route above and never arrives,
                         # so nothing is recorded as abandoned by a pass the run
                         # did not reach. The accounting for this attempt was
-                        # written above with these slugs read as acted on —
-                        # the verdict named them for a pass — so it is corrected
-                        # through the seam a refusal discovered on a returning
-                        # verdict already uses: each moves from acted on to left
-                        # for the run's completion, carrying the allowance that
-                        # ran out as its ground, and the filing at completion
-                        # sends it on. A verdict naming no routed finding
-                        # abandons nothing and amends nothing.
+                        # written above with these findings read as acted on —
+                        # the verdict named them for a pass — so the rule is
+                        # applied again to the same verdict with the same facts
+                        # and the abandonment added: each moves from acted on to
+                        # left for the run's completion, carrying the allowance
+                        # that ran out as its ground, and the filing at
+                        # completion sends it on. A finding the checking stage
+                        # raised itself is left on the same terms and filed
+                        # from its classification. A verdict naming no finding
+                        # for the pass abandons nothing and amends nothing.
                         if declared_inspection:
                             left = abandoned_routed_slugs(
                                 stage, verdict, state, routed_named,
-                                kind="repair_pass",
+                                kind="repair_pass", include_own=True,
                             )
                             if left:
                                 story_inspection.account_after_verdict(
@@ -13789,7 +14137,8 @@ def run_story(
                                     harness_root, state.story_id,
                                     artifact=declared_inspection,
                                     attempt=attempt, verdict=verdict,
-                                    abandoned=left,
+                                    abandoned={**abandoned, **left},
+                                    **accounting_facts,
                                 )
                     else:
                         state.repair_pass_count += 1

@@ -1260,22 +1260,24 @@ def test_this_deployment_declares_a_clean_clone_check_and_a_revert_check():
             assert declaration["baseline"], stage["name"]
 
 
-#: The key a stage declares a repair pass under, the key beside its budget
-#: that records the judgement, and the budget this deployment chose. Spelled
-#: once here: the mechanism is tests/test_repair_pass.py's question against a
-#: built definition, and what *this* deployment declares is asked here.
+#: The key a stage declares a repair pass under, and the key beside its budget
+#: that records the judgement. Spelled once here: the mechanism is
+#: tests/test_repair_pass.py's question against a built definition, and what
+#: *this* deployment declares is asked here. The budget itself is not spelled:
+#: it is a configured value, and story-221 raised it — which a number written
+#: here reddened with nothing broken.
 REPAIR_PASS_KEY = "repair_pass"
 REPAIR_PASS_REASON_KEY = "budget" + REASON_SUFFIX
-REPAIR_PASS_BUDGET = 2
 
 
 @pytest.mark.parametrize("name", sorted(shipped_definitions()))
 def test_every_shipped_definition_declares_a_repair_pass_it_can_take(name):
     """story-155: both shipped definitions declare the pass, on the one stage
-    that judges, with the budget this deployment chose and a reason beside it
-    that states the number. The declaration names no stage of its own — the
-    stage comes off the retry_routing table the same stage declares, which
-    the pre-flight requires and which is asserted here through it.
+    that judges, with a budget the pre-flight accepts and a reason beside it
+    that states that number, whatever the number is. The declaration names no
+    stage of its own — the stage comes off the retry_routing table the same
+    stage declares, which the pre-flight requires and which is asserted here
+    through it.
     """
     definition = shipped_definitions()[name]
     declaring = [stage for stage in definition["stages"]
@@ -1286,7 +1288,6 @@ def test_every_shipped_definition_declares_a_repair_pass_it_can_take(name):
 
     assert stage["name"] == conftest.VERIFYING_STAGE
     assert story_coordinator.repair_pass_problems(definition["stages"]) == [], name
-    assert declaration["budget"] == REPAIR_PASS_BUDGET
     assert "stage" not in declaration
     assert declaration["result"].endswith(".json")
     assert states_the_number(declaration[REPAIR_PASS_REASON_KEY],

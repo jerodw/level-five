@@ -33,8 +33,9 @@ The subjects, in the order the criteria state them:
     the run with the rejection as its ground and filed at completion — while a
     rejection naming a decision the returning pass did not carry changes
     nothing, and a decision on a finding the verifier raised itself, named by
-    the slug of its own its location carries, is rejected into the log too and
-    moves no accounting;
+    the slug of its own its location carries, is rejected into the log too and,
+    since story-221, leaves that finding as well, under a key of its own and
+    outside the routed counts;
   * **the completion report's existing account**, which names a decision that
     stood among the findings repaired and a rejected one among those sent to
     the backlog, with the report's rendering itself unchanged;
@@ -57,10 +58,11 @@ Every absence asserted here is demonstrated to be able to fail:
     reject an earlier pass's decision" sit beside the run whose rejection names
     the decision the returning pass carried, which records it and moves the
     finding;
-  * a rejection of the verifier's own decision "moves no accounting" sits
-    beside the routed rejection, which amends it, and that rejection reaching
-    the log by its slug sits beside the same run naming the finding by its
-    path, which records no rejection;
+  * a rejection of the verifier's own decision "moves no routed finding" sits
+    beside the routed rejection, which moves one, and that rejection reaching
+    the log by its slug — and leaving the verifier's own finding — sits beside
+    the same run naming the finding by its path, which records no rejection and
+    leaves nothing;
   * "a decision meeting a spent allowance records nothing" sits beside the
     same verdicts under an allowance one pass larger, which records it; "a
     deferred decision records nothing" sits beside the run whose returning
@@ -1143,9 +1145,17 @@ def test_a_decision_on_the_verifiers_own_finding_is_rejected_by_its_own_slug(
     verifier gave its own decided finding. The rejection is one event and one
     record of its own beside the decision's, which is left as its own event
     projects. No routed finding stands behind it, so the routed finding is
-    still acted on, its accounting is not amended and nothing is filed for it
-    — the routed rejection above, whose accounting the same readers find
-    amended, is the control for that absence."""
+    still acted on, its counts are not amended and nothing is filed for it —
+    the routed rejection above, whose accounting the same readers find
+    amended, is the control for that absence.
+
+    Since story-221 the verifier's own finding is left by the rejection on
+    the terms a routed one is: the accounting carries it under its own key,
+    `story_inspection.own_finding_key`, with the rejection as its ground. It
+    carries no classification, so it is dropped at completion with that
+    reason rather than filed, and the account names it among the discarded.
+    The run below, whose rejection names the finding by its path, leaves
+    nothing of the kind and is the control."""
     assert OWN_SLUG not in {SLUG, OTHER_SLUG}
     assert story_inspection.names_a_slug(OWN_DECIDED_NAMED["location"],
                                          (OWN_SLUG,))
@@ -1180,6 +1190,20 @@ def test_a_decision_on_the_verifiers_own_finding_is_rejected_by_its_own_slug(
     assert inspected.filings_of(filings, ROUTED_FINDING) == 0
     assert inspected.routed_markers(run) == []
 
+    key = story_inspection.own_finding_key(OWN_DECIDED_NAMED, (SLUG,))
+    (own,) = accounted["own_left"]
+    assert own["slug"] == key
+    assert own["decision_rejected"] is True
+    assert REJECTION_REASON in own["reason"]
+    assert own["finding"]["location"] == OWN_DECIDED_NAMED["location"]
+    assert own["finding"]["finding"] == OWN_DECIDED_NAMED["finding"]
+    (filed,) = inspected.filed_events(run)
+    assert story_inspection.UNCLASSIFIED_OWN_FINDING in filed["message"]
+    assert filed["filed"] == 0
+    discarded = next(one for one in findings_section(run).split("\n\n")
+                     if one.startswith("Discarded as not worth filing: "))
+    assert f"{key} ({story_inspection.UNCLASSIFIED_OWN_FINDING}" in discarded
+
 
 def test_a_rejection_naming_the_verifiers_own_finding_by_its_path_matches_nothing(
         target, harness, tmp_path, filings):
@@ -1203,6 +1227,8 @@ def test_a_rejection_naming_the_verifiers_own_finding_by_its_path_matches_nothin
     assert note["stage"] == JUDGING
     assert path in note["message"]
     assert inspected.accounting(run)["acted_on_slugs"] == [SLUG]
+    assert "own_left" not in inspected.accounting(run)
+    assert inspected.filed_events(run) == []
     assert inspected.filings_of(filings, ROUTED_FINDING) == 0
 
 
@@ -1315,15 +1341,30 @@ def test_a_deferred_decision_is_recorded_once_its_repair_pass_routes(tmp_path):
 def test_a_deferred_decision_never_raised_again_records_nothing(tmp_path):
     """The same correction pass, with the verification it returns to raising
     nothing: no repair pass routes and nothing is recorded. The run above is
-    the control."""
+    the control.
+
+    Since story-221 that verification owes the postponed repair an answer and
+    gives none. This module's judging stage declares no re-run to send it
+    back with, so the repair is treated as declined without a reason — said
+    in the run's events and left in the accounting under the verifier's own
+    key — and the run completes on that verdict rather than escalating."""
     deferred_target, deferred_harness = fresh(tmp_path, "deferred")
     run = drive(deferred_target, deferred_harness, tmp_path,
                 [CORRECTING_AND_DECIDING, PASS], findings=(), name="deferred")
     assert run.code == 0
+    assert run.state["status"] == "completed"
     assert len(inspected.events_of_kind(run, CORRECTION_ROUTED)) == 1
     assert inspected.events_of_kind(run, ROUTED) == []
     assert inspected.events_of_kind(run, DECISION_RECORDED) == []
     assert decision_records(run) == []
+
+    assert inspected.events_of_kind(run, "self-routed") == []
+    key = story_inspection.own_finding_key(OWN_DECIDED)
+    assert any("treated as declined without a reason" in line and key in line
+               for line in run.messages), run.messages
+    (own,) = inspected.accounting(run)["own_left"]
+    assert own["slug"] == key
+    assert own["reason_given"] is False
 
 
 # ==========================================================================
