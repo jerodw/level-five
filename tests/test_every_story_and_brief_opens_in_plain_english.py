@@ -62,6 +62,15 @@ The layer's own statements have a control of a different kind: the layer with
 the entry cut is shown to lack every one of them and to keep everything
 beside them, which is the same cut the reach controls depend on.
 
+story-222 qualified the third of the opening's three things in both the layer
+and the story schema's description of story.description: what the work
+deliberately leaves alone is something that stays correct as it is, never a
+defect it knows of. Each qualification is folded into its document's table,
+so every assertion above that the table drives is made of it — the superseded
+description and the layer beside the entry, which never carried it, among
+them — and each has a second control: the document with that one statement
+cut out, where it is reported missing and everything else is still found.
+
 Nothing here invokes a model and nothing here runs the suite.
 """
 from __future__ import annotations
@@ -192,6 +201,22 @@ LAYER_STATES = {
         ("shows it in that form first, before anything else",),
 }
 
+#: What the layer has said since story-222 about what a piece of work
+#: deliberately leaves alone: something that stays correct as it is, never a
+#: defect it knows of, which is fixed or set out as a gap left with its
+#: reason. Folded into LAYER_STATES so every assertion that table drives — the
+#: entry, the remainder beside it, each render and each mirror without the
+#: entry — is made of it too.
+LAYER_LEAVES_ALONE_STATES = {
+    "what the work leaves alone stays correct, never a known defect":
+        ("what the work deliberately leaves alone is something that stays "
+         "correct as it is, never a defect it knows of",),
+    "a known defect is fixed, or set out as a gap left with its reason":
+        ("a defect it knows of is either fixed by the work or set out on its "
+         "own as a gap left, with the reason it is left",),
+}
+LAYER_STATES.update(LAYER_LEAVES_ALONE_STATES)
+
 PLANNER_DRAFT_STEP_STATES = {
     "the draft opens with the plain paragraphs":
         ("opens with the plain-english paragraphs",),
@@ -263,6 +288,23 @@ STORY_DESCRIPTION_STATES = {
         ("paragraphs naming paths, stage names, check names and field names "
          "follow it",),
 }
+
+#: What the story schema's description of story.description has said since
+#: story-222, in its own words rather than the layer's: what a story leaves
+#: alone stays correct as it is, never a defect the plan knows of, and a
+#: defect is fixed by the story or recorded as a gap left. Folded into the
+#: table for the reason the layer's is.
+STORY_DESCRIPTION_LEAVES_ALONE_STATES = {
+    "what a story leaves alone stays correct, never a known defect":
+        ("what a story deliberately leaves alone is something that stays "
+         "correct as it is, never a defect the plan knows of",),
+    "a defect in what the story changes is fixed by it, a gap left recorded "
+    "apart":
+        ("a defect in the part of the system the story changes is fixed by "
+         "the story",
+         "is recorded there rather than in this text"),
+}
+STORY_DESCRIPTION_STATES.update(STORY_DESCRIPTION_LEAVES_ALONE_STATES)
 
 BRIEF_BODY_STATES = {
     "the body opens with the plain paragraphs":
@@ -367,6 +409,32 @@ def test_the_same_searches_report_the_layer_beside_the_entry_lacks_every_stateme
 
     for requirement, phrases in LAYER_STATES.items():
         assert missing(remainder, phrases) == list(phrases), requirement
+
+
+def cut_as_one_span(text: str, statements: dict[str, tuple[str, ...]]) -> str:
+    """`text`, collapsed, with `statements` cut out of it as one span: from the
+    first words of the first to the sentence end after the last. Asserted to
+    have found the span once, so a rewording the cut no longer finds reddens
+    rather than leaving its control asserting nothing."""
+    said = [phrase for phrases in statements.values() for phrase in phrases]
+    span = re.compile(rf"{re.escape(said[0])}.*?{re.escape(said[-1])}\.\s*")
+    cut, count = span.subn("", collapsed(text))
+    assert count == 1, "the statement is no longer one span of the text"
+    return cut
+
+
+def test_the_entry_with_story_222s_qualification_cut_lacks_it_and_keeps_the_rest():
+    """The control for the qualification in the other direction: the entry
+    with that one statement cut out is reported missing every phrase of it,
+    while every other statement the entry makes is still found — so the
+    qualification is its own sentence of the entry, and the searches above
+    find it there rather than in a statement the entry made before."""
+    cut = cut_as_one_span(entry_of(prose_layer()), LAYER_LEAVES_ALONE_STATES)
+
+    for requirement, phrases in LAYER_STATES.items():
+        expected = list(phrases) if requirement in LAYER_LEAVES_ALONE_STATES \
+            else []
+        assert missing(cut, phrases) == expected, requirement
 
 
 def test_the_entry_sits_after_the_conversational_entry_and_before_the_pair():
@@ -833,6 +901,21 @@ def test_the_same_searches_report_each_description_as_it_read_before():
     # description happens to carry: the story description never had them.
     assert missing(STORY_DESCRIPTION_BEFORE, BRIEF_BODY_STATES[kept]) \
         == list(BRIEF_BODY_STATES[kept])
+
+
+def test_the_story_description_with_story_222s_qualification_cut_keeps_the_rest():
+    """The same control for the description: cut that one statement out of
+    it, and every phrase of the statement is reported missing while every
+    other statement the description makes about the opening is still found
+    — so the description says it in a sentence of its own, beside the
+    opening's three things rather than in place of one of them."""
+    cut = cut_as_one_span(STORY_DESCRIPTION_FIELD["description"],
+                          STORY_DESCRIPTION_LEAVES_ALONE_STATES)
+
+    for requirement, phrases in STORY_DESCRIPTION_STATES.items():
+        expected = list(phrases) \
+            if requirement in STORY_DESCRIPTION_LEAVES_ALONE_STATES else []
+        assert missing(cut, phrases) == expected, requirement
 
 
 @pytest.mark.parametrize("field", [

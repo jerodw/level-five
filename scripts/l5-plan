@@ -79,6 +79,13 @@ anything only on their answer — so the block records an act this process
 watched happen rather than one it inferred from a terminal and a file. No
 agent is ever asked to write it.
 
+Above that question it names each artifact by its story id and title, and
+beneath each of those lines it prints each gap that artifact's plan leaves —
+its gaps_left entries, whole and one to a line — so what the plan leaves is
+read before it is approved. Both are taken from the one reading of each
+artifact this script makes, through the coordinator's reader; an artifact
+leaving no gap prints only its own line.
+
 A rejection stamps nothing, commits nothing and pushes nothing, removes
 nothing, and says where the artifacts are and what removes them. An artifact
 that came back from the session already carrying a block is put to the
@@ -816,23 +823,32 @@ def report(
     # them, so it is found whether or not there is a terminal: a headless
     # invocation that let one through would be the path by which an agent's own
     # block reaches a commit no process observed.
-    # Each artifact is read once here and that one read serves both readers of
-    # it: the session-written-block check immediately below, and the titles the
-    # approval prompt and the run offer name their stories by.
+    # Each artifact is read once here and that one read serves every reader of
+    # it: the session-written-block check immediately below, the titles the
+    # approval prompt and the run offer name their stories by, and the gaps
+    # the approval prompt shows beneath each title.
     texts = {path: path.read_text(encoding="utf-8") for path in artifacts}
     written = [
         path for path, text in texts.items() if plan_mandate.carries_a_mandate(text)
     ]
-    # The title is read through the coordinator's own reader, which is the one
-    # reader of a story artifact this repository has, and bounded by the
-    # coordinator's own function. An artifact that does not parse, or that
-    # carries no title, answers with the empty string and is named by its id
-    # alone; the fault it carries is the validation's to report, below.
-    titles = {
-        path: story_coordinator.story_title(
-            story_coordinator.read_story(text).parsed
-        )
+    # The artifact is parsed through the coordinator's own reader, which is the
+    # one reader of a story artifact this repository has, and the title and the
+    # gaps are both taken from that one parse by the coordinator's own
+    # functions. An artifact that does not parse, or that carries no title,
+    # answers with the empty string and is named by its id alone, and one that
+    # does not parse shows no gaps; the fault it carries is the validation's
+    # to report, below.
+    parses = {
+        path: story_coordinator.read_story(text).parsed
         for path, text in texts.items()
+    }
+    titles = {
+        path: story_coordinator.story_title(parsed)
+        for path, parsed in parses.items()
+    }
+    gaps = {
+        path: story_coordinator.gaps_left(parsed)
+        for path, parsed in parses.items()
     }
     # The mandate is stamped between the snapshot and the validation, so the
     # artifact the validation is handed is the artifact the coordinator would
@@ -858,7 +874,7 @@ def report(
         # artifact can still be refused below for a fault — which leaves
         # everything in the tree to re-run from, and is cheaper than validating
         # against a second, relaxed spelling of the schema.
-        if not approve(written, titles):
+        if not approve(written, titles, gaps):
             status = reject(artifacts, written)
             keep_worktree(target_root, "the artifacts are in it, unstamped")
             return status
@@ -1195,7 +1211,11 @@ def refuse_session_block(written: Sequence[Path], artifacts: Sequence[Path]) -> 
     return 1
 
 
-def approve(written: Sequence[Path], titles: dict | None = None) -> bool:
+def approve(
+    written: Sequence[Path],
+    titles: dict | None = None,
+    gaps: dict | None = None,
+) -> bool:
     """Ask the developer whether they approve what the session planned.
 
     Asked after the session has ended and before anything is stamped,
@@ -1209,6 +1229,12 @@ def approve(written: Sequence[Path], titles: dict | None = None) -> bool:
     thing printed before the read. An artifact with no title is named by its id
     alone rather than by a placeholder.
 
+    Beneath each artifact's line, each gap that artifact's plan leaves is
+    printed whole on a line of its own, gap and reason together, so what the
+    plan leaves is read before it is approved. An artifact leaving no gap, and
+    one whose parse could not be read, print nothing more than the line above
+    — exactly what was printed before gaps were shown.
+
     A session-written block is folded into this same question rather than
     repaired quietly or refused outright: the developer is told the block is
     there and that approving discards it, because an agent that ignored an
@@ -1217,6 +1243,8 @@ def approve(written: Sequence[Path], titles: dict | None = None) -> bool:
     """
     for path, title in (titles or {}).items():
         print(f"l5-plan: {path.stem}" + (f": {title}" if title else ""))
+        for gap in (gaps or {}).get(path, []):
+            print(f"l5-plan:   leaves a gap: {gap}")
     if written:
         for path in written:
             print(

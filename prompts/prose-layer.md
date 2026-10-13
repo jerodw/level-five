@@ -43,7 +43,10 @@ story's description and a brief's body open with one to three paragraphs of
 plain English — what is wrong or wanted, what the work does about it, and
 what it deliberately leaves alone — written for a developer who does not know
 this harness intimately, so the text can be followed without knowing its
-vocabulary. Paths, stage names, check names and field names are kept for the
+vocabulary. What the work deliberately leaves alone is something that stays
+correct as it is, never a defect it knows of: a defect it knows of is either
+fixed by the work or set out on its own as a gap left, with the reason it is
+left. Paths, stage names, check names and field names are kept for the
 paragraphs that follow the opening, where a reader who wants them finds them.
 Whatever shows such a text to a person for their approval shows it in that
 form first, before anything else: what they approve is what they read first,

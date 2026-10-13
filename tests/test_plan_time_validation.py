@@ -41,7 +41,15 @@ check reporting the violation it exists to catch:
     the plan-time composition refusing the same text;
   * since story-181, "a quoted search pattern holding a stage name beside a
     prefix is not reported" sits beside the same sentence with its delimiters
-    stripped, which the same check reports in the words it always has.
+    stripped, which the same check reports in the words it always has;
+  * since story-222, "a gap carrying a reason passes" sits beside the same
+    gap with its parenthetical emptied, which the same check reports; "a path
+    beside a blocked one is not reported" sits beside the same story handed a
+    blocked list that does block it; "pre-flight does not refuse either new
+    class" sits beside the plan-time composition refusing the same text and a
+    schema-invalid artifact pre-flight does refuse; and "no code in a run
+    reads gaps_left" sits beside the same scan over a copy of a module with a
+    read planted in it.
 
 The baseline for anything read out of git is `conftest.story_commit_range`,
 never HEAD and never the working tree against the repository root: the
@@ -55,6 +63,7 @@ them.
 
 No model is invoked anywhere in this file.
 """
+import ast
 import json
 import os
 import re
@@ -259,8 +268,8 @@ def test_reasoned_reasons_every_bare_entry_and_only_those():
     assert reasoned(without_block) == without_block
 
 
-#: The four defects l5-plan must report, and what each is defective about.
-#: Keyed by name so the parametrised tests below say which one failed.
+#: The defects l5-plan must report, and what each is defective about. Keyed
+#: by name so the parametrised tests below say which one failed.
 DEFECTS = {
     "unparseable": "this: is: not: a story\n\t- ?\n",
     "schema": ARTIFACT.format(story_id="story-900", title="No tasks at all").replace(
@@ -276,12 +285,106 @@ DEFECTS = {
 #: design, so it is absent here and is asserted absent from pre-flight below.
 #: The scope-reason class since story-177 is plan-time only for the same
 #: reason — committed artifacts carry bare entries and are not rewritten —
-#: and is absent here and asserted absent from pre-flight the same way.
+#: and is absent here and asserted absent from pre-flight the same way. So
+#: are story-222's two classes, the gap-reason class for a reason of its own
+#: and the blocked-work class for the strictness class's.
 PRE_FLIGHT_DEFECTS = dict(DEFECTS)
 
 DEFECTS["strictness"] = strict_artifact()
 DEFECTS["scope-reason-bare"] = scope_reason_artifact(BARE_ENTRY_LINE)
 DEFECTS["scope-reason-empty"] = scope_reason_artifact(EMPTY_PARENTHETICAL_LINE)
+
+
+# --------------------------------------------------------------------------
+# story-222's two classes, as artifacts. The eighth refuses a gaps_left entry
+# carrying no reason; the ninth refuses a plan scheduling work on a path the
+# execution rules block for every stage. Each defect is the control artifact
+# with lines added to it and none of its own changed, so what refuses it is
+# the added entry and nothing riding along with it.
+# --------------------------------------------------------------------------
+
+#: The field a plan records each gap it leaves in, read from where the
+#: coordinator spells it once rather than written here.
+GAPS_LEFT = story_coordinator.GAPS_LEFT
+
+#: A gap carrying the developer's reason, and the same gap bare and with its
+#: parenthetical emptied. The reason is never read by the check, so any reason
+#: would do; this one names a ground, as the planner is told a reason does.
+REASONED_GAP = ("a gap this test's plan leaves (it lies in a different part "
+                "of the system)")
+BARE_GAP = re.sub(r" \(.+\)$", "", REASONED_GAP)
+EMPTY_GAP = f"{BARE_GAP} ()"
+
+
+def gaps_artifact(*entries: str, story_id: str = "story-900") -> str:
+    """The control artifact with a gaps_left list holding `entries` after it."""
+    return artifact(story_id) + f"\n{GAPS_LEFT}:\n" + "".join(
+        f"  - {entry}\n" for entry in entries)
+
+
+#: The paths l5-plan validates against: the execution rules under the harness
+#: root it runs from, which is this repository, read through the reader the
+#: coordinator reads them with. An input to the end-to-end cases rather than a
+#: subject — the script resolves its own harness root, so these are the rules
+#: it applies — and nothing below depends on which paths they are: the first
+#: one written as a directory is taken, and a file is put beneath it and
+#: beside it.
+BLOCKED_PATHS = harness_config.load_rules(HARNESS_ROOT)["blocked_paths"]
+BLOCKED_PREFIX = next(prefix for prefix in BLOCKED_PATHS if prefix.endswith("/"))
+BLOCKED_FILE = f"{BLOCKED_PREFIX}zzz-planned-work.md"
+BESIDE_FILE = f"{BLOCKED_PREFIX.rstrip('/')}-beside/zzz-planned-work.md"
+
+#: The control artifact's own scope.modify line, read off it rather than
+#: written here, and how many entries that list holds — which is the index an
+#: entry added after them takes.
+MODIFY_LINE = re.search(r"^  modify:\n((?:    - .+\n)+)", ARTIFACT, re.MULTILINE)
+assert MODIFY_LINE is not None, "the control artifact carries no modify entry"
+MODIFY_ENTRY_LINES = MODIFY_LINE.group(1)
+MODIFY_ENTRIES = MODIFY_ENTRY_LINES.count("    - ")
+
+
+def modify_artifact(path: str, story_id: str = "story-900") -> str:
+    """The control artifact with `path` added to scope.modify after the
+    entries it already carries."""
+    text = artifact(story_id)
+    assert MODIFY_ENTRY_LINES in text
+    return text.replace(MODIFY_ENTRY_LINES, f"{MODIFY_ENTRY_LINES}    - {path}\n", 1)
+
+
+def likely_file_artifact(path: str, story_id: str = "story-900") -> str:
+    """The control artifact with a technical_plan naming `path` as its one
+    likely file change, assigned to a stage the workflow defines and restricts
+    nowhere, so no other class has anything to say about the entry."""
+    return artifact(story_id) + (
+        "\ntechnical_plan:\n"
+        "  implementation_steps:\n"
+        "    - do the sample work\n"
+        "  likely_file_changes:\n"
+        f"    - file: {path}\n"
+        f"      stage: {UNRESTRICTED_STAGE}\n"
+        "      reason: the sample work changes it\n")
+
+
+DEFECTS["gap-reason-bare"] = gaps_artifact(BARE_GAP)
+DEFECTS["gap-reason-empty"] = gaps_artifact(EMPTY_GAP)
+DEFECTS["blocked-modify"] = modify_artifact(BLOCKED_FILE)
+DEFECTS["blocked-likely-file"] = likely_file_artifact(BLOCKED_FILE)
+
+#: Each of those defects with the one thing wrong with it put right — the gap
+#: given a reason, the path moved beside the blocked one — which is what the
+#: end-to-end cases commit as their control; where a refusal of it points; and
+#: the entry it quotes.
+STORY_222_DEFECTS = {
+    "gap-reason-bare": (gaps_artifact(REASONED_GAP), f"$.{GAPS_LEFT}[0]",
+                        BARE_GAP),
+    "gap-reason-empty": (gaps_artifact(REASONED_GAP), f"$.{GAPS_LEFT}[0]",
+                         EMPTY_GAP),
+    "blocked-modify": (modify_artifact(BESIDE_FILE),
+                       f"$.scope.modify[{MODIFY_ENTRIES}]", BLOCKED_FILE),
+    "blocked-likely-file": (likely_file_artifact(BESIDE_FILE),
+                            "$.technical_plan.likely_file_changes[0]",
+                            BLOCKED_FILE),
+}
 
 
 def plan_time_problems(text: str) -> list[str]:
@@ -294,6 +397,9 @@ def plan_time_problems(text: str) -> list[str]:
         found += story_coordinator.stage_exception_problems(reading.parsed, STAGES)
         found += plan_validation.strictness_problems(reading.parsed, STAGES)
         found += plan_validation.scope_reason_problems(reading.parsed)
+        found += plan_validation.gap_reason_problems(reading.parsed)
+        found += plan_validation.blocked_work_problems(reading.parsed,
+                                                      BLOCKED_PATHS)
     return found
 
 
@@ -333,6 +439,41 @@ def test_the_scope_reason_defects_differ_from_the_control_in_the_one_entry_alone
     # And the bare line really is bare, and the empty one really is empty.
     assert "(" not in BARE_ENTRY_LINE
     assert EMPTY_PARENTHETICAL_LINE.endswith(" ()")
+
+
+def test_the_story_222_defects_add_their_entry_to_the_control_and_nothing_else():
+    """The anchor for story-222's two classes, in the scope-reason one's
+    idiom: each defect is the control artifact with lines added and none of
+    its own changed, every reader that ran before this story finds nothing
+    wrong with it, and of the two new classes exactly its own reports it — so
+    what refuses it below is the added entry. Each one's repaired counterpart,
+    which the end-to-end cases commit as their control, has nothing wrong with
+    it at all.
+
+    The gap entries really are bare and empty, the blocked file really is
+    beneath a path the execution rules block, and the file beside it really
+    is not — each decided by the coordinator's own reading of a blocked
+    path."""
+    control = artifact("story-900").splitlines(keepends=True)
+    gap_defects = {"gap-reason-bare", "gap-reason-empty"}
+    for name, (repaired, _, _) in STORY_222_DEFECTS.items():
+        defective = DEFECTS[name].splitlines(keepends=True)
+        remaining = iter(defective)
+        assert all(line in remaining for line in control), name
+        assert len(defective) > len(control), name
+        reading = story_coordinator.read_story(stamped(DEFECTS[name]))
+        assert reading.problems == [], name
+        assert story_coordinator.stage_exception_problems(reading.parsed, STAGES) == []
+        assert plan_validation.strictness_problems(reading.parsed, STAGES) == []
+        assert plan_validation.scope_reason_problems(reading.parsed) == []
+        gaps = plan_validation.gap_reason_problems(reading.parsed)
+        work = plan_validation.blocked_work_problems(reading.parsed, BLOCKED_PATHS)
+        expected = (1, 0) if name in gap_defects else (0, 1)
+        assert (len(gaps), len(work)) == expected, name
+        assert plan_time_problems(stamped(repaired)) == [], name
+    assert "(" not in BARE_GAP and EMPTY_GAP.endswith(" ()")
+    assert story_coordinator.is_blocked(BLOCKED_FILE, BLOCKED_PATHS)
+    assert not story_coordinator.is_blocked(BESIDE_FILE, BLOCKED_PATHS)
 
 
 # --------------------------------------------------------------------------
@@ -1226,6 +1367,493 @@ def test_the_module_states_the_seventh_class_and_why_it_is_plan_time_only():
 
 
 # --------------------------------------------------------------------------
+# story-222: the gap-reason check and the blocked-work check
+#
+# The eighth class refuses a gaps_left entry carrying no reason, on the terms
+# the seventh refuses a do_not_modify entry and through the same predicate.
+# The ninth refuses a scope.modify entry or a likely_file_changes file at or
+# beneath a path the execution rules block for every stage, decided by the
+# coordinator's is_blocked. Both are driven here against stories built in
+# place and against blocked lists this module writes, so each check is handed
+# exactly the shape a test is about; the list the shipped rules hold is an
+# input only to the end-to-end cases further down, where l5-plan reads it
+# itself.
+# --------------------------------------------------------------------------
+
+
+def with_gaps(*entries) -> dict:
+    return {GAPS_LEFT: list(entries)}
+
+
+#: The grounds a refusal of a gap shows a reason may name, as phrases a
+#: planner repairing the entry would look for.
+GROUNDS_A_REASON_MAY_NAME = (
+    "a different part of the system",
+    "the story's workflow",
+    "a decision the developer chooses not to make now",
+)
+
+
+def test_a_bare_gap_is_reported_naming_its_index_quoting_it_and_showing_the_form():
+    (problem,) = plan_validation.gap_reason_problems(with_gaps(BARE_GAP))
+    assert problem.startswith(f"$.{GAPS_LEFT}[0]:")
+    assert repr(BARE_GAP) in problem
+    assert "carries no reason" in problem
+    # The form a passing entry takes, and the grounds a reason may name, are
+    # shown, so a planner repairing the entry sees what to write rather than
+    # only what was wrong.
+    assert re.search(r"<[^>]+> \(<[^>]*reason[^>]*>\)", problem)
+    for ground in GROUNDS_A_REASON_MAY_NAME:
+        assert ground in problem, ground
+
+
+def test_an_empty_parenthetical_gap_is_reported_the_same_way_as_a_bare_one():
+    """Same pointer, same quoting, same shown form; only the quoted entry
+    differs."""
+    bare = plan_validation.gap_reason_problems(with_gaps(BARE_GAP))
+    empty = plan_validation.gap_reason_problems(with_gaps(EMPTY_GAP))
+    assert len(bare) == len(empty) == 1
+    assert empty[0].replace(repr(EMPTY_GAP), repr(BARE_GAP)) == bare[0]
+
+
+@pytest.mark.parametrize("entry", [
+    f"{BARE_GAP} (  )",
+    f"{BARE_GAP} (--)",
+    f"{BARE_GAP} ( ... )",
+    "(a reason with no gap before it)",
+    f"{BARE_GAP} (a reason) and then more gap",
+])
+def test_a_gap_whose_parenthetical_is_empty_misplaced_or_alone_is_reported(entry: str):
+    """Empty in the sense the predicate reads — no word character — and a
+    parenthetical that is not the entry's closing one, or has nothing before
+    it, are each refused as a bare gap is."""
+    (problem,) = plan_validation.gap_reason_problems(with_gaps(entry))
+    assert problem.startswith(f"$.{GAPS_LEFT}[0]:")
+
+
+@pytest.mark.parametrize("entry", [
+    REASONED_GAP,
+    f"{BARE_GAP} (it waits on a decision the developer chooses not to make now)",
+    f"{BARE_GAP} (see the brief (filed at plan time) for why)",
+    f"{BARE_GAP} (x)",
+    f"{BARE_GAP} (qqq)",
+    f"{BARE_GAP}(no space before the parenthetical)",
+])
+def test_a_gap_carrying_any_reason_passes_whatever_the_reason_says(entry: str):
+    """A reason naming a ground, one carrying parentheses of its own, a
+    one-character one, one no reader could weigh and one with no space before
+    it: shape is what is read, and each of these has the shape. Whether a
+    reason names a real ground is the developer's to give and a reviewer's to
+    weigh, and the check has no opinion."""
+    assert plan_validation.gap_reason_problems(with_gaps(entry)) == []
+    # Control for the silence: the same entry with its parenthetical emptied
+    # is reported, so the check saw the entry and passed it for its reason.
+    emptied = re.sub(r"\(.*\)$", "()", entry)
+    assert emptied != entry
+    assert plan_validation.gap_reason_problems(with_gaps(emptied)) != []
+
+
+def test_one_problem_per_offending_gap_each_naming_its_own_index():
+    problems = plan_validation.gap_reason_problems(with_gaps(
+        BARE_GAP, REASONED_GAP, EMPTY_GAP, REASONED_GAP, f"{BARE_GAP} again"))
+    assert [problem.split(":")[0] for problem in problems] == [
+        f"$.{GAPS_LEFT}[0]", f"$.{GAPS_LEFT}[2]", f"$.{GAPS_LEFT}[4]"]
+
+
+def test_no_gaps_left_an_empty_list_and_entries_that_are_not_strings_yield_nothing():
+    """A story leaving no gap, and the shapes the schema refuses before this
+    check could be asked, are refused for nothing here. The control is the
+    same check over one bare entry, which it reports, so the silences are the
+    inputs rather than a check that never looks."""
+    assert plan_validation.gap_reason_problems({}) == []
+    assert plan_validation.gap_reason_problems(with_gaps()) == []
+    assert plan_validation.gap_reason_problems({GAPS_LEFT: BARE_GAP}) == []
+    assert plan_validation.gap_reason_problems(with_gaps(7, None, {"gap": 1})) == []
+    assert plan_validation.gap_reason_problems(with_gaps(BARE_GAP)) != []
+
+
+#: Entry shapes the reason predicate tells apart, for the parity below: some
+#: it passes and some it refuses.
+REASON_SHAPES = (
+    BARE_GAP, EMPTY_GAP, "(x)", "   (x)", "x (  )", "x (--)",
+    "x (a) and more", "x (a)", "x(a)", "x (a (b) c)", "ζ (ζ)", "x\n(a)",
+)
+
+
+def test_a_gap_and_a_do_not_modify_entry_are_held_to_one_reading_of_a_reason():
+    """The criterion's own terms: whether a gaps_left entry carries a reason
+    is decided by the definition that decides it for a do_not_modify entry.
+    Over every shape above, the two checks refuse exactly the same entries,
+    and the name plan_validation decides through is the coordinator's own
+    predicate. Both verdicts occur among the shapes, so the agreement is the
+    two checks deciding alike rather than both answering one way."""
+    verdicts = {}
+    for entry in REASON_SHAPES:
+        gap = bool(plan_validation.gap_reason_problems(with_gaps(entry)))
+        kept = bool(plan_validation.scope_reason_problems(
+            with_do_not_modify(entry)))
+        assert gap == kept, entry
+        verdicts[entry] = gap
+    assert set(verdicts.values()) == {True, False}
+    assert plan_validation.carries_a_reason is story_coordinator.carries_a_reason
+
+
+def test_the_gap_check_decides_through_the_predicate_it_imports(monkeypatch):
+    """Recorded rather than inferred: the predicate plan_validation imports
+    is consulted once per entry, and its answer is the verdict — a stand-in
+    passing everything refuses nothing, even a bare gap, and one passing
+    nothing refuses a reasoned one."""
+    consulted = []
+    monkeypatch.setattr(plan_validation, "carries_a_reason",
+                        lambda entry: consulted.append(entry) or True)
+    assert plan_validation.gap_reason_problems(with_gaps(BARE_GAP, EMPTY_GAP)) == []
+    assert consulted == [BARE_GAP, EMPTY_GAP]
+
+    monkeypatch.setattr(plan_validation, "carries_a_reason", lambda entry: False)
+    assert len(plan_validation.gap_reason_problems(with_gaps(REASONED_GAP))) == 1
+
+
+#: A blocked list this module writes: a directory, and a directory beneath
+#: another, neither of which any repository's own rules hold.
+FIXTURE_BLOCKED = ["zzz-sealed/", "zzz-vault/inner/"]
+
+
+def with_work(modify=(), files=()) -> dict:
+    """A story planning work on `modify` in its scope and on `files` in its
+    technical plan, each file assigned to a stage the workflow defines."""
+    story = {"scope": {"modify": list(modify), "do_not_modify": []}}
+    if files:
+        story["technical_plan"] = {"likely_file_changes": [
+            {"file": file, "stage": UNRESTRICTED_STAGE,
+             "reason": "the work changes it"} for file in files]}
+    return story
+
+
+@pytest.mark.parametrize("prefix", FIXTURE_BLOCKED)
+def test_a_modify_entry_at_or_beneath_a_blocked_path_is_reported_naming_both(prefix):
+    """The blocked path itself, a file beneath it and a file deeper still:
+    each is one problem, pointing at its own entry, quoting it, naming the
+    blocked path, and saying the work goes in gaps_left instead."""
+    for entry in (prefix, f"{prefix}x.md", f"{prefix}deeper/x.md"):
+        (problem,) = plan_validation.blocked_work_problems(
+            with_work(modify=["src/", entry]), FIXTURE_BLOCKED)
+        assert problem.startswith("$.scope.modify[1]:"), entry
+        assert repr(entry) in problem
+        assert repr(prefix) in problem
+        assert GAPS_LEFT in problem
+
+
+@pytest.mark.parametrize("prefix", FIXTURE_BLOCKED)
+def test_a_likely_file_at_or_beneath_a_blocked_path_is_reported_the_same_way(prefix):
+    for entry in (f"{prefix}x.md", f"{prefix}deeper/x.md"):
+        (problem,) = plan_validation.blocked_work_problems(
+            with_work(files=["src/app.py", entry]), FIXTURE_BLOCKED)
+        assert problem.startswith("$.technical_plan.likely_file_changes[1]:"), entry
+        assert repr(entry) in problem
+        assert repr(prefix) in problem
+        assert GAPS_LEFT in problem
+
+
+@pytest.mark.parametrize("entry", [
+    "zzz-sealed-beside/x.md",
+    "zzz-sealed",
+    "src/zzz-sealed/x.md",
+    "zzz-vault/x.md",
+    "zzz-vault/innerness/x.md",
+])
+def test_a_path_beside_a_blocked_one_is_not_reported(entry: str):
+    """A directory whose name only begins with a blocked one's, the blocked
+    name without its separator, the blocked name further down another path,
+    and the parent of a blocked directory: none is at or beneath a blocked
+    path, in either list. The control is the same story handed a blocked list
+    that does hold the entry, where both of its entries are reported — so the
+    silence is the path's position rather than a check that saw nothing."""
+    story = with_work(modify=[entry], files=[entry])
+    assert plan_validation.blocked_work_problems(story, FIXTURE_BLOCKED) == []
+    assert len(plan_validation.blocked_work_problems(
+        story, [*FIXTURE_BLOCKED, entry])) == 2
+
+
+def test_the_blocked_check_decides_through_the_coordinators_is_blocked(monkeypatch):
+    """Recorded rather than inferred: is_blocked is asked about every entry
+    of both lists, against the paths the check was handed, and its answer is
+    the verdict — a stand-in blocking everything refuses an entry nothing
+    blocks, and one blocking nothing refuses a blocked entry not at all. So
+    the check has no reading of a blocked path of its own."""
+    asked = []
+    real = story_coordinator.is_blocked
+
+    def recording(path, blocked):
+        asked.append((path, tuple(blocked)))
+        return real(path, blocked)
+
+    monkeypatch.setattr(story_coordinator, "is_blocked", recording)
+    plan_validation.blocked_work_problems(
+        with_work(modify=["src/x.md"], files=["docs/y.md"]), FIXTURE_BLOCKED)
+    assert {path for path, _ in asked} == {"src/x.md", "docs/y.md"}
+    assert {prefix for _, blocked in asked for prefix in blocked} \
+        == set(FIXTURE_BLOCKED)
+
+    monkeypatch.setattr(story_coordinator, "is_blocked", lambda path, blocked: True)
+    assert len(plan_validation.blocked_work_problems(
+        with_work(modify=["src/x.md"]), FIXTURE_BLOCKED)) == 1
+    monkeypatch.setattr(story_coordinator, "is_blocked", lambda path, blocked: False)
+    assert plan_validation.blocked_work_problems(
+        with_work(modify=[f"{FIXTURE_BLOCKED[0]}x.md"]), FIXTURE_BLOCKED) == []
+
+
+def test_one_problem_per_offending_entry_across_both_lists():
+    problems = plan_validation.blocked_work_problems(with_work(
+        modify=["src/", "zzz-sealed/a.md", "docs/", "zzz-vault/inner/b.md"],
+        files=["zzz-sealed/c.md", "src/app.py"]), FIXTURE_BLOCKED)
+    assert [problem.split(":")[0] for problem in problems] == [
+        "$.scope.modify[1]", "$.scope.modify[3]",
+        "$.technical_plan.likely_file_changes[0]"]
+
+
+def test_no_scope_no_plan_no_blocked_paths_and_entries_of_other_shapes_yield_nothing():
+    """A story with nothing planned, a blocked list holding nothing, and the
+    shapes the schema refuses before this check could be asked are refused
+    for nothing here. The control is the same check over one entry beneath a
+    blocked path, which it reports."""
+    for story in ({}, {"scope": {}}, {"scope": "src/"}, {"technical_plan": {}},
+                  {"technical_plan": {"likely_file_changes": [
+                      {"stage": UNRESTRICTED_STAGE}, "zzz-sealed/x.md",
+                      {"file": 7}]}},
+                  {"scope": {"modify": [7, None, {"path": "zzz-sealed/x"}]}}):
+        assert plan_validation.blocked_work_problems(story, FIXTURE_BLOCKED) == [], story
+    blocked = with_work(modify=["zzz-sealed/x.md"])
+    assert plan_validation.blocked_work_problems(blocked, []) == []
+    assert plan_validation.blocked_work_problems(blocked, FIXTURE_BLOCKED) != []
+
+
+def blocking_harness(root: Path, blocked: list[str]) -> tuple[Path, dict]:
+    """A harness root carrying a workflow this module builds and execution
+    rules blocking `blocked`, and the workflow itself."""
+    workflow = conftest.build_workflow(conftest.workflow_stage())
+    conftest.materialize_workflow(workflow, root,
+                                  rules={"blocked_paths": list(blocked)})
+    return root, workflow
+
+
+def test_the_composition_reads_the_blocked_paths_from_the_harness_roots_rules(
+        tmp_path: Path):
+    """The blocked list is the execution rules under the harness root the
+    composition is handed — the file the coordinator enforces at run time —
+    and not a list of its own. Two harness roots, each blocking a different
+    directory, judge the same pair of artifacts oppositely: each refuses the
+    one planning work beneath its own blocked directory, naming it, and
+    passes the other."""
+    first, workflow = blocking_harness(tmp_path / "first", ["zzz-sealed/"])
+    second, _ = blocking_harness(tmp_path / "second", ["zzz-other/"])
+    sealed, other = tmp_path / "story-900.yaml", tmp_path / "story-901.yaml"
+    sealed.write_text(stamped(modify_artifact("zzz-sealed/x.md", "story-900")),
+                      encoding="utf-8")
+    other.write_text(stamped(modify_artifact("zzz-other/x.md", "story-901")),
+                     encoding="utf-8")
+
+    def judged(harness_root: Path) -> dict:
+        return plan_validation.artifact_problems(
+            [sealed, other], workflow["stages"], tmp_path, harness_root,
+            workflow["name"])
+
+    under_first, under_second = judged(first), judged(second)
+    assert list(under_first) == [sealed]
+    assert list(under_second) == [other]
+    (problem,) = under_first[sealed]
+    assert problem.startswith(f"$.scope.modify[{MODIFY_ENTRIES}]:")
+    assert "'zzz-sealed/'" in problem
+    assert "'zzz-other/'" in under_second[other][0]
+
+
+def test_the_two_classes_run_after_the_reason_check_and_never_on_an_unread_artifact(
+        monkeypatch, tmp_path: Path):
+    """Composed into artifact_problems after the seventh class, and handed
+    the parse read_story made only when read_story had nothing to say — the
+    pre-flight order the composition already keeps. The blocked-work check is
+    handed the list the harness root's rules hold."""
+    harness_root, workflow = blocking_harness(tmp_path / "harness",
+                                              ["zzz-sealed/"])
+    seen, handed = [], []
+    monkeypatch.setattr(plan_validation, "scope_reason_problems",
+                        lambda *a: seen.append("scope-reason") or [])
+    monkeypatch.setattr(plan_validation, "gap_reason_problems",
+                        lambda *a: seen.append("gap-reason") or [])
+    monkeypatch.setattr(
+        plan_validation, "blocked_work_problems",
+        lambda story, blocked: seen.append("blocked-work")
+        or handed.append(list(blocked)) or [])
+    path = tmp_path / "story-900.yaml"
+
+    def composed() -> dict:
+        return plan_validation.artifact_problems(
+            [path], workflow["stages"], tmp_path, harness_root, workflow["name"])
+
+    path.write_text(DEFECTS["unparseable"], encoding="utf-8")
+    assert composed()[path]
+    assert seen == []
+
+    path.write_text(stamped(artifact()), encoding="utf-8")
+    assert composed() == {}
+    assert seen == ["scope-reason", "gap-reason", "blocked-work"]
+    assert handed == [["zzz-sealed/"]]
+
+
+def ninth_check_section() -> str:
+    lowered = " ".join(plan_validation.__doc__.lower().split())
+    return lowered[lowered.index("what the ninth check is"):]
+
+
+def test_the_module_states_the_eighth_and_ninth_classes_and_why_each_is_plan_time_only():
+    """Beside the account of the classes before them, in the module's own
+    docstring: the opening account names the ninth among the classes sharing
+    one reason for being plan-time only and gives the eighth a reason of its
+    own, and each has a section saying what it refuses, what decides it and
+    why it is plan-time only. That the ninth's reason is true is held below,
+    against the committed artifact it names; that the eighth's is — no check,
+    routing or pre-flight decision in a run reads the list — by the scan after
+    it."""
+    lowered = " ".join(plan_validation.__doc__.lower().split())
+    opening = lowered[: lowered.index("what the third check is")]
+    assert "the third, fourth, fifth, seventh and ninth classes are this " \
+        "module's own" in opening
+    assert "the eighth is this module's own and runs at plan time only for " \
+        "a reason of its own" in opening
+
+    eighth = lowered[lowered.index("what the eighth check is"):
+                     lowered.index("what the ninth check is")]
+    for phrase in (GAPS_LEFT, "closing parenthetical", "carries_a_reason",
+                   "plan-time only", "the seventh class's reason is not its "
+                   "reason", "no check, routing or pre-flight decision in a "
+                   "run reads the list", "every stage is handed it only as "
+                   "part of the story text"):
+        assert phrase in eighth, phrase
+
+    ninth = ninth_check_section()
+    for phrase in ("scope.modify", "likely_file_changes", "is_blocked",
+                   "execution rules", f"{GAPS_LEFT} instead", "plan-time only",
+                   "for the reason the third, fourth, fifth and seventh are"):
+        assert phrase in ninth, phrase
+
+
+def test_the_committed_artifact_the_ninth_class_s_reason_names_plans_blocked_work():
+    """The ninth class's reason, held rather than remembered: each committed
+    artifact its section names as having run with work planned on a blocked
+    path does carry such work, by the same check over the rules the
+    coordinator enforces — so a pre-flight that refused the class would refuse
+    a story that has already run. Read as a subject: a claim about what this
+    repository has committed. The control is the same check over the control
+    artifact, which plans no such work and is refused for nothing."""
+    named = sorted(set(re.findall(r"story-\d+", ninth_check_section())))
+    assert named, "the ninth class's section names no committed artifact"
+    stories = HARNESS_ROOT.joinpath(".harness", "stories")
+    for story_id in named:
+        parsed = story_coordinator.read_story(
+            (stories / f"{story_id}.yaml").read_text(encoding="utf-8")).parsed
+        assert parsed is not None, story_id
+        assert plan_validation.blocked_work_problems(parsed, BLOCKED_PATHS) != [], \
+            story_id
+    assert plan_validation.blocked_work_problems(
+        story_coordinator.read_story(stamped(artifact())).parsed,
+        BLOCKED_PATHS) == []
+
+
+#: Where a run is read from: the coordinator and every module beside it, and
+#: the entry points. l5-plan is among them, because what it reads at the
+#: approval is the subject of the scan's one permitted exception.
+RUN_SOURCE_DIRECTORIES = ("orchestration", "scripts")
+
+#: The modules that may name gaps_left in their code: the plan-time checks
+#: and the planning entry point, which reads the gaps for the approval
+#: display. Both read it through the coordinator's reader, whose definition
+#: is taken out of the coordinator's source before the scan, since defining
+#: the reader is not reading the list in a run.
+PERMITTED_GAP_READERS = ["orchestration/plan_validation.py", "scripts/l5-plan"]
+COORDINATOR = "orchestration/story_coordinator.py"
+
+
+def names_the_gaps(source: str) -> bool:
+    """Whether a source's code — its prose stripped, as the sibling scans
+    strip it — names the field or the coordinator's constant for it."""
+    return re.search(rf"\b{re.escape(GAPS_LEFT)}\b", python_code(source),
+                     re.IGNORECASE) is not None
+
+
+def without_the_gaps_reader(source: str) -> str:
+    """The coordinator's source with the field's constant and its reader
+    taken out, and nothing else."""
+    tree = ast.parse(source)
+    reader = story_coordinator.gaps_left.__name__
+    kept = [node for node in tree.body
+            if not (isinstance(node, ast.FunctionDef) and node.name == reader)
+            and not (isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name)
+                and getattr(story_coordinator, target.id, None) is GAPS_LEFT
+                for target in node.targets))]
+    assert len(kept) == len(tree.body) - 2, "the reader or its constant moved"
+    tree.body = kept
+    return ast.unparse(tree)
+
+
+def run_sources() -> dict[str, str]:
+    """Every Python source under those directories, by repository path: the
+    modules by their extension and the extensionless entry points by the
+    interpreter their first line names."""
+    sources = {}
+    for directory in RUN_SOURCE_DIRECTORIES:
+        for path in sorted((HARNESS_ROOT / directory).iterdir()):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if path.suffix == ".py" or (
+                    not path.suffix and "python" in text.split("\n", 1)[0]):
+                sources[str(path.relative_to(HARNESS_ROOT))] = text
+    return sources
+
+
+def test_nothing_in_a_run_reads_gaps_left():
+    """The eighth class's reason for being plan-time only, and the
+    constraint the story sets itself, held as one scan: outside the
+    coordinator's reader, only the plan-time checks and l5-plan's approval
+    display name the field in their code. So no pre-flight, retry, resume or
+    routing decision of the run reads what a plan leaves. What the scan does
+    not see, and does not claim, is the story text every stage is handed
+    whole, which carries the list to each stage's agent.
+
+    The coordinator is scanned with its reader taken out, and the scan of it
+    whole is shown to see the reader, so its silence is the run path's
+    rather than a scan that cannot see the field there."""
+    sources = run_sources()
+    assert COORDINATOR in sources and len(sources) > 5
+    assert names_the_gaps(sources[COORDINATOR])
+    sources[COORDINATOR] = without_the_gaps_reader(sources[COORDINATOR])
+    assert sorted(name for name, source in sources.items()
+                  if names_the_gaps(source)) == PERMITTED_GAP_READERS
+
+
+@pytest.mark.parametrize("planted", [
+    "def _zzz(story):\n    return story_coordinator.{field}(story)\n",
+    "def _zzz(story):\n    return story.get('{field}')\n",
+    "def _zzz(story):\n    return story[GAPS_LEFT]\n",
+])
+def test_the_scan_reports_a_read_planted_in_the_run_path(planted: str):
+    """The control for the absence above: the same scan over a copy of the
+    coordinator's run path, and of a module beside it, with a read of the
+    field planted in code reports each — while the same words planted in a
+    comment are not a read and are not reported."""
+    read = planted.format(field=GAPS_LEFT)
+    sources = run_sources()
+    coordinator = without_the_gaps_reader(sources[COORDINATOR])
+    assert not names_the_gaps(coordinator)
+    assert names_the_gaps(f"{coordinator}\n{read}")
+    neighbour = sources["orchestration/context_assembler.py"]
+    assert not names_the_gaps(neighbour)
+    assert names_the_gaps(f"{neighbour}\n{read}")
+    assert not names_the_gaps(
+        f"{neighbour}\n# {read.splitlines()[1].strip()}\n")
+
+
+# --------------------------------------------------------------------------
 # End to end: a failing artifact is reported, and nothing is committed.
 # --------------------------------------------------------------------------
 
@@ -1322,6 +1950,40 @@ def test_a_scope_reason_refusal_names_the_field_and_the_entry_it_refused(
         (".harness/stories/story-900.yaml", repaired)))
     assert control.returncode == 0, control.stderr
     assert "$.scope.do_not_modify" not in control.stderr
+    assert refs_carrying_a_new_commit(planning, refs_before) != {}
+    assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
+
+
+@pytest.mark.parametrize("defect", sorted(STORY_222_DEFECTS))
+def test_a_gap_reason_or_blocked_work_refusal_names_what_it_refused(
+        defect: str, planning: Planning):
+    """story-222's two classes, in the words the developer reads: what
+    l5-plan prints points at the offending entry, quotes it, and says where
+    such a thing goes — gaps_left — and nothing is committed. The parametrised
+    refusal above holds that the artifact was left byte for byte.
+
+    The control is the same artifact with that one entry put right — the gap
+    given a reason, the path moved beside the blocked one — which commits and
+    pushes as before, with nothing about the entry printed. So the refusal is
+    the entry's, and a path beside a blocked one is not refused end to end."""
+    repaired, pointer, entry = STORY_222_DEFECTS[defect]
+    before = planning.head()
+
+    result = run_plan(planning, L5_STUB_WRITE=writes(
+        (".harness/stories/story-900.yaml", DEFECTS[defect])))
+
+    assert result.returncode != 0, result.stdout
+    assert planning.head() == before
+    assert pointer in result.stderr
+    assert repr(entry) in result.stderr
+    assert GAPS_LEFT in result.stderr
+    assert "committed nothing" in result.stdout
+
+    refs_before = remote_refs(planning.remote)
+    control = run_plan(planning, L5_STUB_WRITE=writes(
+        (".harness/stories/story-900.yaml", repaired)))
+    assert control.returncode == 0, control.stderr
+    assert pointer not in control.stderr
     assert refs_carrying_a_new_commit(planning, refs_before) != {}
     assert planning.planned_paths() == [".harness/stories/story-900.yaml"]
 
@@ -1789,6 +2451,40 @@ def test_pre_flight_does_not_start_refusing_the_scope_reason_class(
     # schema-invalid artifact is refused for the artifact instead.
     assert plan_validation.scope_reason_problems(
         story_coordinator.read_story(stamped(DEFECTS[defect])).parsed) != []
+    install(planning, "story-900", DEFECTS["schema"])
+    refused = run_script(L5_RUN, planning, "story-900")
+    assert "story-900.yaml" in refused.stderr
+
+
+@pytest.mark.parametrize("defect", sorted(STORY_222_DEFECTS))
+def test_pre_flight_does_not_start_refusing_the_gap_reason_or_blocked_work_class(
+        defect: str, planning: Planning):
+    """story-222's classes are plan-time only, held the way story-177's is: a
+    committed artifact carrying a gap with no reason, or work planned on a
+    blocked path, gets past l5-run's story checks to the clean-tree refusal,
+    which names the dirty path and not the artifact.
+
+    Controls: the same text is refused through the composition l5-plan calls,
+    so getting past pre-flight is the class being plan-time only rather than
+    the artifact having nothing wrong with it; and the same command over a
+    schema-invalid artifact is refused for the artifact."""
+    install(planning, "story-900", stamped(DEFECTS[defect]))
+    planning.git("checkout", "-q", "-b",
+                 story_coordinator.story_branch(
+                     harness_config.load_config(planning.root), "story-900"))
+    (planning.root / "dirty.txt").write_text("developer's own\n", encoding="utf-8")
+
+    result = run_script(L5_RUN, planning, "story-900")
+
+    assert result.returncode == 1
+    assert "dirty.txt" in result.stderr
+    assert "story-900.yaml" not in result.stderr
+    assert GAPS_LEFT not in result.stderr
+    _, pointer, _ = STORY_222_DEFECTS[defect]
+    assert pointer not in result.stderr
+
+    assert any(problem.startswith(pointer)
+               for problem in plan_time_problems(stamped(DEFECTS[defect])))
     install(planning, "story-900", DEFECTS["schema"])
     refused = run_script(L5_RUN, planning, "story-900")
     assert "story-900.yaml" in refused.stderr

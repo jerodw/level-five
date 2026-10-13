@@ -263,6 +263,37 @@ def story_title(story: dict | None) -> str:
     return collapsed[:PRINTED_TITLE_MAX_LENGTH] + "…"
 
 
+#: The top-level field a story plan records each gap it leaves in, with the
+#: developer's reason for leaving it. Spelled once here, where its one reader
+#: is, so plan validation and the approval display cannot name the list two
+#: ways. No check, routing or pre-flight decision in a run reads it; a stage
+#: sees it only in the story text it is handed whole.
+GAPS_LEFT = "gaps_left"
+
+
+def gaps_left(story: dict | None) -> list[str]:
+    """The gaps a story plan leaves, each on one line, from a parse.
+
+    Beside story_title and for the same callers: the approval display takes
+    the gaps from the one reading of each artifact it already makes for the
+    title, and plan validation reads them here too, so what is checked is
+    what the developer is shown. Each entry is whole — nothing is cut — with
+    its whitespace runs collapsed so it prints as one line.
+
+    Read defensively, as story_title reads a title: an absent parse, a parse
+    that is not a mapping, a field that is not a list, and an entry that is
+    not a string all read as nothing, so a story leaving no gap and a story
+    that could not be read both answer with an empty list. A parse failing
+    its schema is the validation's to report, not this reader's.
+    """
+    if not isinstance(story, dict):
+        return []
+    entries = story.get(GAPS_LEFT)
+    if not isinstance(entries, list):
+        return []
+    return [" ".join(entry.split()) for entry in entries if isinstance(entry, str)]
+
+
 def story_digest(story_text: str) -> str:
     """A digest of the story artifact exactly as the run was given it.
 
@@ -8696,20 +8727,23 @@ def _closing_parenthetical_start(entry: str) -> int | None:
 
 
 def carries_a_reason(entry: str) -> bool:
-    """Whether a scope.do_not_modify entry carries the developer's reason.
+    """Whether a reasoned list entry carries the developer's reason.
 
-    True when non-empty text — the path or area — precedes a closing
-    parenthetical holding at least one word character. The parenthetical is
-    the one the entry ends with, found by `_closing_parenthetical_start` —
-    the walk `_entry_paths` also reads — so a reason may itself carry
-    parentheses. Shape alone is read: the reason's text is neither parsed nor
-    scored, so a bare path and an empty parenthetical are the two things
-    refused and any reason at all passes.
+    The entries it reads are of two lists: a scope.do_not_modify entry, which
+    is a path or area followed by the reason it is left alone, and a
+    gaps_left entry, which is a gap the plan leaves followed by the reason it
+    is left. True when non-empty text — the path, area or gap — precedes a
+    closing parenthetical holding at least one word character. The
+    parenthetical is the one the entry ends with, found by
+    `_closing_parenthetical_start` — the walk `_entry_paths` also reads — so
+    a reason may itself carry parentheses. Shape alone is read: the reason's
+    text is neither parsed nor scored, so a bare entry and an empty
+    parenthetical are the two things refused and any reason at all passes.
 
     Defined here rather than in plan_validation, which imports it back under
-    the same name, because the plan-time reason check and the run-time
-    do_not_modify bound below must read one definition and plan_validation
-    already imports this module.
+    the same name, because the plan-time reason checks over both lists and
+    the run-time do_not_modify bound below must read one definition and
+    plan_validation already imports this module.
     """
     text = entry.rstrip()
     if not text.endswith(")"):

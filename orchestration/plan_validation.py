@@ -18,19 +18,22 @@ check with its own reader is the divergence story-005 existed to remove — and
 the messages are the coordinator's own, so a given defect reads the same at
 plan time as at pre-flight.
 
-The third, fourth, fifth and seventh classes are this module's own and all
-four run at plan time only, for one shared reason: none is refused by l5-run,
-because adding it to pre-flight would, for each of them, start refusing
-committed artifacts that have already run. The sixth is this module's own
-too and is described below, and it is the one class of which pre-flight
-also refuses a half. They are otherwise unlike each other, and the
-difference is worth stating rather than blending. The third scans English
-prose and carries the hedging that entails. The fourth, fifth and seventh
-are structural — a literal in the artifact against a literal in the workflow
-definition, a literal in the artifact against one pattern, and the shape of
-an entry against one pattern — and inherit none of that hedging: no clause
-split, no vocabulary of scoping words, no paraphrase they can be evaded by,
-nothing they decline to decide.
+The third, fourth, fifth, seventh and ninth classes are this module's own
+and each runs at plan time only, for one shared reason: none is refused by
+l5-run, because adding it to pre-flight would, for each of them, start
+refusing committed artifacts that have already run. The sixth is this
+module's own too and is described below, and it is the one class of which
+pre-flight also refuses a half. The eighth is this module's own and runs at
+plan time only for a reason of its own, which its section below gives,
+because no committed artifact carries the field it reads. They are otherwise
+unlike each other, and the difference is worth stating rather than blending.
+The third scans English prose and carries the hedging that entails. The
+fourth, fifth, seventh, eighth and ninth are structural — a literal in the
+artifact against a literal in the workflow definition, a literal in the
+artifact against one pattern, the shape of an entry against one pattern, and
+a path in the artifact against the paths the execution rules block — and
+inherit none of that hedging: no clause split, no vocabulary of scoping
+words, no paraphrase they can be evaded by, nothing they decline to decide.
 
 What the third check is
 -----------------------
@@ -225,6 +228,50 @@ It is plan-time only, for the reason the third, fourth and fifth are:
 committed artifacts under the stories directory are history, are not
 rewritten, and carry bare entries, so refusing them at pre-flight would make
 those stories unrunnable and l5-run keeps accepting them.
+
+What the eighth check is
+------------------------
+A plan fixes every problem its planning finds in the part of the system the
+story changes, and a gap it leaves — one lying in a different part of the
+system, one the story's workflow cannot do, or one waiting on a decision the
+developer chooses not to make now — is recorded in gaps_left, the one place
+in a plan a gap is recorded. Each entry is the gap followed by the
+developer's reason in a closing parenthetical, and the reason names the
+ground. An entry carrying no reason is reported, on exactly the terms the
+seventh class reports a do_not_modify entry and through the same predicate,
+carries_a_reason: a bare gap and an empty parenthetical are the two things
+refused, and nothing parses, matches or scores what the reason says, which
+is the developer's to give and a reviewer's to weigh.
+
+It is plan-time only, and the seventh class's reason is not its reason: no
+committed artifact carries gaps_left, so there is nothing at pre-flight it
+would start refusing. What makes it a plan-time check is what the reason is
+for. A reason is the developer's to supply, plan time is where the developer
+is present to supply one, and no check, routing or pre-flight decision in a
+run reads the list — every stage is handed it only as part of the story text
+— so a refusal at pre-flight would stop a run, with nobody there to supply
+the reason, over a record no decision of the coordinator's depends on.
+
+What the ninth check is
+-----------------------
+A plan must not schedule work on a path no stage of a run may write. A
+scope.modify entry, or a technical_plan.likely_file_changes file, at or
+beneath a path the execution rules block for every stage describes work the
+run cannot do: the run discovers it only after a stage has spent its turn
+and its changed-files record names the path. Such an entry is reported,
+naming the entry and the blocked path, and saying that the change goes in
+gaps_left instead, as a gap left because the story's workflow cannot do it.
+
+Whether a path is blocked is decided by story_coordinator.is_blocked, the
+reading the run-time blocked-path check makes, against the blocked paths in
+the execution rules the coordinator enforces, loaded from the harness root
+artifact_problems is handed. A path merely beside a blocked one is not
+refused, because is_blocked does not refuse it.
+
+It is plan-time only, for the reason the third, fourth, fifth and seventh
+are: story-074's committed artifact names a blocked file in its modify list
+and has already run, so refusing it at pre-flight would make that story
+unrunnable.
 
 Nothing here repairs an artifact and nothing here deletes one. The problems
 are returned rather than printed, and the caller decides.
@@ -585,12 +632,13 @@ def workflow_problems(story: dict, harness_root: Path, selected: str) -> list[st
 _PASSING_ENTRY_FORM = "<path or area> (<the developer's reason for leaving it alone>)"
 
 
-# Whether a scope.do_not_modify entry carries a reason is decided by one
-# definition, and it lives in the coordinator since story-183: the run-time
-# check that refuses a scope extension against a reasoned entry reads the same
-# predicate this plan-time check reads, and this module already imports the
-# coordinator, so the reverse import would be circular. Imported under the
-# same name, so every reader of plan_validation.carries_a_reason is unchanged.
+# Whether a scope.do_not_modify entry or a gaps_left entry carries a reason is
+# decided by one definition, and it lives in the coordinator since story-183:
+# the run-time check that refuses a scope extension against a reasoned entry
+# reads the same predicate the plan-time checks over both lists read, and this
+# module already imports the coordinator, so the reverse import would be
+# circular. Imported under the same name, so every reader of
+# plan_validation.carries_a_reason is unchanged.
 carries_a_reason = story_coordinator.carries_a_reason
 
 
@@ -630,6 +678,112 @@ def scope_reason_problems(story: dict) -> list[str]:
     return problems
 
 
+#: The form a passing gaps_left entry takes, shown in each problem the eighth
+#: and ninth classes report so a planner repairing one sees what to write.
+_PASSING_GAP_FORM = (
+    "<the gap the plan leaves> (<the developer's reason, naming the ground "
+    "it is left on>)"
+)
+
+#: The grounds a gap may be left on, as a reason names them. Size is not one
+#: of them: a gap in the part of the system the story changes is fixed by the
+#: story, because a gap left comes back as a brief and a brief costs far more
+#: than the task and criterion that would have fixed it here.
+_GAP_GROUNDS = (
+    "it lies in a different part of the system",
+    "it cannot be done under the story's workflow",
+    "it waits on a decision the developer chooses not to make now",
+)
+
+
+def gap_reason_problems(story: dict) -> list[str]:
+    """Report gaps_left entries carrying no reason.
+
+    The eighth class, plan-time only for the reason the module docstring
+    gives it. One problem per offending entry, naming the entry's index,
+    quoting the entry, and showing the form a passing entry takes and the
+    grounds a reason may name. Whether an entry carries a reason is decided
+    by carries_a_reason, the predicate that decides it for a do_not_modify
+    entry, so the two lists are held to one reading: a bare gap and an empty
+    parenthetical are refused, and any reason at all passes whatever it says.
+
+    The entries are read through story_coordinator.gaps_left, the reader the
+    approval display takes them from, so what is checked here is what the
+    developer is shown. A story with no gaps_left, and an empty list, yield
+    nothing.
+    """
+    problems: list[str] = []
+    for index, entry in enumerate(story_coordinator.gaps_left(story)):
+        if carries_a_reason(entry):
+            continue
+        problems.append(
+            f"$.{story_coordinator.GAPS_LEFT}[{index}]: {entry!r} carries no "
+            f"reason. Every {story_coordinator.GAPS_LEFT} entry is the gap "
+            f"followed by the developer's reason for leaving it, in a closing "
+            f"parenthetical: {_PASSING_GAP_FORM}. The reason names the ground "
+            f"the gap is left on — {'; '.join(_GAP_GROUNDS)} — and size is not "
+            f"a ground: a gap in the part of the system the story changes is "
+            f"fixed by the story."
+        )
+    return problems
+
+
+def blocked_work_problems(story: dict, blocked: list[str]) -> list[str]:
+    """Report plan entries scheduling work on a path no stage may write.
+
+    The ninth class, plan-time only for the reason the module docstring
+    gives it. One problem per scope.modify entry, and per
+    technical_plan.likely_file_changes file, at or beneath a path in
+    `blocked` — the execution rules' blocked paths, which apply to every stage
+    — naming the entry and the blocked path and saying the change goes in
+    gaps_left instead. Whether a path is blocked is decided by
+    story_coordinator.is_blocked, asked of one blocked path at a time so the
+    problem can name the one that blocks it, so a path merely beside a blocked
+    one is not refused.
+
+    A story with no scope.modify and no technical_plan yields nothing; an
+    entry that is not a string, and a likely_file_changes entry with no file,
+    are the schema's to refuse and are skipped here.
+    """
+    def blocking(path: str) -> str | None:
+        for prefix in blocked:
+            if story_coordinator.is_blocked(path, [prefix]):
+                return prefix
+        return None
+
+    def problem(where: str, path: str, prefix: str) -> str:
+        return (
+            f"{where}: names {path!r}, which is at or beneath {prefix!r}, a "
+            f"path the execution rules block for every stage. No stage of a "
+            f"run may change it, so a plan scheduling work there would be "
+            f"stopped only after a stage had spent its turn on it. Leave it "
+            f"out of the plan's work and record the change it would need in "
+            f"{story_coordinator.GAPS_LEFT} instead, as a gap left because the "
+            f"story's workflow cannot do it: {_PASSING_GAP_FORM}."
+        )
+
+    problems: list[str] = []
+    declared = story.get("scope")
+    modify = declared.get("modify", []) if isinstance(declared, dict) else []
+    for index, entry in enumerate(modify):
+        if not isinstance(entry, str):
+            continue
+        prefix = blocking(entry)
+        if prefix is not None:
+            problems.append(problem(f"$.scope.modify[{index}]", entry, prefix))
+    plan = story.get("technical_plan")
+    entries = plan.get("likely_file_changes", []) if isinstance(plan, dict) else []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("file"), str):
+            continue
+        prefix = blocking(entry["file"])
+        if prefix is not None:
+            problems.append(problem(
+                f"$.technical_plan.likely_file_changes[{index}]",
+                entry["file"], prefix))
+    return problems
+
+
 def artifact_problems(
     artifacts: Iterable[Path],
     stages: list[dict],
@@ -657,15 +811,21 @@ def artifact_problems(
 
     `root` is the target repository the stories will run in, required for the
     same reason assignment_problems requires it: it is the only check here that
-    asks the filesystem anything, and a defaulted root would let a caller
-    resolve existence against the process working directory without saying so.
-    The checks that read no filesystem — strictness_problems, naming_problems
-    and scope_reason_problems — keep their signatures.
+    asks the target repository anything, and a defaulted root would let a
+    caller resolve existence against the process working directory without
+    saying so. The checks that read no filesystem — strictness_problems,
+    naming_problems, scope_reason_problems and gap_reason_problems — keep
+    their signatures.
 
     `harness_root` and `selected` are required for workflow_problems, which
     needs both of its one caller: the root is where the definitions live, and
     the selection is the workflow this session rendered the planner against.
+    The harness root is also where the execution rules are read from for
+    blocked_work_problems, which is handed the blocked paths rather than
+    reading them itself — the rules file the coordinator enforces, read once
+    per call rather than once per artifact.
     """
+    blocked = harness_config.load_rules(Path(harness_root))["blocked_paths"]
     problems: dict[Path, list[str]] = {}
     for artifact in artifacts:
         reading = story_coordinator.read_story(
@@ -679,6 +839,8 @@ def artifact_problems(
             found += naming_problems(reading.parsed)
             found += workflow_problems(reading.parsed, harness_root, selected)
             found += scope_reason_problems(reading.parsed)
+            found += gap_reason_problems(reading.parsed)
+            found += blocked_work_problems(reading.parsed, blocked)
         if found:
             problems[Path(artifact)] = found
     return problems

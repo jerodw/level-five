@@ -122,6 +122,29 @@ of a reason's words is that stage's model, the suite never invokes a model,
 and in a driven run the test writes the verdict itself, so such a test would
 pass whether or not this story changed anything.
 
+story-222 made fixing what the planning trace finds the default. The role
+layer bounds a story by the mechanism it changes, with any gap the trace
+finds there inside the bound whatever its size; the consequence step says
+every problem its questions turn up is fixed in the plan, what a gap left
+costs, that size is therefore not a reason, the only grounds a gap may be
+left on, and that a gap left is recorded in gaps_left and nowhere else; the
+step asking the developer questions puts each gap to them before the draft;
+the step saying what l5-plan checks names every class it refuses an artifact
+for; the skeleton and a paragraph beside the reason rule show what a
+gaps_left entry is; and [Workflow facts] says a plan never lands a blocked
+path as work. Its found-nothing rule now also asks the entry of each question
+about other texts to say where the planner looked (brief 387), so the
+assertion that held the rule to the duplication question alone was rewritten
+to the questions it now qualifies. The story schema declares gaps_left and
+extends the descriptions of scope.modify, scope.do_not_modify and
+technical_plan.likely_file_changes. The section "story-222: a plan fixes the
+gaps its planning finds" holds each statement on the prompt l5-plan hands the
+session, in story-218's idiom. The same story corrected this module's own
+reading of paths (brief 364): a hyphen is no longer taken as a sign that a
+segment is a file name, since English joins words with one; that is a change
+to validation, judged where the run is reviewed rather than by a test of its
+own.
+
 Written from the acceptance criteria rather than from the implementation, and
 preferring observable behaviour where it exists: what `scripts/l5-plan`
 actually hands to `claude --append-system-prompt`, captured by a fake `claude`
@@ -139,6 +162,7 @@ where each of those things was still present. The "left alone" properties are
 controlled by the same diff over a path this story did change and by a
 repository built here in which a story did touch those paths.
 """
+import ast
 import json
 import os
 import re
@@ -156,6 +180,7 @@ import context_assembler
 import filed_query
 import harness_config
 import inspection
+import plan_validation
 import schema_validator
 import story_coordinator
 import story_parser
@@ -1214,9 +1239,11 @@ def test_rendered_for_this_repository_the_source_directories_are_its_own():
 # answers in the draft the developer approves and in the artifact's
 # description. The two questions that are about other texts are answered from
 # what the sweep above already turned up rather than by searching again, and
-# the step closes with the rule that a criterion naming a spelling, a text
-# match or a fixed enumeration in place of the property wanted binds the work
-# to the stand-in.
+# that story closed the step with the rule that a criterion naming a spelling,
+# a text match or a fixed enumeration in place of the property wanted binds
+# the work to the stand-in. Since story-222 the step's prose about what
+# becomes of a problem the questions turn up follows that rule, and is held in
+# that story's section below.
 #
 # Held on the prompt l5-plan hands the session, the way the two sections above
 # are held, with the baseline template as the control. The absences the
@@ -1260,7 +1287,10 @@ BRIEF_SCHEMA_REL = "schemas/story-brief.schema.json"
 #: An extensionless file under a directory, for the control below: the
 #: launcher this whole section reads the prompt from, which is the single
 #: likeliest path for a later author to write into the step, and which carries
-#: no extension, as every script this repository ships does not.
+#: no extension, as none of the launchers under this repository's script
+#: directory does. Not every script this repository ships is written that way:
+#: the tracker scripts under .harness/scripts/ and templates/scripts/ end in
+#: .sh.
 LAUNCHER_REL = str((SCRIPTS / "l5-plan").relative_to(REPO_ROOT))
 
 #: The question story-216 widened, named here as well as keyed below so the
@@ -1270,6 +1300,14 @@ LAUNCHER_REL = str((SCRIPTS / "l5-plan").relative_to(REPO_ROOT))
 DUPLICATION_QUESTION = ("a second implementation of something that already "
                         "exists, in the system or in what validates it")
 
+#: The two questions about other texts, named and keyed below for the reason
+#: the duplication question is: since story-222 the found-nothing rule asks
+#: something of their entries too, and the readings about what it asks
+#: resolve them out of the table rather than spelling their words again.
+OTHER_PATH_QUESTION = "another path doing the same job that has to move in step"
+WRITTEN_STATEMENT_QUESTION = "the written statement the change makes untrue"
+OTHER_TEXT_QUESTIONS = (OTHER_PATH_QUESTION, WRITTEN_STATEMENT_QUESTION)
+
 #: The questions the step has to ask, each as the words a reader would look
 #: for in one of them. An entry is the phrases that have to appear in one
 #: bullet together rather than a sentence written out, so what is held is that
@@ -1277,7 +1315,7 @@ DUPLICATION_QUESTION = ("a second implementation of something that already "
 #: asking — which is the rule the step itself states about a criterion.
 QUESTIONS = {
     DUPLICATION_QUESTION: (r"second implementation", r"already"),
-    "another path doing the same job that has to move in step": (
+    OTHER_PATH_QUESTION: (
         r"another path", r"same job", r"move in step"),
     "still right on a retry, a resume, a later entry and every verdict": (
         r"retry", r"resume", r"later entry", r"every verdict"),
@@ -1285,7 +1323,7 @@ QUESTIONS = {
         r"validation", r"fail", r"wrong"),
     "a value that is absent, unwritable or unreadable, and who is told": (
         r"absent", r"unwritable", r"unreadable", r"who is told"),
-    "the written statement the change makes untrue": (
+    WRITTEN_STATEMENT_QUESTION: (
         r"written statement", r"untrue"),
 }
 
@@ -1296,12 +1334,13 @@ QUESTIONS = {
 #: which question the rule reaches, and the control that cuts the demand out.
 QUALIFIED_ENTRY = ("not enough", "which of the kinds of place", "searched")
 
-#: What the step has to say beside its questions: where the questions about
-#: other texts are answered, that every question is answered and a question
-#: that found nothing answered too, what such an answer has to say for the
-#: duplication question, where the answers are recorded, and the rule the step
-#: closes with. Phrases of the collapsed step, so none of them is about where
-#: a line happens to wrap.
+#: What the same rule has asked since story-222 (brief 387) of the entry of a
+#: question about other texts, where one of them found nothing: that it says
+#: where the planner looked — the places the sweep covered, and any it looked
+#: in beyond them. Named for the same three readings as the one above.
+OTHER_TEXTS_QUALIFIED_ENTRY = ("says where you looked",
+                               "the places the sweep covered",
+                               "any you looked in beyond them")
 
 #: What the step says about where the answers to those two questions can be,
 #: which is story-217's subject and is held with its own control in that
@@ -1324,9 +1363,11 @@ WIDENING_STATES = {
 
 #: What the step has to say beside its questions: where the questions about
 #: other texts are answered, what bounds that delegation, that every question
-#: is answered and a question that found nothing answered too, where the
-#: answers are recorded, and the rule the step closes with. Phrases of the
-#: collapsed step, so none of them is about where a line happens to wrap.
+#: is answered and a question that found nothing answered too, what such an
+#: answer has to say for the duplication question and for the questions about
+#: other texts, where the answers are recorded, and the rule against a
+#: stand-in. Phrases of the collapsed step, so none of them is about where a
+#: line happens to wrap.
 STEP_STATES = {
     "the sweep is where the questions about other texts are answered": (
         "the sweep above is where they are answered",
@@ -1339,6 +1380,8 @@ STEP_STATES = {
         "found nothing is answered too",),
     "a found-nothing answer for the duplication question names where it "
     "looked": QUALIFIED_ENTRY,
+    "a found-nothing answer for a question about other texts says where the "
+    "planner looked": OTHER_TEXTS_QUALIFIED_ENTRY,
     "the answers are recorded in the draft the developer approves": (
         "in the draft the developer approves",),
     "the answers are recorded in the artifact's description": (
@@ -1364,12 +1407,21 @@ DESCRIPTION_ONE_HOME = "the only place a found-nothing answer is recorded"
 DESCRIPTION_QUALIFIED_ENTRY = ("which kinds of place were searched",
                                "the machinery that validates the system")
 
+#: What that account has said since story-222 (brief 387) about the entry of
+#: either question about other texts in that sentence: that it says where the
+#: planner looked, the places the sweep covered among them. Named for the same
+#: two readings as the one above.
+DESCRIPTION_OTHER_TEXTS_ENTRY = ("either question about other texts",
+                                 "says where the planner looked",
+                                 "the places the sweep covered")
+
 #: What the story schema's account of a description has to say since this
 #: story: that the consequence answers are among its later paragraphs, that a
 #: question which found nothing is recorded in the one sentence naming those
-#: together and what the duplication question's entry there says, that nothing
-#: scores an answer, and the clause that a description written before the rule
-#: is not held to it.
+#: together and what the duplication question's entry there says — and, since
+#: story-222, what the entry of a question about other texts says — that
+#: nothing scores an answer, and the clause that a description written before
+#: the rule is not held to it.
 DESCRIPTION_STATES = {
     "the consequence answers are recorded there": (
         "consequence questions", "before it writes tasks and criteria"),
@@ -1377,6 +1429,8 @@ DESCRIPTION_STATES = {
         "one sentence naming together the ones that found nothing",),
     "the duplication question's entry there names where it looked":
         DESCRIPTION_QUALIFIED_ENTRY,
+    "a question about other texts' entry there says where the planner "
+    "looked": DESCRIPTION_OTHER_TEXTS_ENTRY,
     "nothing scores whether a question was answered": (
         "whether a question was answered",),
     "a description written before the rule is not held to it": (
@@ -1398,11 +1452,20 @@ PATH_CANDIDATE = re.compile(r"[\w.\-]+(?:/[\w.\-]*)+|[\w.\-]+\.(?:md|json|ya?ml|
 PATH_EXTENSIONS = ("md", "json", "yaml", "yml", "py")
 
 #: What tells a path segment apart from an ordinary English word standing
-#: beside a slash: a digit, a hyphen or an underscore, none of which an
-#: ordinary word carries, or an extension-shaped tail, which covers the
-#: extensions the list above leaves out. This is how an extensionless script
-#: is recognised — `l5-plan` is a name and `or` is a word.
-NAMED_SEGMENT = re.compile(r"[0-9_-]|\.[A-Za-z][A-Za-z0-9]+$")
+#: beside a slash: a digit or an underscore, neither of which an ordinary word
+#: carries, or an extension-shaped tail, which covers the extensions the list
+#: above leaves out. This is how an extensionless script is recognised —
+#: `l5-plan` is a name and `or` is a word.
+#:
+#: A hyphen is not among them, since story-222 (brief 364). English joins
+#: words with one — `re-entry`, `follow-up` — so a hyphen said nothing about
+#: whether a segment was a name, and `re-entry/resume` was reported as a file
+#: the step sends the planner to. What that gives up is an extensionless file
+#: whose every segment is hyphenated words and nothing else, which is read as
+#: a slashed pair of words; the launchers under this repository's script
+#: directory each carry a digit, and the scripts it ships elsewhere carry an
+#: extension, so none of them is that file.
+NAMED_SEGMENT = re.compile(r"[0-9_]|\.[A-Za-z][A-Za-z0-9]+$")
 
 
 def one_line(text: str) -> str:
@@ -1564,12 +1627,14 @@ def names_a_path(candidate: str) -> bool:
     with a separator, one of its segments is a name rather than an ordinary
     English word.
 
-    That last test is what reaches an extensionless file, which is how every
-    script this repository ships is written, and it is the likeliest such
-    path for a later author to put into this step. Deciding it on the
-    segment's own form rather than on a list keeps `and/or`, `yes/no` and
-    `absent/unwritable/unreadable` silent: those segments are words, and a
-    word carries no digit, hyphen, underscore or extension.
+    That last test is what reaches an extensionless file, which is how the
+    launchers under this repository's script directory are written, and it is
+    the likeliest such path for a later author to put into this step. Deciding
+    it on the segment's own form rather than on a list keeps `and/or`,
+    `yes/no`, `absent/unwritable/unreadable` and `re-entry/resume` silent:
+    those segments are words, and a word carries no digit, underscore or
+    extension. A hyphen is not read as a sign either way, because English
+    joins words with one, so a hyphenated word beside a slash is still a word.
     """
     if candidate.endswith("/"):
         return True
@@ -1721,7 +1786,7 @@ def test_the_file_search_reports_the_steps_that_do_name_one(
     the artifact is written reports the path that step names, and over a copy
     of the consequence step with a file named in it reports that file — once
     with a file carrying an extension, and once with an extensionless file
-    under a directory, which is how this repository's own scripts are written
+    under a directory, which is how this repository's launchers are written
     and so the shape a later author is likeliest to send the planner to."""
     prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
     steps = numbered_steps(process_section(prompt))
@@ -1972,9 +2037,46 @@ def questions_qualified_by(rule: str) -> list[str]:
             if any(re.search(phrase, rule) for phrase in phrases)]
 
 
-def without_the_added_rule(rule: str) -> str:
-    """A copy of that rule asking nothing of any question beyond naming it:
-    the rule cut at the last clause boundary before its demand.
+#: What joins one demand of the found-nothing rule to the next: each is a
+#: clause of the one sentence, opened after a semicolon.
+DEMAND_JOIN = re.compile(r";")
+
+#: The demands the rule can make of an entry beyond naming it, each as the
+#: phrases that make it.
+ENTRY_DEMANDS = (QUALIFIED_ENTRY, OTHER_TEXTS_QUALIFIED_ENTRY)
+
+
+def entries_qualified_by(rule: str) -> dict[str, tuple[str, ...]]:
+    """What that rule asks of each question's entry beyond a bare mention,
+    read clause by clause rather than over the whole rule.
+
+    `questions_qualified_by` answers which questions the rule reaches once it
+    asks anything of one; this answers which demand reaches which question, so
+    a rule that asked the questions about other texts which kinds of place were
+    searched, or the duplication question where the planner looked, would read
+    differently from the rule as written. A question is reached by a clause
+    that carries every phrase of one demand and any of the words that resolve
+    that question above, for the reason `questions_qualified_by` gives.
+    """
+    asked: dict[str, tuple[str, ...]] = {}
+    for clause in DEMAND_JOIN.split(rule):
+        for demand in ENTRY_DEMANDS:
+            if unsaid(clause, demand) != []:
+                continue
+            for question, phrases in QUESTIONS.items():
+                if any(re.search(phrase, clause) for phrase in phrases):
+                    asked[question] = demand
+    return asked
+
+
+def without_the_added_rule(rule: str,
+                           demand: tuple[str, ...] = QUALIFIED_ENTRY) -> str:
+    """A copy of that rule with one demand and everything after it cut away:
+    the rule cut at the last clause boundary before that demand. Cut before
+    the duplication question's demand, which the rule makes first, the copy
+    asks nothing of any question beyond naming it; cut before the demand
+    story-222 added for the questions about other texts, it asks what it asked
+    before that story.
 
     Built out of the shipped rule rather than written out here, so the control
     differs from the live text in the one respect it is about. Both halves of
@@ -1983,8 +2085,8 @@ def without_the_added_rule(rule: str) -> str:
     finds reddens here rather than quietly leaving the control asserting
     nothing.
     """
-    assert unsaid(rule, QUALIFIED_ENTRY) == [], rule
-    demanded = min(rule.index(phrase) for phrase in QUALIFIED_ENTRY)
+    assert unsaid(rule, demand) == [], rule
+    demanded = min(rule.index(phrase) for phrase in demand)
     boundaries = [match.start() for match in CLAUSE_MARKER.finditer(rule)
                   if match.start() < demanded]
     assert boundaries, rule
@@ -2060,18 +2162,57 @@ def test_the_place_reading_reports_the_machinery_alone_when_the_system_half_is_c
     assert places_named_by(cut) == ["the machinery that validates the system"]
 
 
-def test_the_found_nothing_rule_asks_that_one_question_where_it_looked(
+def test_the_found_nothing_rule_asks_the_duplication_and_other_text_questions_where_they_looked(
     plan_capture, tmp_path
 ):
     """On the same prompt: the rule about recording an answer that found
     nothing asks the duplication question's entry to name which of those kinds
-    of place were searched, so a bare mention of it among the questions that
-    found nothing does not satisfy the step — and asks that of that question
-    alone, so every other question of the step is still recorded there with no
-    further qualification."""
+    of place were searched, and — since story-222, brief 387 — asks the entry
+    of each question about other texts to say where the planner looked, the
+    places the sweep covered and any beyond them. So a bare mention of any of
+    those three among the questions that found nothing does not satisfy the
+    step, while every other question of the step is still recorded there with
+    no further qualification. Each demand reaches its own questions, and the
+    questions that found nothing are still named together in one sentence.
+
+    story-216 held this rule to the duplication question alone; it was
+    rewritten here because the rule now qualifies the questions about other
+    texts as well. The control that the reading reports the rule without that
+    clause as qualifying the duplication question alone is the test below."""
     prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
     rule = found_nothing_rule_of(consequence_step_of(prompt))
-    assert questions_qualified_by(rule) == [DUPLICATION_QUESTION]
+    assert questions_qualified_by(rule) == [
+        question for question in QUESTIONS
+        if question == DUPLICATION_QUESTION or question in OTHER_TEXT_QUESTIONS]
+    assert entries_qualified_by(rule) == {
+        DUPLICATION_QUESTION: QUALIFIED_ENTRY,
+        **{question: OTHER_TEXTS_QUALIFIED_ENTRY
+           for question in OTHER_TEXT_QUESTIONS},
+    }
+    assert [sentence for sentence in sentences_of(rule) if sentence] \
+        == [one_line(rule)]
+    assert "in one sentence naming together the ones that found nothing" in rule
+
+
+def test_the_rule_without_the_other_texts_clause_qualifies_the_duplication_question_alone():
+    """The control the claim above needs in the direction story-222 moved it,
+    built in this section's constructed-copy idiom: the shipped rule cut at the
+    clause boundary before the demand on the questions about other texts asks
+    what it asked before that story — the duplication question's entry
+    qualified, and no other. So the claim above fails on a rule lacking that
+    clause, and the per-question reading tells the two demands apart rather
+    than handing every question it finds whichever demand it saw first."""
+    rule = found_nothing_rule_of(consequence_step_of(planner_template()))
+    cut = without_the_added_rule(rule, OTHER_TEXTS_QUALIFIED_ENTRY)
+    assert rule.startswith(cut) and cut != rule
+    assert unsaid(cut, OTHER_TEXTS_QUALIFIED_ENTRY) \
+        == list(OTHER_TEXTS_QUALIFIED_ENTRY)
+    assert unsaid(cut, QUALIFIED_ENTRY) == []
+    assert questions_qualified_by(cut) == [DUPLICATION_QUESTION]
+    assert entries_qualified_by(cut) == {DUPLICATION_QUESTION: QUALIFIED_ENTRY}
+    # And the rule cut before its first demand asks nothing of any question
+    # through this reading either.
+    assert entries_qualified_by(without_the_added_rule(rule)) == {}
 
 
 def test_before_the_widening_the_sentence_carried_every_question_unqualified():
@@ -2139,6 +2280,33 @@ def test_the_schemas_account_states_the_rule_inside_the_sentence_holding_it():
                 if DESCRIPTION_ONE_HOME in sentence]
     assert len(carrying) == 1, carrying
     assert unsaid(carrying[0], DESCRIPTION_QUALIFIED_ENTRY) == []
+
+
+def test_the_schemas_account_asks_the_other_text_questions_where_the_planner_looked():
+    """story-222's half of the same account (brief 387): inside that one
+    sentence, beside the duplication question's entry, the entry of either
+    question about other texts says where the planner looked — so the claim
+    that the sentence is a found-nothing answer's only home still covers it.
+
+    The baseline control is the table's. The control here is the sentence
+    with that clause cut at the boundary it sits behind, built out of the
+    shipped field: the same reader reports every phrase of it missing there
+    while the duplication question's entry and the one-home clause are still
+    found, so the clause is distinct from the entry it follows rather than a
+    rewording of it."""
+    description = story_description_field(
+        schema_validator.load_schema("story"))["description"]
+    carrying = [sentence for sentence in sentences_of(description)
+                if DESCRIPTION_ONE_HOME in sentence]
+    assert len(carrying) == 1, carrying
+    assert unsaid(carrying[0], DESCRIPTION_OTHER_TEXTS_ENTRY) == []
+
+    cut = without_the_added_rule(carrying[0], DESCRIPTION_OTHER_TEXTS_ENTRY)
+    assert carrying[0].startswith(cut) and cut != carrying[0]
+    assert unsaid(cut, DESCRIPTION_OTHER_TEXTS_ENTRY) \
+        == list(DESCRIPTION_OTHER_TEXTS_ENTRY)
+    assert unsaid(cut, DESCRIPTION_QUALIFIED_ENTRY) == []
+    assert DESCRIPTION_ONE_HOME in cut
 
 # --------------------------------------------------------------------------
 # story-217: the two delegated questions reach past the swept places
@@ -2619,6 +2787,765 @@ def test_the_session_receives_the_schemas_statement_whole(
     assert as_written in prompt
     for statement, phrases in DO_NOT_MODIFY_PROTECTS_STATES.items():
         assert unsaid(as_written, phrases) == [], statement
+
+
+# --------------------------------------------------------------------------
+# story-222: a plan fixes the gaps its planning finds, and records any it
+# leaves in a list of its own
+#
+# The planner was bounded by "a single bounded change", and the consequence
+# step called a problem its questions found one the plan "can be written
+# around" — so a plan could carry a problem it knew of as a limit, or leave it
+# for a brief, and a story meant to shrink the backlog grew it. Now the role
+# layer bounds a story by the mechanism it changes, with any gap the planning
+# trace finds there inside the bound whatever its size. The consequence step
+# says every problem its questions turn up is fixed in the plan, what a left
+# gap costs, that size is therefore not a reason, the only grounds a gap may be
+# left on, and that a gap left is recorded in gaps_left and nowhere else. The
+# step that asks the developer questions puts each gap to them before the
+# draft; the step saying what l5-plan checks names every class it refuses an
+# artifact for; the skeleton shows a gaps_left item and a paragraph beside the
+# reason rule says what an entry is; and the paragraph under the blocked paths
+# says a plan never lands one as work. The story schema declares gaps_left and
+# extends the descriptions of scope.modify, scope.do_not_modify and
+# technical_plan.likely_file_changes.
+#
+# Held in story-218's idiom. Each statement is read on the prompt l5-plan
+# hands the session, in the part of the prompt it has to stand in — the role
+# layer, a numbered step found by the words it opens with, the reason rule's
+# passage, the [Workflow facts] section — and each has its controls in both
+# directions: the baseline template or schema, which carries none of it, and a
+# copy of the shipped text with the statement cut out as one span, where the
+# same reader reports every part of it missing while everything else that
+# text says is still found. Where this story rewrote a sentence rather than
+# adding one, the old wording is shown absent beside a text that did carry it.
+#
+# What this does not establish is meaning, for the reason story-217's section
+# gives. The refusals themselves, their plan-time-only standing and the
+# approval display are held by tests/test_plan_time_validation.py and
+# tests/test_the_approval_shows_the_gaps_a_plan_leaves.py; the prose layer's
+# and story.description's account of what a story leaves alone by
+# tests/test_every_story_and_brief_opens_in_plain_english.py; and that the
+# template names no workflow stage, no restricted path and no field's place in
+# the contract by tests/test_planner_injection.py.
+# --------------------------------------------------------------------------
+
+
+#: The field a plan records each gap it leaves in, read from where the
+#: coordinator spells it once rather than written here.
+GAPS_LEFT = story_coordinator.GAPS_LEFT
+
+#: The role layer's bound as this story words it.
+ROLE_BOUND_STATES = {
+    "a story is bounded by the mechanism it changes": (
+        "expand the story beyond the mechanism it changes",),
+    "a gap the trace finds in that mechanism is inside the bound whatever "
+    "its size": (
+        "a gap the planning trace finds in that mechanism is inside the bound "
+        "whatever its size",),
+}
+
+#: The bound it replaced.
+ROLE_BOUND_BEFORE = "a single bounded change"
+
+#: The consequence step's opening sentence as this story rewrote it: a problem
+#: the questions find now is fixed in the plan, for the reason the sentence
+#: already gave.
+CONSEQUENCE_OPENING_STATES = {
+    "a problem the questions find now is one the plan fixes": (
+        "A problem one of them finds now is one the plan fixes",
+        "in the tasks, criteria and scope it is about to write"),
+    "because a run cannot repair what would contradict its plan": (
+        "one the run cannot repair",
+        "would contradict the plan it was approved against"),
+}
+
+#: The words that sentence carried before.
+CONSEQUENCE_OPENING_BEFORE = "the plan can be written around"
+
+#: What the consequence step says of every problem its questions turn up. In
+#: the order the step says it, because `statement_span` builds the cut from the
+#: first phrase and the last.
+GAP_FIX_STATES = {
+    "every problem the questions turn up is fixed in the plan": (
+        "Every problem the questions above turn up is fixed in the plan",
+        "written into the story's tasks, criteria and scope"),
+    "rather than recorded as a limit or left for a brief": (
+        "rather than recorded as a limit the plan lives with",
+        "left for a brief of its own"),
+    "a gap left comes back as a brief, at a brief's cost": (
+        "A gap the plan leaves comes back as a brief",
+        "a planning interview, a whole story run, a review and a merge"),
+    "where fixing it in the plan costs a task and a criterion": (
+        "fixing it in the plan being written costs a task and a criterion",),
+    "size is therefore not a reason": (
+        "its size is therefore never a reason to leave it",),
+    "the grounds a gap may be left on, and no others": (
+        "A gap may be left on these grounds and no others",
+        "it lies in a different part of the system",
+        "it cannot be done under the story's workflow",
+        "it waits on a decision the developer chooses not to make now"),
+    "a gap left is recorded in gaps_left and nowhere else": (
+        f"recorded in {GAPS_LEFT} and nowhere else",
+        "not in the description, not in a do_not_modify reason, and not in a "
+        "constraint"),
+}
+
+#: What the step asking the developer questions said before this story, held
+#: beside what it says now so the cut below is shown to take nothing else.
+QUESTIONS_STEP_BEFORE_STATES = {
+    "decisions expensive or hard to reverse are asked about": (
+        "Ask about decisions that are expensive or hard to reverse",),
+    "cheap, reversible ones get a default the developer is told of": (
+        "apply sensible defaults to cheap, reversible ones and say you did",),
+}
+
+#: What that step says since this story about a gap the plan would leave.
+QUESTIONS_GAP_STATES = {
+    "a gap to leave is a decision and never a default": (
+        "A gap you would leave is one of those decisions and never a default",),
+    "each is put to the developer before the draft, naming its ground": (
+        "put each to the developer before the draft is shown",
+        "naming the ground it would be left on"),
+    "one they do not agree to leave is fixed in the plan": (
+        "fix in the plan any gap they do not agree to leave",),
+}
+
+#: The step that says what l5-plan checks when the session ends, found by the
+#: words it has said that with since before this module's baseline.
+VALIDATION_STEP = r"l5-plan validates"
+
+#: How that step names each check the composition l5-plan calls refuses an
+#: artifact for, keyed by the check. The keys are held equal to the checks
+#: `plan_validation.artifact_problems` calls, so a class added there and not
+#: named in the step reddens here rather than leaving the step's list short.
+REFUSALS_THE_STEP_NAMES = {
+    "read_story": ("the story schema",),
+    "stage_exception_problems": (
+        "the agreement of any stage_exceptions with the workflow",),
+    "strictness_problems": ("the strictness rule",),
+    "assignment_problems": ("the assignment rule",),
+    "naming_problems": ("the naming rule",),
+    "workflow_problems": ("the workflow rule",),
+    "scope_reason_problems": (
+        "the reason rule", "do_not_modify entry carrying no reason"),
+    "gap_reason_problems": (
+        "the gap rule", f"{GAPS_LEFT} entry carrying no reason"),
+    "blocked_work_problems": (
+        "the blocked-path rule", "at or beneath a path blocked for every stage"),
+}
+
+#: The classes this story added to that list, and the ones it named there for
+#: the first time although they were refused before it.
+REFUSALS_THIS_STORY_ADDED = ("gap_reason_problems", "blocked_work_problems")
+REFUSALS_THIS_STORY_NAMED = ("assignment_problems", "naming_problems",
+                             "workflow_problems")
+
+#: The skeleton's gaps_left item: a gap placeholder followed by a
+#: parenthetical holding a reason placeholder that names the ground.
+SKELETON_GAPS_LEFT_ITEM = re.compile(
+    rf"^\t{GAPS_LEFT}:\n\t  - <[^>]+> \(<[^>]+reason[^>]*ground[^>]*>\)$",
+    re.MULTILINE)
+
+#: The paragraph beside the reason rule saying what a gaps_left entry is. In
+#: the order it says it, for the reason given above.
+GAP_ENTRY_STATES = {
+    "an entry is a gap followed by the developer's reason in a closing "
+    "parenthetical": (
+        f"A {GAPS_LEFT} entry is a gap the plan leaves",
+        "followed by the developer's reason for leaving it in a closing "
+        "parenthetical"),
+    "a plan leaving no gap carries no list": (
+        "a plan leaving no gap carries no such list",),
+    "the reason names the ground": (
+        "The reason names the ground the gap is left on",),
+    "the grounds a reason may name": (
+        "a different part of the system",
+        "work the story's workflow cannot do",
+        "a decision the developer chooses not to make now"),
+    "l5-plan refuses an entry carrying none": (
+        f"l5-plan refuses an artifact with a {GAPS_LEFT} entry carrying no "
+        "reason",),
+    "each entry is printed beneath its story's line before approval": (
+        "before the developer approves the plan it prints each entry on a "
+        "line of its own",
+        "beneath that story's id and title"),
+    "so what the plan leaves is read before it is agreed to": (
+        "so what the plan leaves is read before it is agreed to",),
+}
+
+#: How the paragraph introducing the blocked paths says what they are, which
+#: the statement below has to follow.
+BLOCKED_PATHS_INTRO_STATES = {
+    "the paths are blocked for every stage of every story": (
+        "These paths are blocked for every stage of every story",),
+    "a story's do_not_modify list need not repeat them": (
+        "need not repeat them",),
+}
+
+#: What [Workflow facts] says of those paths since this story (brief 386). In
+#: the order it says it.
+BLOCKED_WORK_STATES = {
+    "a plan never lands a blocked path as work": (
+        "A plan never lands one of these paths as work",),
+    "neither as a scope.modify entry nor as a likely_file_changes file": (
+        "no scope.modify entry and no likely_file_changes file is at or "
+        "beneath any of them",),
+    "because no stage of a run may write there": (
+        "no stage of a run may write there",),
+    "l5-plan refuses an artifact scheduling work on one": (
+        "l5-plan refuses an artifact scheduling work on one",),
+    "a needed change there is a gap the story's workflow cannot do": (
+        "a gap left because the story's workflow cannot do it",
+        "no stage may write that text"),
+    "it is recorded in gaps_left on that ground": (
+        f"recorded in {GAPS_LEFT} on that ground",),
+}
+
+#: The new statements of the prompt, for the template reading and the
+#: baseline control below.
+PROMPT_STATEMENTS_THIS_STORY_ADDED = (
+    ROLE_BOUND_STATES, CONSEQUENCE_OPENING_STATES, GAP_FIX_STATES,
+    QUESTIONS_GAP_STATES, GAP_ENTRY_STATES, BLOCKED_WORK_STATES)
+
+#: The story schema's description of gaps_left, one table per sentence, in the
+#: order the description says them, so each can be cut out as one span.
+GAPS_LEFT_FORM_STATES = {
+    "an entry is the gap and the developer's reason in a closing "
+    "parenthetical": (
+        "each the gap followed by the developer's reason for leaving it in a "
+        "closing parenthetical",),
+    "the form an entry takes": (
+        "'<the gap the plan leaves> (<the developer's reason, naming the "
+        "ground it is left on>)'",),
+}
+GAPS_LEFT_FIXED_STATES = {
+    "a gap in the part of the system the story changes is fixed by it": (
+        "A gap the planning finds in the part of the system the story changes "
+        "is fixed by the story",),
+    "whatever its size": ("whatever its size",),
+    "a gap left comes back as a brief, at a brief's cost": (
+        "a gap left comes back as a brief",
+        "a planning interview, a whole story run, a review and a merge"),
+    "where fixing it here costs a task and a criterion": (
+        "costs a task and a criterion",),
+    "so size is never a ground": ("so size is never a ground for leaving one",),
+}
+GAPS_LEFT_GROUNDS_STATES = {
+    "on these grounds and no others": (
+        "A gap may be left on these grounds and no others",),
+    "a different part of the system": (
+        "it lies in a different part of the system",),
+    "the story's workflow cannot do it": (
+        "it cannot be done under the story's workflow",),
+    "a decision the developer chooses not to make now": (
+        "it waits on a decision the developer chooses not to make now",),
+    "the reason names which": ("the reason names which",),
+}
+GAPS_LEFT_ONE_PLACE_STATES = {
+    "the list is the one place a plan records a gap": (
+        "This list is the one place in a plan a gap is recorded",),
+    "never the description, a do_not_modify reason or a constraint": (
+        "never the description, a do_not_modify reason or a constraint",),
+}
+GAPS_LEFT_REFUSAL_STATES = {
+    "an entry carrying no reason is refused at plan time": (
+        "An entry carrying no reason", "is refused at plan time"),
+    "l5-run's pre-flight does not refuse it": (
+        "l5-run's pre-flight does not refuse it",),
+    "no check, routing or pre-flight decision reads the list, though every "
+    "stage is handed it": (
+        "no check, routing or pre-flight decision in a run reads this list",
+        "every stage of a run is handed it as part of the story text",
+        "the stage that reviews the work may read an entry as something the "
+        "plan says"),
+}
+GAPS_LEFT_SHOWN_STATES = {
+    "l5-plan shows each entry before the developer approves": (
+        "Before the developer approves the plan, l5-plan shows each entry on "
+        "a line of its own",
+        "beneath its story's id and title"),
+}
+GAPS_LEFT_STATEMENTS = (GAPS_LEFT_FORM_STATES, GAPS_LEFT_FIXED_STATES,
+                        GAPS_LEFT_GROUNDS_STATES, GAPS_LEFT_ONE_PLACE_STATES,
+                        GAPS_LEFT_REFUSAL_STATES, GAPS_LEFT_SHOWN_STATES)
+GAPS_LEFT_STATES = {statement: phrases for statements in GAPS_LEFT_STATEMENTS
+                    for statement, phrases in statements.items()}
+
+#: The three descriptions this story extended, each as where it sits in the
+#: schema, what it said before — which the task asked be kept — and what it
+#: says now besides. do_not_modify's earlier statements are story-218's table.
+SCOPE_MODIFY_BEFORE_STATES = {
+    "paths the story is authorized to change": (
+        "Paths the story is authorized to change.",),
+}
+SCOPE_MODIFY_BLOCKED_STATES = {
+    "a path a stage may never write is never an entry": (
+        "A path at or beneath one the execution rules block for every stage "
+        "is never an entry",),
+    "because no stage of a run may change it": (
+        "no stage of a run may change it",),
+    "plan time refuses one": ("Plan time refuses such an entry",),
+    "a change needed there is recorded in gaps_left": (
+        f"recorded in {GAPS_LEFT} as a gap the story's workflow cannot do",),
+}
+LIKELY_FILE_BEFORE_STATES = {
+    "files the plan expects to touch, with a reason for each": (
+        "Files the plan expects to touch, with the reason for each.",),
+}
+LIKELY_FILE_BLOCKED_STATES = {
+    "a file a stage may never write is refused at plan time": (
+        "A file at or beneath a path the execution rules block for every "
+        "stage is refused at plan time",),
+    "for the reason scope.modify gives": ("no stage of a run may change it",),
+}
+DO_NOT_MODIFY_KNOWN_DEFECT_STATES = {
+    "a reason is never a defect the plan knows of": (
+        "A reason is never a defect the plan knows of",),
+    "leaving a text alone is right only for one that stays correct": (
+        "leaving a path or area alone is right only for a text that stays "
+        "correct as it is",),
+    "a known defect is fixed or recorded in gaps_left, never in a reason": (
+        f"a known defect is either fixed by the story or recorded in "
+        f"{GAPS_LEFT}",
+        "never written into a reason here"),
+}
+DESCRIPTIONS_THIS_STORY_EXTENDED = {
+    "scope.modify": (("scope", "modify"), SCOPE_MODIFY_BEFORE_STATES,
+                     SCOPE_MODIFY_BLOCKED_STATES),
+    "technical_plan.likely_file_changes": (
+        ("technical_plan", "likely_file_changes"), LIKELY_FILE_BEFORE_STATES,
+        LIKELY_FILE_BLOCKED_STATES),
+    "scope.do_not_modify": (("scope", "do_not_modify"), DO_NOT_MODIFY_STATES,
+                            DO_NOT_MODIFY_KNOWN_DEFECT_STATES),
+}
+
+
+def role_layer(text: str) -> str:
+    """The text between the [Role Layer] heading and the [Process] one."""
+    match = re.search(r"\[Role Layer\]\n(.*?)\n\[Process\]", text, re.DOTALL)
+    assert match is not None, "the text has no role layer before its process"
+    return match.group(1)
+
+
+def step_of(text: str, pattern: str) -> str:
+    """The one numbered step of the process section `pattern` resolves."""
+    steps = numbered_steps(process_section(text))
+    return steps[step_index(steps, pattern)]
+
+
+def described(schema: dict, keys: tuple[str, ...]) -> str:
+    """The description of the property `keys` lead to, through each level's
+    properties."""
+    node = schema
+    for key in keys:
+        node = node["properties"][key]
+    return node["description"]
+
+
+def baseline_story_schema() -> dict:
+    """The story schema at this module's baseline, read through the shared
+    resolution the story-212 and story-218 controls above read it through."""
+    return json.loads(repository_file_at(
+        STORY_SCHEMA_REL, validation_file=Path(__file__), bound=BASELINE))
+
+
+def composed_checks(source: str) -> list[str]:
+    """The checks a composition's source calls, by name: the coordinator's
+    reader and every function named for the problems it reports, in the order
+    the source calls them."""
+    calls = sorted(
+        (node for node in ast.walk(ast.parse(source))
+         if isinstance(node, ast.Call)),
+        key=lambda node: (node.lineno, node.col_offset))
+    named = []
+    for call in calls:
+        func = call.func
+        name = func.attr if isinstance(func, ast.Attribute) \
+            else getattr(func, "id", "")
+        if name == "read_story" or name.endswith("_problems"):
+            named.append(name)
+    return named
+
+
+def artifact_problems_source() -> str:
+    """The composition l5-plan refuses an artifact through, as its module
+    holds it — the subject of the step's list, read rather than restated."""
+    return conftest.function_source(
+        Path(plan_validation.__file__).read_text(encoding="utf-8"),
+        "artifact_problems")
+
+
+def test_the_role_layer_bounds_a_story_by_the_mechanism_it_changes(
+    plan_capture, tmp_path
+):
+    """On what l5-plan hands the session, in the role layer's list of what
+    the planner does not do: a story is not expanded beyond the mechanism it
+    changes, and a gap the planning trace finds in that mechanism is inside
+    that bound whatever its size. The bound it replaced — a single bounded
+    change — is said nowhere in the role layer.
+
+    The control for both halves is the baseline template's role layer, which
+    said the old bound and none of the new one, so the absence is the bound
+    having been rewritten rather than a reader that cannot see it."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    layer = one_line(role_layer(prompt))
+    for statement, phrases in ROLE_BOUND_STATES.items():
+        assert unsaid(layer, phrases) == [], statement
+        assert layer.index("Do not:") < layer.index(phrases[0]), statement
+    assert ROLE_BOUND_BEFORE not in layer
+
+    before = one_line(role_layer(baseline_planner_template()))
+    assert ROLE_BOUND_BEFORE in before
+    for statement, phrases in ROLE_BOUND_STATES.items():
+        assert unsaid(before, phrases) == list(phrases), statement
+
+
+def test_the_consequence_step_says_a_problem_found_now_is_one_the_plan_fixes(
+    plan_capture, tmp_path
+):
+    """On the same prompt: the step's opening sentence says a problem its
+    questions find now is one the plan fixes, in the tasks, criteria and scope
+    it is about to write, and keeps the reason it gave before — a run cannot
+    repair what would contradict the plan it was approved against. The words
+    it replaced are gone from the step.
+
+    The control is the step as it stood before story-216 widened it, which
+    this module already recovers: there the same reader finds the old words
+    and the reason, and not the new half — so the absence above is the
+    sentence having been rewritten, and the reason is the one it gave."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = consequence_step_of(prompt)
+    for statement, phrases in CONSEQUENCE_OPENING_STATES.items():
+        assert unsaid(step, phrases) == [], statement
+    assert CONSEQUENCE_OPENING_BEFORE not in one_line(step)
+
+    before = consequence_step_of(planner_template_before_this_story())
+    assert CONSEQUENCE_OPENING_BEFORE in one_line(before)
+    fixes, reason = CONSEQUENCE_OPENING_STATES.values()
+    assert unsaid(before, fixes) == list(fixes)
+    assert unsaid(before, reason) == []
+
+
+def test_the_consequence_step_fixes_every_problem_and_names_the_only_grounds_for_leaving_one(
+    plan_capture, tmp_path
+):
+    """On the same prompt, in the consequence step and outside its
+    found-nothing rule: every problem the questions turn up is fixed in the
+    plan rather than recorded as a limit or left for a brief; a gap the plan
+    leaves comes back as a brief, at the cost of a planning interview, a whole
+    story run, a review and a merge, against a task and a criterion in the
+    plan being written, so its size is never a reason to leave it; the only
+    grounds a gap may be left on are named; and a gap left is recorded in
+    gaps_left and nowhere else — not the description, a do_not_modify reason
+    or a constraint. The questions still read as they did: every dashed item
+    of the step is still one of them.
+
+    The control is the step with this statement cut out as one span, where
+    the same reader reports all of it missing while every other statement the
+    step makes is still found."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = consequence_step_of(prompt)
+    rule = found_nothing_rule_of(step)
+    for statement, phrases in GAP_FIX_STATES.items():
+        assert unsaid(step, phrases) == [], statement
+        assert unsaid(rule, phrases) == list(phrases), statement
+    assert all(bullet.endswith("?") for bullet in question_bullets(step))
+
+    cut_reports_only(step, GAP_FIX_STATES,
+                     {**STEP_STATES, **CONSEQUENCE_OPENING_STATES,
+                      **GAP_FIX_STATES})
+
+
+def test_the_questions_step_puts_each_gap_to_the_developer_before_the_draft(
+    plan_capture, tmp_path
+):
+    """On the same prompt, in the step that asks the developer questions: a
+    gap the planner would leave is one of the decisions it asks about and
+    never a default, each is put to the developer before the draft is shown
+    naming the ground it would be left on, and any they do not agree to leave
+    is fixed in the plan. What the step said before is still said, and the
+    step is still found by its opening words alone.
+
+    The control is the step with this statement cut out, where the same
+    reader reports all of it missing and still finds what the step said
+    before."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = step_of(prompt, QUESTIONS_STEP)
+    for statement, phrases in {**QUESTIONS_STEP_BEFORE_STATES,
+                               **QUESTIONS_GAP_STATES}.items():
+        assert unsaid(step, phrases) == [], statement
+
+    cut_reports_only(step, QUESTIONS_GAP_STATES,
+                     {**QUESTIONS_STEP_BEFORE_STATES, **QUESTIONS_GAP_STATES})
+
+
+def test_the_step_saying_what_l5_plan_checks_names_every_class_it_refuses_for(
+    plan_capture, tmp_path
+):
+    """On the same prompt: the step saying what l5-plan checks when the
+    session ends names each class of problem the composition it calls refuses
+    an artifact for — the classes this story added, the gap rule and the
+    blocked-path rule, among them — and still says each blocks the commit.
+
+    "Every class" is held against the composition rather than against a list
+    written here: the classes the step is read for are asserted equal to the
+    checks `plan_validation.artifact_problems` calls. Its control is the test
+    below, where the same reading reports a check planted into a copy of that
+    source."""
+    assert set(composed_checks(artifact_problems_source())) \
+        == set(REFUSALS_THE_STEP_NAMES)
+
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    step = step_of(prompt, VALIDATION_STEP)
+    for check, phrases in REFUSALS_THE_STEP_NAMES.items():
+        assert unsaid(step, phrases) == [], check
+    assert "blocks the commit" in one_line(step)
+
+
+def test_the_class_reading_reports_a_check_the_composition_gains():
+    """Control for "every class": a copy of the composition's source with one
+    more check planted in it is read as calling that check too, so a class
+    added to the composition and missing from the step's list fails the
+    equality above. And the step as it stood at this module's baseline names
+    the three checks it named then, and none of the classes this story named
+    for the first time or added — so the reading over the step can tell a
+    class named from one that is not."""
+    source = artifact_problems_source()
+    planted = source.replace(
+        "found += scope_reason_problems(reading.parsed)",
+        "found += scope_reason_problems(reading.parsed)\n"
+        "            found += zzz_problems(reading.parsed)", 1)
+    assert planted != source
+    assert set(composed_checks(planted)) \
+        == set(REFUSALS_THE_STEP_NAMES) | {"zzz_problems"}
+
+    before = step_of(baseline_planner_template(), VALIDATION_STEP)
+    for check in ("read_story", "stage_exception_problems",
+                  "strictness_problems"):
+        assert unsaid(before, REFUSALS_THE_STEP_NAMES[check]) == [], check
+    for check in REFUSALS_THIS_STORY_ADDED + REFUSALS_THIS_STORY_NAMED:
+        phrases = REFUSALS_THE_STEP_NAMES[check]
+        assert unsaid(before, phrases) == list(phrases), check
+
+
+def test_the_skeleton_shows_the_gaps_left_form_and_a_paragraph_says_what_an_entry_is(
+    plan_capture, tmp_path
+):
+    """On the same prompt: the skeleton shows a gaps_left item as a gap
+    followed by a reason naming its ground in a parenthetical, and in the
+    reason rule's passage a paragraph says what an entry is, that its reason
+    names the ground, the grounds a reason may name, that l5-plan refuses an
+    entry carrying none, and that each entry is printed beneath its story's
+    line before the developer approves. The do_not_modify item and the key's
+    single occurrence are story-177's assertions above.
+
+    The control for the paragraph is the passage with it cut out, where the
+    same reader reports all of it missing while every statement the reason
+    rule's passage made before is still found."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    assert SKELETON_GAPS_LEFT_ITEM.search(prompt) is not None
+    passage = reason_rule_passage(prompt)
+    for statement, phrases in GAP_ENTRY_STATES.items():
+        assert unsaid(passage, phrases) == [], statement
+
+    cut_reports_only(passage, GAP_ENTRY_STATES,
+                     {**REASON_PASSAGE_STATES, **GAP_ENTRY_STATES})
+
+
+def test_the_skeleton_check_reports_a_render_with_the_gap_reason_removed(tmp_path):
+    """The skeleton's control, in story-177's idiom: the same check over a
+    copy of the template with the parenthetical stripped from the gaps_left
+    item, rendered through the same context as the real one, reports the form
+    missing — so the presence above is the item carrying the form rather than
+    the pattern matching any gaps_left item at all."""
+    root = build_target(tmp_path / "t", STANDARDS)
+    context = context_assembler.schema_context(REPO_ROOT)
+    context.update(context_assembler.workflow_context(
+        conftest.build_workflow(conftest.workflow_stage()),
+        harness_config.load_rules(REPO_ROOT)))
+    context.update(context_assembler.standards_context(
+        root, harness_config.load_config(root)))
+    template = planner_template()
+    assert SKELETON_GAPS_LEFT_ITEM.search(
+        context_assembler.render(template, context)) is not None
+
+    stripped = re.sub(r"(?m)^(\t" + re.escape(GAPS_LEFT) + r":\n\t  - <[^>]+>) \(.*\)$",
+                      r"\1", template)
+    assert stripped != template
+    rendered = context_assembler.render(stripped, context)
+    assert SKELETON_GAPS_LEFT_ITEM.search(rendered) is None
+    assert f"\t{GAPS_LEFT}:\n\t  - <" in rendered, \
+        "the strip took the item rather than its parenthetical"
+
+
+def test_workflow_facts_say_a_plan_never_lands_a_blocked_path_as_work(
+    plan_capture, tmp_path
+):
+    """On the same prompt, in [Workflow facts] after the paragraph that
+    introduces the blocked paths (brief 386): a plan never lands one as work —
+    neither a scope.modify entry nor a likely_file_changes file is at or
+    beneath one — because no stage of a run may write there, l5-plan refuses
+    an artifact scheduling work on one, and where the work would need such a
+    text changed that is a gap left because the story's workflow cannot do
+    it, recorded in gaps_left on that ground.
+
+    The control is the section with this statement cut out, where the same
+    reader reports all of it missing and still finds the paragraph it
+    follows."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    facts = one_line(workflow_facts_section(prompt))
+    introduced = facts.index(
+        BLOCKED_PATHS_INTRO_STATES[next(iter(BLOCKED_PATHS_INTRO_STATES))][0])
+    for statement, phrases in BLOCKED_WORK_STATES.items():
+        assert unsaid(facts, phrases) == [], statement
+        assert facts.index(phrases[0]) > introduced, statement
+
+    cut_reports_only(facts, BLOCKED_WORK_STATES,
+                     {**BLOCKED_PATHS_INTRO_STATES, **BLOCKED_WORK_STATES})
+
+
+def test_the_template_carries_every_statement_this_story_gave_the_session():
+    """The assertions above read a render; this reads the template, so a
+    regression in either is caught by name. Each statement is read where it
+    has to stand, the step list included, and the gaps_left key with its colon
+    is written once, in the skeleton."""
+    template = planner_template()
+    places = (
+        (role_layer(template), (ROLE_BOUND_STATES,)),
+        (consequence_step_of(template),
+         (CONSEQUENCE_OPENING_STATES, GAP_FIX_STATES)),
+        (step_of(template, QUESTIONS_STEP), (QUESTIONS_GAP_STATES,)),
+        (step_of(template, VALIDATION_STEP), (REFUSALS_THE_STEP_NAMES,)),
+        (reason_rule_passage(template), (GAP_ENTRY_STATES,)),
+        (workflow_facts_section(template), (BLOCKED_WORK_STATES,)),
+    )
+    for text, tables in places:
+        for table in tables:
+            for statement, phrases in table.items():
+                assert unsaid(text, phrases) == [], statement
+    assert SKELETON_GAPS_LEFT_ITEM.search(template) is not None
+    assert template.count(f"{GAPS_LEFT}:") == 1
+
+
+def test_the_baseline_template_stated_none_of_what_this_story_added():
+    """Control in the other direction, in this module's own idiom: the
+    template at this module's baseline carries no phrase of any statement
+    this story added, its skeleton has no gaps_left item, and the key is
+    written nowhere in it — so green above is the text having been added."""
+    before = baseline_planner_template()
+    for statements in PROMPT_STATEMENTS_THIS_STORY_ADDED:
+        for statement, phrases in statements.items():
+            assert unsaid(before, phrases) == list(phrases), statement
+    assert SKELETON_GAPS_LEFT_ITEM.search(before) is None
+    assert GAPS_LEFT not in before
+
+
+def test_the_story_schema_declares_gaps_left_as_a_list_of_strings_outside_the_required_list():
+    """The declaration, and what it means for an artifact. gaps_left is a
+    top-level array whose items are strings and is not in the required list;
+    so the sample story every coordinator test runs against, which carries no
+    gaps_left, validates, and so does the same story carrying a list of
+    strings, while one carrying something other than a list, or a list
+    holding something other than strings, is refused naming the field.
+
+    The control that "validates without it" is the validator deciding rather
+    than a validator that has stopped refusing anything is beside it: the same
+    story with a required field taken out is refused. And the field is the
+    schema-directed parser's to read as one type: an artifact's gaps_left
+    parses as the list of strings it was written as."""
+    schema = schema_validator.load_schema("story")
+    field = schema["properties"][GAPS_LEFT]
+    assert field["type"] == "array"
+    assert field["items"] == {"type": "string"}
+    assert GAPS_LEFT not in schema["required"]
+
+    parsed = story_parser.parse(conftest.STORY, schema)
+    assert GAPS_LEFT not in parsed
+    assert schema_validator.validate(parsed, schema) == []
+    for value in ("a gap (a reason)", [7], {"gap": "a reason"}):
+        refused = schema_validator.validate({**parsed, GAPS_LEFT: value}, schema)
+        assert any(GAPS_LEFT in problem for problem in refused), (value, refused)
+    assert schema_validator.validate(
+        {**parsed, GAPS_LEFT: ["a gap (a reason)"]}, schema) == []
+
+    required = schema["required"][0]
+    assert schema_validator.validate(
+        {key: value for key, value in parsed.items() if key != required},
+        schema) != []
+
+    written = story_parser.parse(
+        conftest.STORY + f"\n{GAPS_LEFT}:\n  - one gap (its reason)\n"
+        "  - another gap (another reason)\n", schema)
+    assert written[GAPS_LEFT] == ["one gap (its reason)",
+                                  "another gap (another reason)"]
+
+
+def test_the_gaps_left_description_states_the_rule_and_the_refusal():
+    """The field the planner is injected whole says, in its own words: the
+    form of an entry; that a gap in the part of the system the story changes
+    is fixed by the story whatever its size, because a gap left comes back as
+    a brief at a brief's cost; the grounds a gap may be left on and that the
+    reason names which; that the list is the one place a plan records a gap;
+    that an entry carrying no reason is refused at plan time and not by
+    l5-run's pre-flight, and that no check, routing or pre-flight decision
+    in a run reads the list, though every stage is handed it as part of the
+    story; and that l5-plan shows each entry before the developer approves.
+
+    Each sentence is controlled by a copy of the description with it cut out,
+    where the same reader reports all of it missing and finds every other
+    sentence; and the schema at this module's baseline declared no such
+    field."""
+    description = schema_validator.load_schema(
+        "story")["properties"][GAPS_LEFT]["description"]
+    for statement, phrases in GAPS_LEFT_STATES.items():
+        assert unsaid(description, phrases) == [], statement
+    for statements in GAPS_LEFT_STATEMENTS:
+        cut_reports_only(description, statements, GAPS_LEFT_STATES)
+
+    assert GAPS_LEFT not in baseline_story_schema()["properties"]
+
+
+@pytest.mark.parametrize("field", sorted(DESCRIPTIONS_THIS_STORY_EXTENDED))
+def test_each_description_this_story_extended_says_it_and_keeps_what_it_said(
+        field):
+    """scope.modify says a path the execution rules block for every stage is
+    never an entry and that plan time refuses one, with a change needed there
+    recorded in gaps_left; likely_file_changes says such a file is refused at
+    plan time; and scope.do_not_modify says a reason is never a defect the
+    plan knows of. Every statement each description made before is still
+    made.
+
+    The control is each description with the new statement cut out, where the
+    same reader reports all of it missing and still finds every statement the
+    description made before; and the same field at this module's baseline,
+    which carries none of it."""
+    keys, kept, added = DESCRIPTIONS_THIS_STORY_EXTENDED[field]
+    description = described(schema_validator.load_schema("story"), keys)
+    for statement, phrases in {**kept, **added}.items():
+        assert unsaid(description, phrases) == [], statement
+    cut_reports_only(description, added, {**kept, **added})
+
+    before = described(baseline_story_schema(), keys)
+    assert before, "the field carried no description to search"
+    for statement, phrases in added.items():
+        assert unsaid(before, phrases) == list(phrases), statement
+
+
+def test_the_session_receives_the_descriptions_this_story_wrote_whole(
+    plan_capture, tmp_path
+):
+    """Each description this story wrote or extended reaches the session as
+    the schema file writes it, encoded the way that file encodes a string, so
+    what the planner reads is the statement held above and not a rendering of
+    some other text."""
+    prompt = captured_prompt(plan_capture, build_target(tmp_path / "t", STANDARDS))
+    schema = schema_validator.load_schema("story")
+    descriptions = [schema["properties"][GAPS_LEFT]["description"]] + [
+        described(schema, keys)
+        for keys, _, _ in DESCRIPTIONS_THIS_STORY_EXTENDED.values()]
+    for description in descriptions:
+        assert json.dumps(description, ensure_ascii=False)[1:-1] in prompt
 
 
 # --------------------------------------------------------------------------
