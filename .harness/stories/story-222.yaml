@@ -1,0 +1,667 @@
+story:
+  id: story-222
+  title: A story plan fixes the gaps its planning finds, and shows any it leaves for the developer to approve
+  description: |
+    When a story is planned, the planner works out what the change might
+    break, and that keeps turning up problems next to the one the story is
+    about. Nothing stops it leaving them out: it can write a "known limit"
+    into the plan, or suggest that a problem deserves a brief of its own.
+    Whatever it writes down is later read by the run's own review of what it
+    changed and filed as new work, so a story meant to shrink the backlog
+    grows it. Today the only thing that stops this is the developer catching
+    each case while the plan is being written.
+
+    This story makes fixing those problems the default. A problem the
+    planner finds in the part of the system the story changes becomes part
+    of the story, whatever its size. The planner may leave one only if it
+    belongs to a different part of the system, the story's workflow cannot
+    do it, or it waits on a decision the developer chooses not to make yet,
+    and only after asking. Anything left goes in a list of its own in the
+    story file, each item with the developer's reason; planning refuses an
+    item with no reason, and shows the list just before the developer
+    approves. Planning also refuses a plan that schedules work on a file no
+    stage of a run is allowed to change, which today is only stopped after a
+    stage has spent its turn; such a change goes in the same list instead.
+    Small repairs to the same planning instructions and their tests come
+    with it: when the planner's check finds nothing, the plan says where it
+    looked; a test that guards those instructions stops mistaking hyphenated
+    word pairs for file names; and the suite's record of which tests read
+    the repository's history is completed for the test file this story
+    extends.
+
+    It leaves alone how a run handles a problem it discovers while running,
+    which the stage that checks the work already fixes by default, and what
+    the run's review looks for and files. Stories already planned are not
+    held to the new list. A story can still say what it deliberately leaves
+    alone, as long as that is something that stays correct as it is. And
+    nothing reads a plan's wording for a problem written there instead of in
+    the list: the developer chose to keep that to their own reading of the
+    draft, because a check could only look for the phrases it knows, and any
+    rewording gets past it.
+
+    Where the work lands. This story was planned from the brief filed under
+    key 397. It also carries the work of the briefs filed under keys 387,
+    364, 384 and 386, which the developer chose at planning to fold in
+    rather than run as stories of their own; each is closed as superseded by
+    this story. The planning trace found more and folded it in. A known
+    defect can hide in a do_not_modify reason as well as in the description,
+    as story-213's last entry shows, so the rule says a gap is recorded in
+    gaps_left and nowhere else. The planner's step 7, which says what
+    l5-plan checks when a session ends, leaves out the assignment, naming
+    and workflow refusals that exist today. And telling the planner to fold
+    every gap in pushes it toward texts no stage may write, which is why
+    brief 386's refusal belongs in the same story.
+
+    prompts/planner.md is where the planner meets the rule. Its role layer
+    stops bounding a story as "a single bounded change" and bounds it by the
+    mechanism the story changes, with any gap the planning trace finds in
+    that mechanism inside the bound. Its consequence step (step 3) stops
+    calling a problem found at planning time one "the plan can be written
+    around": every problem the trace finds is fixed in the story's tasks,
+    criteria and scope. The step says what a left gap costs — it comes back
+    as a brief, and a brief costs a planning interview, a whole story run, a
+    review and a merge, against a task and a criterion in the plan being
+    written — that size is therefore not a reason, and the only grounds on
+    which a gap may be left: it lies in a different part of the system, it
+    cannot be done under the story's workflow, or it waits on a decision the
+    developer chooses not to make now. A gap left on one of them is recorded
+    in gaps_left and nowhere else in the plan. The step that asks the
+    developer questions (step 4) puts each such gap to the developer as a
+    decision before the draft. The skeleton shows the field. Step 7 names
+    every class of problem l5-plan refuses an artifact for.
+
+    The found-nothing rule in the same step (brief 387) asks the entries of
+    the questions about other texts — another path doing the same job, and a
+    written statement made untrue — to say where the planner looked, as it
+    already asks the duplication question's entry which kinds of place were
+    searched. The single sentence naming the questions that found nothing
+    stays.
+
+    The [Workflow facts] paragraph that renders the repository-wide blocked
+    paths (brief 386) says a plan never lands one as work — neither a
+    scope.modify entry nor a likely_file_changes file is under one — and
+    that where the work would need such a text changed, that is a gap left
+    because the story's workflow cannot do it: no stage may write that text.
+
+    prompts/prose-layer.md and the description of story.description in
+    schemas/story.schema.json each say, in their own words, that what a
+    piece of work deliberately leaves alone is something that stays correct
+    as it is, never a defect it knows of. The schema declares gaps_left as a
+    top-level list of strings outside the required list; the description of
+    scope.do_not_modify gains that a reason is never a known defect, and
+    that of scope.modify that a blocked path is never an entry. The
+    description of story.description also carries the found-nothing
+    statement for the questions about other texts.
+
+    orchestration/plan_validation.py gains two plan-time classes. The eighth
+    refuses a gaps_left entry carrying no reason, on the terms
+    scope_reason_problems uses and through the same predicate,
+    carries_a_reason. The ninth refuses a scope.modify entry or a
+    likely_file_changes file at or beneath a path rules/execution-rules.json
+    blocks for every stage, decided by the coordinator's is_blocked; it
+    names the blocked path and says the work goes in gaps_left instead. Both
+    run at plan time only. For the ninth the module's shared reason holds:
+    story-074's committed artifact names a blocked file in its modify list
+    and has already run. For the eighth no committed artifact carries the
+    field, so the docstring gives the reason that is true of it.
+
+    scripts/l5-plan, when it asks the developer to approve, prints each
+    gaps_left entry of each artifact on a line of its own, beneath that
+    artifact's id-and-title line and above the question. It still reads each
+    artifact once through the coordinator's reader and takes the gaps from
+    that same reading; an artifact leaving none prints exactly what it
+    prints today.
+
+    tests/test_planner_receives_the_standards.py gets the corrected guard
+    (brief 364): its path reader stops treating a hyphen as a sign of a file
+    name, so a slashed pair of hyphenated ordinary words ("re-entry/resume")
+    is not reported as a file the step names, while a real file still is.
+    The sentence saying every script this repository ships is extensionless
+    — false, since the tracker scripts under .harness/scripts/ and
+    templates/scripts/ end in .sh — is corrected there and in
+    .harness/docs/ARCHITECTURE.md. tests/test_baseline_honesty.py's entry
+    for that module (brief 384) records the planner template it recovers at
+    a revision found by searching for wording the template used to carry,
+    and why that read is a claim about this repository's own change, as the
+    sibling module's entry already records the same kind of read.
+
+    What the sweep found. The rules this story changes are: what a plan
+    does with a problem its planning finds; what a story's account of what
+    it leaves alone may hold; what a found-nothing answer says; and whether
+    a plan may schedule work on a path no stage may write. They are stated
+    or consumed by these texts, each brought into scope or left alone with a
+    reason:
+
+    - prompts/planner.md: the role layer, steps 3, 4 and 7, the skeleton,
+      the reason-rule paragraphs and the blocked-paths paragraph, in scope.
+      Step 2, the sweep, lands each file it finds in modify or do_not_modify,
+      which the new rule leaves true, so it stays as it is.
+    - prompts/prose-layer.md, in scope.
+    - schemas/story.schema.json: story.description, scope.modify,
+      scope.do_not_modify and technical_plan.likely_file_changes, in scope.
+    - orchestration/plan_validation.py, in scope.
+    - orchestration/story_coordinator.py: carries_a_reason, is_blocked and
+      the title reader, in scope for docstrings and a reader only; the
+      run-time blocked-path check and the repair routing's refusal of a
+      blocked path stay as they are.
+    - scripts/l5-plan, in scope.
+    - .harness/docs/ARCHITECTURE.md, in scope.
+    - orchestration/context_assembler.py, orchestration/story_parser.py and
+      orchestration/item_update.py, which carry the schema, the blocked
+      paths and the artifact to their readers, left alone.
+    - both verifier prompts and schemas/verification-result.schema.json,
+      which state the cost of a declined finding and the grounds for
+      declining one, left alone.
+    - prompts/inspector.md, left alone.
+    - the brief-side texts: prompts/assist.md,
+      plugin/skills/file-a-brief/SKILL.md, schemas/story-brief.schema.json
+      and orchestration/brief_fetch.py, left alone.
+    - the writing stages' prompts and both workflow definitions, left alone.
+    - the test modules in scope, and those left alone with their reasons.
+    - outside the places the sweep covers: README.md's account of planning,
+      left alone; rules/execution-rules.json holds the blocked list, is
+      itself blocked, and is read by the new check, never written.
+
+    A second implementation. What could have been written twice is not.
+    Whether a gaps_left entry carries a reason is decided by
+    carries_a_reason, the predicate plan time and run time already share
+    for do_not_modify. Whether a path is blocked is decided by is_blocked
+    against the rules file the coordinator enforces, the reading the
+    run-time blocked-path check already makes. l5-plan takes the gaps from
+    the reading it already makes for the title. One copy is accepted: the
+    planner is told what a left gap costs in words of its own, beside the
+    cost both verifier prompts state for a declined finding. They tell
+    different agents what different decisions cost, and sharing one
+    statement would couple prompts that are otherwise independent. In the
+    machinery that validates the system, the new assertions reuse the
+    planning repository and stub session tests/test_plan_commit.py builds,
+    the artifact and defect helpers of tests/test_plan_time_validation.py,
+    the printed-line readers of tests/test_a_run_says_which_story_it_is.py,
+    and the step readers, baseline and cut copies of
+    tests/test_planner_receives_the_standards.py, rather than copying them.
+
+    Another path doing the same job. The rule is stated wherever a planner
+    reads about what a story leaves — the prose layer, the role layer, the
+    consequence step and the schema the prompt renders whole — and all of
+    them move together. The blocked-path bound is already enforced at two
+    seams, after a stage has run and when a repair is routed; plan time
+    joins them through the same predicate. The stage that reviews a run
+    reads the whole story, so it sees gaps_left; its grounds for declining a
+    finding already include a fix the plan's own words bar, which a recorded
+    gap is, and how it handles what it finds stays as it is. The tracker
+    projection publishes the artifact whole, so the field reaches the item
+    with no change. Where the planner looked, beyond the places the sweep
+    covers: README.md, the shipped skill under plugin/, the tracker scripts
+    under .harness/scripts/ and templates/scripts/, .harness/standards/,
+    rules/, .github/workflows/, and the open briefs on the tracker, which is
+    where the folded briefs came from.
+
+    The second time through. l5-plan shows the gaps at every approval it
+    asks for, each artifact's beneath its own line, and the notice about a
+    mandate block a session wrote still prints before the question. Nothing
+    in a run reads gaps_left, so a retry, a resume or a later entry behaves
+    exactly as now.
+
+    Validation that can fail. Each refusal is shown refusing a defective
+    entry beside a control that passes — a reasoned entry, a path beside a
+    blocked one — and shown not refused by l5-run's pre-flight, beside a
+    schema-invalid control that is. The display is shown printing each
+    entry before the question beside a control artifact with none, which
+    prints what it prints today. The new prompt and schema statements are
+    read off the prompt l5-plan hands a session, controlled against text
+    that never carried them and against a copy with each statement cut out;
+    like every phrase read in that module they establish the wording and
+    where it stands, not its meaning. The corrected guard and the completed
+    honesty entry are changes to validation itself: the reviewing stage's
+    judgement is their safeguard, and no test is written to test them.
+
+    A value that is absent or unreadable. An artifact with no gaps_left
+    shows nothing and is refused for nothing new. One that does not parse,
+    or fails its schema, shows no gaps at the question and is then refused
+    by the validation that follows, with its problems printed and nothing
+    committed, which is how the developer is told. The blocked list comes
+    from the rules file the planner's own prompt was rendered from, which
+    l5-plan already reads before the session.
+
+    Written statements made untrue, each corrected here: the role layer's
+    "single bounded change"; step 3's "a problem found now is one the plan
+    can be written around"; step 7's list of what l5-plan checks;
+    carries_a_reason's docstring, which speaks of do_not_modify alone;
+    plan_validation's account of its classes; approve's account of what it
+    prints; the claim about extensionless scripts in the planner test module
+    and the architecture document; the planner test module's honesty entry;
+    and the architecture document's accounts of the consequence step,
+    plan-time validation and the approval prompt. README.md's account of
+    planning becomes incomplete rather than untrue, and is recorded by hand
+    after the merge, as each story's is.
+
+    Decided at planning. No check reads a plan's wording for a defect
+    written there instead of in gaps_left: it would catch only the phrasings
+    it lists, any paraphrase evades it, and it would refuse a story that has
+    to discuss the rule, this one among them. The developer chose to keep
+    that to their own reading of the draft, which already holds whether a
+    consequence question was answered honestly.
+
+    Entries read against what the work needs. None of the do_not_modify
+    entries blocks it. Every file the work changes is in scope, and the
+    display tests import the helpers they need from the approval modules
+    left alone rather than editing them.
+
+    This plan leaves no gap.
+  workflow: story-workflow
+
+tasks:
+  - In prompts/planner.md, bound a story by the mechanism it changes, with
+    any gap the planning trace finds in that mechanism inside the bound
+    whatever its size.
+  - In its consequence step, state that every problem the trace finds is
+    fixed in the plan's tasks, criteria and scope rather than recorded as a
+    limit or left for a brief; what a left gap costs; that size is not a
+    reason; the only grounds a gap may be left on; and that a gap left is
+    recorded in gaps_left and nowhere else in the plan.
+  - In the step that asks the developer questions, have the planner put
+    each gap it would leave to the developer as a decision, naming its
+    ground, before presenting the draft.
+  - Extend the consequence step's found-nothing rule so the entries of the
+    questions about other texts say where the planner looked (brief 387).
+  - In the [Workflow facts] paragraph rendering the blocked paths, state
+    that a plan never lands one as work, and that a needed change to one is
+    a gap left because no stage may write it (brief 386).
+  - Make the step listing what l5-plan checks name every class it refuses
+    an artifact for; show the form of gaps_left in the skeleton, and say
+    beneath it what an entry is, that its reason names the ground, that
+    l5-plan refuses one carrying none, and that each is shown before
+    approval.
+  - In prompts/prose-layer.md, say that what a piece of work deliberately
+    leaves alone is something that stays correct as it is, never a defect
+    it knows of.
+  - In schemas/story.schema.json, declare gaps_left; qualify the account of
+    what a story leaves alone in the description of story.description and
+    extend its found-nothing statement (brief 387); say in
+    scope.do_not_modify that a reason is never a known defect, and in
+    scope.modify that a blocked path is never an entry and is refused at
+    plan time.
+  - In orchestration/plan_validation.py, add the eighth class (a gaps_left
+    entry carrying no reason) and the ninth (a path no stage may write,
+    planned as work), both plan-time only, composed into artifact_problems,
+    and state each in the module docstring with why it is plan-time only.
+  - In scripts/l5-plan, print each gaps_left entry beneath its artifact's
+    id-and-title line above the approval question, from the one reading the
+    script already makes; update what approve and the module docstring say
+    is printed.
+  - Update the docstrings in orchestration/story_coordinator.py that speak
+    of the reason predicate as belonging to do_not_modify alone.
+  - Hold both refusals and their plan-time-only standing, the display, and
+    the new statements of the prompt, the prose layer and the schema with
+    tests; rewrite the existing assertion that holds the found-nothing rule
+    to the duplication question alone, so it holds the rule to the
+    questions it now qualifies.
+  - Correct the consequence-step guard's path reading in
+    tests/test_planner_receives_the_standards.py, and the false claim about
+    extensionless scripts there (brief 364).
+  - Record in the entry tests/test_baseline_honesty.py keeps for the
+    planner test module each kind of history read it makes, and any this
+    story adds (brief 384).
+  - Record the change in .harness/docs/ARCHITECTURE.md, correcting the
+    false claim about extensionless scripts (brief 364) and the accounts
+    this story makes untrue.
+
+acceptance_criteria:
+  - The prompt a planning session receives bounds a story by the mechanism
+    the story changes, and says that a gap its planning trace finds in that
+    mechanism is inside that bound whatever its size.
+  - It tells the planner that every problem the consequence trace finds is
+    fixed in the plan — written into the story's tasks, criteria and scope
+    — rather than recorded as a limit or left for a brief. It says what a
+    gap a plan leaves costs: it comes back as a brief, and a brief costs a
+    planning interview, a whole story run, a review and a merge, where
+    fixing it in the plan being written costs a task and a criterion. It
+    says size is therefore not a reason to leave one.
+  - It names the only grounds on which a gap may be left: it lies in a
+    different part of the system; it cannot be done under the story's
+    workflow; or it waits on a decision the developer chooses not to make
+    now.
+  - It tells the planner to put each gap it would leave to the developer as
+    a decision, naming its ground, before presenting the draft, so that no
+    gap is left by default.
+  - It tells the planner that a gap the developer decides to leave is
+    recorded in gaps_left — the gap followed by the developer's reason in a
+    closing parenthetical — and nowhere else in the plan, the description,
+    a do_not_modify reason and a constraint among the places it is not
+    written; and its skeleton shows that form.
+  - Its found-nothing rule asks the entry of each question about other
+    texts — another path doing the same job, and a written statement the
+    change makes untrue — to say where the planner looked, as it asks the
+    duplication question's entry which kinds of place were searched. The
+    questions that found nothing are still named together in one sentence.
+  - It says a plan never lands a path the execution rules block for every
+    stage as work — neither as a scope.modify entry nor as a
+    likely_file_changes file — and that where the work would need such a
+    text changed, that is a gap left because the story's workflow cannot do
+    it.
+  - The step listing what l5-plan checks when the session ends names every
+    class of problem l5-plan refuses an artifact for, the classes this story
+    adds among them.
+  - The prose layer's account of how a story or a brief opens says that
+    what the work deliberately leaves alone is something that stays correct
+    as it is, never a defect it knows of.
+  - The story schema declares gaps_left as a top-level list of strings
+    outside the required list. Its description gives the entry's form, says
+    a gap in the mechanism the story changes is fixed by the story, names
+    the grounds and that size is not one, says the list is the one place in
+    a plan a gap is recorded, says an entry carrying no reason is refused at
+    plan time and not by l5-run's pre-flight, and says l5-plan shows each
+    entry before the developer approves.
+  - The schema's description of story.description says what a story
+    deliberately leaves alone is something that stays correct as it is,
+    never a defect the plan knows of, and carries the found-nothing
+    statement for the questions about other texts beside the one it makes
+    for the duplication question. Its description of scope.do_not_modify
+    says a reason is never a defect the plan knows of, and its description
+    of scope.modify says a path the execution rules block for every stage is
+    never an entry and that plan time refuses one. Every statement each
+    description makes now is still made.
+  - l5-plan refuses an artifact whose gaps_left entry carries no reason — a
+    bare gap or an empty parenthetical — with one problem per offending
+    entry naming its index, quoting it, and showing the form a passing entry
+    takes and the grounds a reason may name. An entry carrying any reason
+    passes whatever the reason says, decided by the same definition that
+    decides whether a do_not_modify entry carries one. An artifact with no
+    gaps_left yields no such problem.
+  - l5-plan refuses an artifact whose scope.modify entry, or
+    likely_file_changes file, is at or beneath a path the execution rules
+    block for every stage, naming the entry and the blocked path and saying
+    the work goes in gaps_left instead. Whether a path is blocked is decided
+    by the definition the coordinator's own blocked-path check uses, against
+    the rules file the coordinator enforces. A path beside a blocked one is
+    not refused.
+  - l5-run's pre-flight refuses nothing it did not refuse before, and an
+    artifact carrying either new defect gets past its story checks. The
+    account plan_validation gives of its classes states both new ones and
+    why each is plan-time only, in a reason true of each.
+  - When l5-plan asks the developer to approve, each gaps_left entry of each
+    artifact is printed whole on a line of its own, beneath that artifact's
+    id-and-title line and above the question. An artifact with no gaps_left
+    prints exactly what it printed before this story. The question is still
+    the last thing printed before the answer is read, and nothing is stamped
+    before the answer.
+  - l5-plan still reads each artifact once, through the coordinator's own
+    reader, and takes both the title and the gaps from that one reading.
+  - The guard over the consequence step reads a slashed pair of ordinary
+    words, hyphenated or not, as naming no file, while it still reads a path
+    that names a file as one — whether it carries an extension or is an
+    extensionless script under a directory, as this repository's launchers
+    are. Every sentence describing that guard, in the test module and in the
+    architecture document, says what is true of the scripts this repository
+    ships.
+  - The entry tests/test_baseline_honesty.py keeps for
+    tests/test_planner_receives_the_standards.py records each kind of
+    history read that module makes — the planner template recovered at a
+    revision found by searching for wording it used to carry among them,
+    with any read this story adds — and why each is a claim about this
+    repository's own change.
+  - The refusals this story adds, their plan-time-only standing, the
+    approval display, and the new statements of the prompt, the prose layer
+    and the schema are each held by assertions that report the thing missing
+    or wrong where it is, beside a control where it is present.
+  - .harness/docs/ARCHITECTURE.md records the story: the planner's new
+    default and grounds, gaps_left, the two plan-time classes and why each
+    is plan-time only, the approval display, the found-nothing extension,
+    the corrected guard and honesty entry, and the developer's decision to
+    keep a plan's wording to their own reading.
+
+technical_plan:
+  implementation_steps:
+    - Role layer of prompts/planner.md. Replace "expand the story beyond a
+      single bounded change" with the mechanism bound.
+    - Step 3 of prompts/planner.md. Keep "Trace what the change breaks" as
+      its opening. Turn the sentence about a problem "the plan can be
+      written around" into one saying such a problem is fixed in the plan;
+      its reason, that a run cannot repair what would contradict its plan,
+      still holds. Put the new statements (fix every problem, the cost, size,
+      the grounds, gaps_left only) in prose after the closing stand-in rule,
+      outside the found-nothing rule, which runs from "A question that found
+      nothing is answered too" to "Record the answers". Not as dashed items,
+      since a standing test requires every dashed item of the step to be one
+      of its questions, ending in a question mark.
+    - Step 3, found-nothing sentence. Add the clause brief 387 asks for
+      after the duplication clause, keeping the one-sentence form. The
+      existing assertion that the rule qualifies the duplication question
+      alone becomes one that it qualifies the duplication question and the
+      questions about other texts.
+    - Step 4 of prompts/planner.md. A gap to leave is a decision, never a
+      cheap default; put each to the developer before the draft with its
+      ground. Do not repeat another step's opening words, since each step is
+      found by them.
+    - Step 7 of prompts/planner.md. Name every class plan_validation refuses
+      on, today's assignment, naming and workflow refusals among them, and
+      the classes this story adds.
+    - Skeleton. Add gaps_left with one item in the form, and a paragraph
+      beside the reason-rule paragraphs. Leave the do_not_modify item and
+      the description placeholder as they are.
+    - The [Workflow facts] blocked-paths paragraph. The statement brief 386
+      asks for.
+    - Wording rules every new sentence must meet, all held by standing
+      tests. Name no workflow stage, no restricted path and no brief
+      category; no sentence naming a story-schema field uses required,
+      optional or mandatory; the do_not_modify key with its colon still
+      appears once; no whole sentence of the schema's descriptions is quoted
+      in the prompt or the prose layer; the prose layer names no agent by
+      role.
+    - prompts/prose-layer.md. One qualifying clause or sentence in the
+      opening entry.
+    - schemas/story.schema.json. The new property and the description edits,
+      adding to each description rather than rewording it.
+    - orchestration/plan_validation.py. Two functions in the style of
+      scope_reason_problems; the eighth through carries_a_reason, the ninth
+      through story_coordinator.is_blocked with the blocked list from
+      harness_config.load_rules(harness_root), which artifact_problems
+      already receives. Update the module docstring's opening account and
+      the list artifact_problems gives of the checks that read no
+      filesystem.
+    - scripts/l5-plan. In report, read each parse once and derive titles and
+      gaps from it; approve prints the gaps beneath each subject line. A
+      small reader beside story_title in the coordinator can take the
+      entries out of a parse defensively, reading anything that is not a
+      mapping holding a list of strings as nothing.
+    - Tests. The two classes in the idiom of
+      tests/test_plan_time_validation.py (unit, end to end through l5-plan,
+      pre-flight leniency); the display in a new module importing the
+      planning fixture and printed-line readers; the prompt and schema
+      statements in the idiom of tests/test_planner_receives_the_standards.py;
+      the prose-layer and description qualification beside the opening's
+      other statements in
+      tests/test_every_story_and_brief_opens_in_plain_english.py.
+    - Brief 364. The path reader decides a file name by something other than
+      a hyphen; correct the claims about extensionless scripts in that
+      module.
+    - Brief 384. Complete the honesty entry, and add any new read this story
+      makes.
+  likely_file_changes:
+    - file: prompts/planner.md
+      stage: implementer
+      reason: The mechanism bound, the fix-by-default rule, its cost and
+        grounds, gaps_left, step 4, step 7's list, the found-nothing
+        extension (brief 387) and the blocked-paths statement (brief 386).
+    - file: prompts/prose-layer.md
+      stage: implementer
+      reason: What a piece of work leaves alone is something that stays
+        correct as it is.
+    - file: schemas/story.schema.json
+      stage: implementer
+      reason: Declares gaps_left; the descriptions of story.description,
+        scope.do_not_modify and scope.modify.
+    - file: orchestration/plan_validation.py
+      stage: implementer
+      reason: The eighth and ninth plan-time classes, composed into
+        artifact_problems.
+    - file: orchestration/story_coordinator.py
+      stage: implementer
+      reason: The reason predicate's docstrings, and a reader taking the
+        gaps out of a parse beside story_title.
+    - file: scripts/l5-plan
+      stage: implementer
+      reason: The approval display, from the one reading of each artifact.
+    - file: tests/test_plan_time_validation.py
+      stage: tester
+      reason: The two refusals, end to end, and their pre-flight leniency.
+    - file: tests/test_the_approval_shows_the_gaps_a_plan_leaves.py
+      stage: tester
+      reason: A new module holding the approval display.
+    - file: tests/test_planner_receives_the_standards.py
+      stage: tester
+      reason: The prompt's new statements, the found-nothing assertion
+        rewritten for the questions the rule now qualifies, and the
+        corrected guard (brief 364).
+    - file: tests/test_every_story_and_brief_opens_in_plain_english.py
+      stage: tester
+      reason: The qualification of what a story or brief leaves alone, in
+        the prose layer and the schema.
+    - file: tests/test_baseline_honesty.py
+      stage: tester
+      reason: The completed entry for the planner test module (brief 384),
+        and any declaration a new history read needs.
+    - file: .harness/docs/ARCHITECTURE.md
+      stage: documenter
+      reason: The account of the story, and the false claim about
+        extensionless scripts (brief 364) corrected.
+
+scope:
+  modify:
+    - prompts/planner.md
+    - prompts/prose-layer.md
+    - schemas/story.schema.json
+    - orchestration/plan_validation.py
+    - orchestration/story_coordinator.py
+    - scripts/l5-plan
+    - tests/test_plan_time_validation.py
+    - tests/test_the_approval_shows_the_gaps_a_plan_leaves.py
+    - tests/test_planner_receives_the_standards.py
+    - tests/test_every_story_and_brief_opens_in_plain_english.py
+    - tests/test_baseline_honesty.py
+    - .harness/docs/ARCHITECTURE.md
+  do_not_modify:
+    - prompts/story-verifier.md and prompts/refactor-verifier.md (how the
+      stage that checks a run handles a problem it finds stays as it is — it
+      repairs by default, and its grounds for declining already cover a fix
+      the plan's own words bar, which is what a recorded gap is; the brief
+      keeps run-time handling out of this story)
+    - schemas/verification-result.schema.json (what a verdict records about
+      a declined finding keeps meaning what it means; nothing in a run reads
+      gaps_left)
+    - prompts/inspector.md (what a run's review looks for and files is
+      unchanged; the brief keeps the Inspector out of this story)
+    - prompts/assist.md, plugin/skills/file-a-brief/SKILL.md,
+      schemas/story-brief.schema.json and orchestration/brief_fetch.py (a
+      brief's account of what to leave alone stays the filer's advisory
+      words, on the terms story-218 left them: a planner re-decides each
+      under this rule)
+    - prompts/story-implementer.md, prompts/story-tester.md,
+      prompts/documenter.md, prompts/refactor-implementer.md and
+      prompts/harness-layer.md (what a writing stage may change stays what
+      the approved scope says; nothing in a run reads gaps_left, so no stage
+      is told about it)
+    - workflows/ (both definitions keep their stages, restrictions and
+      budgets; the ground that a gap cannot be done under the story's
+      workflow is read off whichever definition the planner was rendered
+      against)
+    - orchestration/context_assembler.py (the planner keeps receiving the
+      schema whole and the blocked paths as the rules state them, so the new
+      field and rule reach it with no new placeholder)
+    - orchestration/story_parser.py (the parser reads a field by the schema
+      it is handed, so gaps_left parses as a list of strings with no change
+      and every committed artifact parses as before)
+    - orchestration/item_update.py (the published copy of a plan is the
+      artifact whole, so gaps_left reaches the tracker item with no change)
+    - README.md (its account of planning is recorded by hand after the
+      merge, as each story's is)
+    - tests/test_planner_injection.py (its checks on the planner template
+      keep holding as they stand — no workflow stage or restricted path of
+      its own, no field's place in the contract stated, the schema rendered
+      whole; the new words are written to pass them)
+    - tests/test_a_run_says_which_story_it_is.py and
+      tests/test_the_approval_is_observed.py (their assertions about the
+      approval prompt keep passing as they stand — each artifact named once
+      by id and title above the one question, the question last, nothing
+      stamped before the answer — which is the evidence the gap lines were
+      added without moving anything)
+    - tests/test_the_extension_bounds_account_and_walk_agree_with_the_coordinator.py
+      and tests/test_a_repair_reaches_outside_the_storys_scope_within_bounds.py
+      (what they hold about the reason predicate, its one walk, the run-time
+      bar and the repair routing's refusal of a blocked path stays true,
+      since this story gives the predicate and the blocked-path reading a
+      plan-time caller and changes neither)
+
+verification_requirements:
+  - The prompt scripts/l5-plan renders for a planning session carries each
+    new statement, and every statement it made before still stands apart
+    from those this story rewrites — the role layer's bound, step 3's
+    sentence about a problem the plan can be written around, and step 7's
+    list — and the found-nothing rule, which it extends.
+  - The story schema declares gaps_left as a list of strings outside the
+    required list; the descriptions this story extends carry their new
+    statements and keep every one they made; every committed story artifact
+    still parses and validates.
+  - Each refusal reports its defect and passes its control, through
+    plan_validation and end to end through l5-plan, and l5-run's pre-flight
+    lets an artifact carrying either defect past its story checks.
+  - The approval display prints each gap beneath its artifact's line and
+    above the question, and an artifact with none prints what it printed
+    before.
+  - The guard reads a slashed pair of hyphenated words as no file and still
+    reads the planning launcher as one, and the statements about the
+    shipped scripts are true — judged by reading the guard and exercising
+    it, since a change to validation is not held by a test of its own.
+  - The honesty entry records the module's history reads.
+  - No run, retry, resume, pre-flight or reviewing-stage behaviour changed:
+    nothing under orchestration/ reads gaps_left outside plan validation and
+    the reader the display in l5-plan uses.
+  - The whole suite passes.
+  - The account .harness/docs/ARCHITECTURE.md gives matches what the
+    prompt, the schema, plan validation and l5-plan now do.
+
+constraints:
+  - Nothing in a run reads gaps_left; the coordinator's run path, l5-run's
+    pre-flight and the stage that checks a run behave exactly as before.
+  - Whether a gaps_left entry carries a reason is decided by
+    carries_a_reason, reached through the alias plan_validation already
+    has; whether a path is blocked is decided by is_blocked against the
+    rules file the coordinator enforces; plan_validation adds no walk of its
+    own over an entry.
+  - l5-plan stays a thin entry point. It reads each artifact once through
+    the coordinator's reader, adds no reader of artifact text, and owns only
+    the wording of what it prints.
+  - The planner template still names no workflow stage, no restricted path
+    and no brief category of its own; no sentence naming a story-schema
+    field uses required, optional or mandatory; the do_not_modify key with
+    its colon appears once, in the skeleton, whose do_not_modify item and
+    description placeholder are unchanged.
+  - In the consequence step the questions read as they do now and every
+    dashed item is still one of them; the found-nothing rule changes only by
+    the demand for the questions about other texts; the new statements sit
+    outside that rule and name no file and none of the places the sweep
+    searches; every numbered step is still found by the words it opens
+    with. The sweep step is unchanged.
+  - No document quotes a whole sentence of the story schema's descriptions;
+    the prompt, the prose layer and the schema each state the rule in their
+    own words. The prose layer's addition names no agent by role.
+  - The schema keeps every type, required entry and enum it has; the only
+    declaration added is gaps_left.
+  - The records the architecture document keeps of what earlier stories
+    deferred stay as they were written.
+  - No test invokes a model, bounds how long the machine takes, or pins a
+    configurable value; a new test module is named for the behaviour it
+    holds; helpers are imported from the modules that define them rather
+    than copied; a module that starts reading this repository's history or
+    its shipped files declares it in tests/test_baseline_honesty.py in the
+    same change.
+  - The corrected guard and the completed honesty entry are changes to
+    validation, judged by the stage that reviews the run; no test is added
+    or extended to check them.
+
+mandate:
+  source:
+    kind: human
+  conferred_at: 2026-10-12 18:23:00
+  conferred_by: jerod.wilkerson <30474318+jerodw@users.noreply.github.com>
+  recorded_by: l5-plan
